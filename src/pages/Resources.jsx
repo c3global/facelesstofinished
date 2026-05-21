@@ -1,5 +1,6 @@
-import React from 'react';
-import { Link } from 'react-router-dom';
+import React, { useEffect, useState } from 'react';
+import { Link, Navigate } from 'react-router-dom';
+import { fetchSession } from '../api.js';
 
 const RESOURCES = [
   {
@@ -45,6 +46,14 @@ const RESOURCES = [
 ];
 
 export default function Resources() {
+  const [session, setSession] = useState(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    fetchSession().then(setSession).finally(() => setLoading(false));
+  }, []);
+  if (loading) return <div className="page"><div className="loading-shell">Loading…</div></div>;
+  if (!session) return <Navigate to="/faceless" replace />;
+
   return (
     <div className="page">
       <header className="site-header">

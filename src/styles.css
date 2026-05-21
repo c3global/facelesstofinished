@@ -90,7 +90,23 @@ input[type="text"] { font-family: inherit; }
 
 .header-spacer { visibility: hidden; }
 
-.header-nav { justify-self: end; }
+.header-nav { justify-self: end; display: inline-flex; gap: 10px; align-items: center; }
+.header-nav-button { background: transparent; cursor: pointer; font-family: inherit; }
+.loading-shell { padding: 80px 20px; text-align: center; opacity: 0.7; }
+.login-card {
+  max-width: 480px;
+  margin: 60px auto;
+  padding: 40px 32px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--border-soft);
+  border-radius: 16px;
+  text-align: center;
+}
+.login-form { display: flex; flex-direction: column; gap: 14px; margin-top: 24px; }
+.login-help { margin-top: 18px; font-size: 13px; opacity: 0.75; }
+.login-help a { color: var(--primary); text-decoration: none; font-weight: 600; }
+.login-help a:hover { text-decoration: underline; }
+
 .header-nav-link {
   display: inline-block;
   padding: 8px 16px;

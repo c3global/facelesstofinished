@@ -1,17 +1,128 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { generateScript } from '../api.js';
+import { generateScript, fetchSession, loginWithEmail, logout } from '../api.js';
 import { parseSections } from '../parser.js';
 import Markdown from '../Markdown.jsx';
 
 const CARDS = [
+  { key: 'angles', title: 'Topic Angles', accent: '#E0A458' },
   { key: 'concept', title: 'Video Concept', accent: '#7F77DD' },
+  { key: 'hooks', title: 'Hook Variations', accent: '#C41A18' },
+  { key: 'outline', title: 'Outline', accent: '#5BA0F2' },
   { key: 'script', title: 'Full Script', accent: '#1D9E75', large: true },
+  { key: 'transitions', title: 'Transitions', accent: '#9C6DD1' },
   { key: 'broll', title: 'B-Roll Shot List', accent: '#378ADD' },
   { key: 'notes', title: 'Production Notes', accent: '#C9956C' },
 ];
 
 export default function Faceless() {
+  const [session, setSession] = useState(null);
+  const [sessionLoading, setSessionLoading] = useState(true);
+
+  useEffect(() => {
+    fetchSession()
+      .then((s) => setSession(s))
+      .finally(() => setSessionLoading(false));
+  }, []);
+
+  if (sessionLoading) {
+    return (
+      <div className="page">
+        <div className="loading-shell">Loading…</div>
+      </div>
+    );
+  }
+
+  if (!session) {
+    return <LoginGate onLogin={(s) => setSession(s)} />;
+  }
+
+  return <Engine session={session} onLogout={() => setSession(null)} />;
+}
+
+function LoginGate({ onLogin }) {
+  const [email, setEmail] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const submit = async (e) => {
+    e?.preventDefault();
+    setError('');
+    if (!email.trim()) {
+      setError('Enter the email you used at checkout.');
+      return;
+    }
+    setLoading(true);
+    try {
+      const data = await loginWithEmail(email.trim());
+      onLogin({ email: data.email });
+    } catch (err) {
+      if (err.code === 'not_a_buyer') {
+        setError("We can't find that email on the buyer list. Use the email you bought with — or email support@c3global.co if you think this is wrong.");
+      } else if (err.code === 'invalid_email') {
+        setError('That doesn\'t look like a valid email address.');
+      } else {
+        setError('Something went wrong. Please try again.');
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="page">
+      <header className="site-header">
+        <a className="header-logo" href="/faceless" aria-label="Faceless 48">
+          <img src="/faceless48-lockup.png" alt="Faceless 48" />
+        </a>
+        <div className="title-block">
+          <h1 className="title">AI Script Engine</h1>
+        </div>
+        <div className="header-spacer" aria-hidden="true" />
+      </header>
+
+      <main className="main">
+        <section className="login-card">
+          <h2 className="hero-headline">Access your toolkit</h2>
+          <p className="hero-sub">
+            Enter the email you used when you purchased Faceless to Finished in 48.
+          </p>
+          <form className="login-form" onSubmit={submit}>
+            <input
+              className="topic-input"
+              type="email"
+              autoComplete="email"
+              placeholder="you@example.com"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              disabled={loading}
+            />
+            <button className="generate-btn" type="submit" disabled={loading}>
+              {loading ? 'Checking…' : 'Enter'}
+            </button>
+          </form>
+          {error && <div className="error">{error}</div>}
+          <p className="login-help">
+            Don't have access yet?{' '}
+            <a href="https://sprint.c3global.co/faceless" target="_blank" rel="noopener noreferrer">
+              Get instant access for $7 →
+            </a>
+          </p>
+        </section>
+      </main>
+
+      <footer className="site-footer">
+        <img className="footer-mark" src="/faceless48-mark.png" alt="Faceless 48" />
+        <div className="footer-text">
+          <div className="footer-brand">C3 Global</div>
+          <div>© 2026 · sprint.c3global.co/faceless</div>
+        </div>
+      </footer>
+    </div>
+  );
+}
+
+function Engine({ session, onLogout }) {
   const [topic, setTopic] = useState('');
   const [hooks, setHooks] = useState(true);
   const [broll, setBroll] = useState(true);
@@ -45,7 +156,11 @@ export default function Faceless() {
       setRaw(text);
     } catch (e) {
       console.error(e);
-      setError('Something went wrong. Please try again.');
+      if (e.code === 'unauthorized') {
+        setError('Your session expired. Refresh and sign in again.');
+      } else {
+        setError('Something went wrong. Please try again.');
+      }
     } finally {
       setLoading(false);
     }
@@ -65,6 +180,11 @@ export default function Faceless() {
     }
   };
 
+  const handleLogout = async () => {
+    await logout();
+    onLogout();
+  };
+
   const fullText = CARDS.map((c) => sections[c.key])
     .filter(Boolean)
     .map((s) => `### ${s.title.toUpperCase()}\n\n${s.body}`)
@@ -81,6 +201,9 @@ export default function Faceless() {
         </div>
         <nav className="header-nav">
           <Link to="/resources" className="header-nav-link">Resource Library →</Link>
+          <button className="header-nav-link header-nav-button" onClick={handleLogout} title={session.email}>
+            Sign out
+          </button>
         </nav>
       </header>
 
@@ -90,7 +213,7 @@ export default function Faceless() {
             <p className="eyebrow">Faceless to Finished · in 48 hours</p>
             <h2 className="hero-headline">Type a topic.<br/>Get a complete script.</h2>
             <p className="hero-sub">
-              A full faceless YouTube video — hook, narration, B-roll, and production notes — generated in seconds.
+              A full faceless YouTube video — angles, hooks, outline, narration, B-roll, and production notes — generated in seconds.
             </p>
           </div>
 

@@ -1,36 +1,55 @@
-import Anthropic from '@anthropic-ai/sdk';
-import { SYSTEM_PROMPT } from './systemPrompt.js';
-
-const MODEL = 'claude-sonnet-4-20250514';
-const MAX_TOKENS = 2000;
-
 export async function generateScript({ topic, includeHooks, includeBRoll, includeNotes }) {
-  const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    throw new Error('Missing VITE_ANTHROPIC_API_KEY');
+  const res = await fetch('/api/generate-script', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ topic, includeHooks, includeBRoll, includeNotes }),
+  });
+
+  if (res.status === 401) {
+    const err = new Error('unauthorized');
+    err.code = 'unauthorized';
+    throw err;
   }
+  if (!res.ok) {
+    const err = new Error(`generate_failed_${res.status}`);
+    err.code = 'generate_failed';
+    throw err;
+  }
+  const data = await res.json();
+  return data.text;
+}
 
-  let userMessage = `Generate a complete faceless YouTube video script for this topic: ${topic}`;
-  if (!includeBRoll) userMessage += '\nDo not include the B-roll Shot List section.';
-  if (!includeNotes) userMessage += '\nDo not include the Production Notes section.';
-  if (!includeHooks) userMessage += '\nSkip alternate hook variations.';
+export async function fetchSession() {
+  const res = await fetch('/api/auth-me', { credentials: 'include' });
+  if (!res.ok) return null;
+  const data = await res.json();
+  return data.authenticated ? { email: data.email } : null;
+}
 
-  const client = new Anthropic({
-    apiKey,
-    dangerouslyAllowBrowser: true,
+export async function loginWithEmail(email) {
+  const res = await fetch('/api/auth-login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ email }),
   });
+  if (res.status === 403) {
+    const err = new Error('not_a_buyer');
+    err.code = 'not_a_buyer';
+    throw err;
+  }
+  if (res.status === 400) {
+    const err = new Error('invalid_email');
+    err.code = 'invalid_email';
+    throw err;
+  }
+  if (!res.ok) {
+    throw new Error(`login_failed_${res.status}`);
+  }
+  return res.json();
+}
 
-  const response = await client.messages.create({
-    model: MODEL,
-    max_tokens: MAX_TOKENS,
-    system: SYSTEM_PROMPT,
-    messages: [{ role: 'user', content: userMessage }],
-  });
-
-  const text = response.content
-    .filter((b) => b.type === 'text')
-    .map((b) => b.text)
-    .join('\n');
-
-  return text;
+export async function logout() {
+  await fetch('/api/auth-logout', { method: 'POST', credentials: 'include' });
 }
