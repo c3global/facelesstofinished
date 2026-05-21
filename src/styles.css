@@ -74,15 +74,21 @@ input[type="text"] { font-family: inherit; }
   background: rgba(15, 10, 30, 0.6);
 }
 
-.brand {
-  color: var(--rose);
-  font-weight: 700;
-  font-size: 13px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
+.header-logo {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
 }
 
-.brand-spacer { visibility: hidden; }
+.header-logo img {
+  display: block;
+  height: 36px;
+  width: auto;
+  max-width: 100%;
+  object-fit: contain;
+}
+
+.header-spacer { visibility: hidden; }
 
 .title-block { text-align: center; }
 
@@ -420,12 +426,32 @@ input[type="text"] { font-family: inherit; }
 
 /* ---------- Footer ---------- */
 .site-footer {
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
   padding: 28px 24px;
   color: var(--muted);
   font-size: 12px;
   letter-spacing: 0.04em;
   border-top: 1px solid var(--border-soft);
+}
+
+.footer-mark {
+  display: block;
+  height: 36px;
+  width: auto;
+  border-radius: 8px;
+}
+
+.footer-text { text-align: left; line-height: 1.4; }
+
+.footer-brand {
+  color: var(--rose);
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
 }
 
 /* ---------- Mobile ---------- */
@@ -436,7 +462,11 @@ input[type="text"] { font-family: inherit; }
     text-align: center;
     padding: 16px;
   }
-  .brand-spacer { display: none; }
+  .header-spacer { display: none; }
+  .header-logo { justify-content: center; }
+  .header-logo img { height: 30px; }
+  .site-footer { flex-direction: column; gap: 10px; text-align: center; }
+  .footer-text { text-align: center; }
   .main { padding: 56px 18px 56px; }
   .hero { gap: 28px; }
   .hero-headline { font-size: 36px; }

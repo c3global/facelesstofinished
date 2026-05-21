@@ -72,12 +72,13 @@ export default function Faceless() {
   return (
     <div className="page">
       <header className="site-header">
-        <div className="brand">C3 Global</div>
+        <a className="header-logo" href="/faceless" aria-label="Faceless 48 — The 48-Hour Publishing System">
+          <img src="/faceless48-lockup.png" alt="Faceless 48 — The 48-Hour Publishing System" />
+        </a>
         <div className="title-block">
           <h1 className="title">AI Script Engine</h1>
-          <div className="tagline">by Faceless to Finished in 48</div>
         </div>
-        <div className="brand brand-spacer" aria-hidden="true">C3 Global</div>
+        <div className="header-spacer" aria-hidden="true" />
       </header>
 
       <main className="main">
@@ -147,7 +148,11 @@ export default function Faceless() {
       </main>
 
       <footer className="site-footer">
-        © 2026 C3 Global · sprint.c3global.co/faceless
+        <img className="footer-mark" src="/faceless48-mark.png" alt="Faceless 48" />
+        <div className="footer-text">
+          <div className="footer-brand">C3 Global</div>
+          <div>© 2026 · sprint.c3global.co/faceless</div>
+        </div>
       </footer>
     </div>
   );
