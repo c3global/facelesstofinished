@@ -82,16 +82,26 @@ export default function Faceless() {
 
       <main className="main">
         <section className="hero">
-          <input
-            ref={inputRef}
-            className={`topic-input ${shake ? 'shake' : ''}`}
-            type="text"
-            value={topic}
-            onChange={(e) => setTopic(e.target.value)}
-            onKeyDown={onKeyDown}
-            placeholder="Enter your topic or keyword (e.g. How to start investing with $100)"
-            disabled={loading}
-          />
+          <div>
+            <p className="eyebrow">Faceless to Finished · in 48 hours</p>
+            <h2 className="hero-headline">Type a topic.<br/>Get a complete script.</h2>
+            <p className="hero-sub">
+              A full faceless YouTube video — hook, narration, B-roll, and production notes — generated in seconds.
+            </p>
+          </div>
+
+          <div className="input-wrap">
+            <input
+              ref={inputRef}
+              className={`topic-input ${shake ? 'shake' : ''}`}
+              type="text"
+              value={topic}
+              onChange={(e) => setTopic(e.target.value)}
+              onKeyDown={onKeyDown}
+              placeholder="Enter your topic or keyword (e.g. How to start investing with $100)"
+              disabled={loading}
+            />
+          </div>
 
           <div className="toggles">
             <Toggle label="Include hook variations" checked={hooks} onChange={setHooks} />
@@ -161,7 +171,7 @@ function Toggle({ label, checked, onChange }) {
 
 function Card({ title, accent, body, large }) {
   return (
-    <article className="card" style={{ borderLeftColor: accent }}>
+    <article className="card" style={{ borderLeftColor: accent, '--card-accent': accent }}>
       <header className="card-header">
         <h2 className="card-title" style={{ color: accent }}>{title}</h2>
         <CopyButton text={body} label="Copy" />
