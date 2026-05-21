@@ -1,4 +1,5 @@
 import React, { useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { generateScript } from '../api.js';
 import { parseSections } from '../parser.js';
 import Markdown from '../Markdown.jsx';
@@ -78,7 +79,9 @@ export default function Faceless() {
         <div className="title-block">
           <h1 className="title">AI Script Engine</h1>
         </div>
-        <div className="header-spacer" aria-hidden="true" />
+        <nav className="header-nav">
+          <Link to="/resources" className="header-nav-link">Resource Library →</Link>
+        </nav>
       </header>
 
       <main className="main">
