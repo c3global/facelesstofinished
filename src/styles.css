@@ -106,6 +106,13 @@ input[type="text"] { font-family: inherit; }
 .login-help { margin-top: 18px; font-size: 13px; opacity: 0.75; }
 .login-help a { color: var(--primary); text-decoration: none; font-weight: 600; }
 .login-help a:hover { text-decoration: underline; }
+.admin-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.admin-table th, .admin-table td {
+  text-align: left; padding: 10px 12px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.admin-table th { font-weight: 700; opacity: 0.7; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; }
+.admin-table tr:last-child td { border-bottom: none; }
 
 .header-nav-link {
   display: inline-block;

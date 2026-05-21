@@ -103,8 +103,7 @@ export default function Resources() {
       <footer className="site-footer">
         <img className="footer-mark" src="/faceless48-mark.png" alt="Faceless 48" />
         <div className="footer-text">
-          <div className="footer-brand">C3 Global</div>
-          <div>© 2026 · sprint.c3global.co/faceless</div>
+          <div>© 2026 C3 Global</div>
         </div>
       </footer>
     </div>

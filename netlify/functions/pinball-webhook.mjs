@@ -1,30 +1,20 @@
 import crypto from 'node:crypto';
 import { addBuyer, removeBuyer } from './_shared/store.mjs';
 
-function extractSignature(event) {
-  const h = event.headers || {};
-  return (
-    h['x-pinball-signature'] ||
-    h['pinball-signature'] ||
-    h['x-webhook-signature'] ||
-    h['x-signature'] ||
-    null
-  );
+function extractToken(event) {
+  const params = new URLSearchParams(event.rawQuery || '');
+  return params.get('token') || event.queryStringParameters?.token || null;
 }
 
-function verifySignature(rawBody, signature) {
-  const secret = process.env.PINBALL_WEBHOOK_SECRET;
-  if (!secret) {
-    // If no secret is configured, refuse the webhook rather than accept blindly.
-    return false;
-  }
-  if (!signature) return false;
-  const expected = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
-  const provided = signature.startsWith('sha256=') ? signature.slice(7) : signature;
+function verifyToken(event) {
+  const expected = process.env.PINBALL_WEBHOOK_TOKEN;
+  if (!expected) return false;
+  const provided = extractToken(event);
+  if (!provided) return false;
   try {
     return crypto.timingSafeEqual(
-      Buffer.from(expected, 'hex'),
-      Buffer.from(provided, 'hex')
+      Buffer.from(expected, 'utf8'),
+      Buffer.from(provided, 'utf8')
     );
   } catch {
     return false;
@@ -71,10 +61,9 @@ export const handler = async (event) => {
   }
 
   const rawBody = event.body || '';
-  const signature = extractSignature(event);
 
-  if (!verifySignature(rawBody, signature)) {
-    return { statusCode: 401, body: 'Invalid signature' };
+  if (!verifyToken(event)) {
+    return { statusCode: 401, body: 'Invalid or missing token' };
   }
 
   let payload;
