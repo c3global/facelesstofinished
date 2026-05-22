@@ -4,7 +4,7 @@ import { normalizeEmail } from './auth.mjs';
 const STORE_NAME = 'f48-buyers';
 
 export function buyers() {
-  return getStore({ name: STORE_NAME, consistency: 'strong' });
+  return getStore(STORE_NAME);
 }
 
 export async function isBuyer(email) {

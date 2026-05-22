@@ -22,7 +22,9 @@ export default function Admin() {
       return;
     }
     if (!res.ok) {
-      setError('Failed to load.');
+      let detail = '';
+      try { detail = JSON.stringify(await res.json()); } catch { detail = await res.text().catch(() => ''); }
+      setError(`Failed to load (HTTP ${res.status}). ${detail}`);
       return;
     }
     const data = await res.json();

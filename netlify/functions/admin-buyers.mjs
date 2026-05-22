@@ -6,20 +6,30 @@ export const handler = async (event) => {
   if (!isAdmin(event)) return unauthorized();
 
   if (event.httpMethod === 'GET') {
-    const store = buyers();
-    const { blobs } = await store.list();
-    const items = await Promise.all(
-      (blobs || []).map(async (b) => {
-        const meta = await store.get(b.key, { type: 'json' }).catch(() => null);
-        return { email: b.key, ...(meta || {}) };
-      })
-    );
-    items.sort((a, b) => (a.addedAt || '').localeCompare(b.addedAt || ''));
-    return {
-      statusCode: 200,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ buyers: items }),
-    };
+    try {
+      const store = buyers();
+      const result = await store.list();
+      const blobs = result?.blobs || [];
+      const items = await Promise.all(
+        blobs.map(async (b) => {
+          const meta = await store.get(b.key, { type: 'json' }).catch(() => null);
+          return { email: b.key, ...(meta || {}) };
+        })
+      );
+      items.sort((a, b) => (a.addedAt || '').localeCompare(b.addedAt || ''));
+      return {
+        statusCode: 200,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ buyers: items }),
+      };
+    } catch (err) {
+      console.error('admin-buyers list error:', err);
+      return {
+        statusCode: 500,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ error: 'list_failed', message: String(err?.message || err) }),
+      };
+    }
   }
 
   let body = {};
