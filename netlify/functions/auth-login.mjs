@@ -22,7 +22,17 @@ export const handler = async (event) => {
     };
   }
 
-  const ok = await isBuyer(email);
+  let ok;
+  try {
+    ok = await isBuyer(email);
+  } catch (err) {
+    console.error('auth-login isBuyer error:', err);
+    return {
+      statusCode: 500,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ error: 'lookup_failed', message: String(err?.message || err) }),
+    };
+  }
   if (!ok) {
     return {
       statusCode: 403,

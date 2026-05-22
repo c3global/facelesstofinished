@@ -62,7 +62,7 @@ function LoginGate({ onLogin }) {
       } else if (err.code === 'invalid_email') {
         setError('That doesn\'t look like a valid email address.');
       } else {
-        setError('Something went wrong. Please try again.');
+        setError(err.detail ? `Something went wrong. ${err.detail}` : 'Something went wrong. Please try again.');
       }
     } finally {
       setLoading(false);

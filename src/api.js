@@ -45,7 +45,12 @@ export async function loginWithEmail(email) {
     throw err;
   }
   if (!res.ok) {
-    throw new Error(`login_failed_${res.status}`);
+    let detail = '';
+    try { detail = JSON.stringify(await res.json()); } catch { detail = await res.text().catch(() => ''); }
+    const err = new Error(`login_failed_${res.status}`);
+    err.code = 'login_failed';
+    err.detail = `HTTP ${res.status} ${detail}`;
+    throw err;
   }
   return res.json();
 }
