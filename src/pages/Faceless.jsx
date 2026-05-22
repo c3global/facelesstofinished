@@ -326,6 +326,10 @@ function Engine({ session, onLogout }) {
               );
             })}
 
+            <p className="history-tip">
+              <strong>Tip:</strong> copy your script before generating a new one — we don't save history during the beta.
+            </p>
+
             <div className="output-actions">
               <CopyButton text={fullText} label="Copy Full Script" primary />
               <button className="ghost-btn" onClick={handleReset}>

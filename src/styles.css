@@ -145,6 +145,17 @@ input[type="text"] { font-family: inherit; }
 .length-option:disabled { opacity: 0.5; cursor: not-allowed; }
 .length-label { font-weight: 700; font-size: 14px; letter-spacing: 0.02em; }
 .length-sub { font-size: 12px; opacity: 0.7; }
+.history-tip {
+  margin: 20px 0 0;
+  padding: 12px 16px;
+  border-radius: 10px;
+  border: 1px solid var(--border-soft);
+  background: rgba(201, 149, 108, 0.08);
+  font-size: 14px;
+  line-height: 1.5;
+  text-align: center;
+}
+.history-tip strong { color: #C9956C; }
 @media (max-width: 640px) {
   .length-picker { grid-template-columns: 1fr; }
 }
