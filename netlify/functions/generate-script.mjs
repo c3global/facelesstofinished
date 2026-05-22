@@ -35,22 +35,43 @@ export default async (req) => {
 
   const client = new Anthropic({ apiKey });
 
-  try {
-    const response = await client.messages.create({
-      model: MODEL,
-      max_tokens: MAX_TOKENS,
-      system: SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: userMessage }],
-    });
+  const encoder = new TextEncoder();
+  const readable = new ReadableStream({
+    async start(controller) {
+      try {
+        const stream = client.messages.stream({
+          model: MODEL,
+          max_tokens: MAX_TOKENS,
+          system: SYSTEM_PROMPT,
+          messages: [{ role: 'user', content: userMessage }],
+        });
 
-    const text = response.content
-      .filter((b) => b.type === 'text')
-      .map((b) => b.text)
-      .join('\n');
+        for await (const event of stream) {
+          if (
+            event.type === 'content_block_delta' &&
+            event.delta?.type === 'text_delta' &&
+            event.delta.text
+          ) {
+            controller.enqueue(encoder.encode(event.delta.text));
+          }
+        }
+        controller.close();
+      } catch (err) {
+        console.error('Anthropic stream error:', err);
+        try {
+          controller.enqueue(encoder.encode(`\n\n[STREAM_ERROR] ${String(err?.message || err)}`));
+        } catch {}
+        controller.close();
+      }
+    },
+  });
 
-    return json({ text });
-  } catch (err) {
-    console.error('Anthropic error:', err);
-    return json({ error: 'generation_failed', message: String(err?.message || err) }, { status: 502 });
-  }
+  return new Response(readable, {
+    status: 200,
+    headers: {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'X-Accel-Buffering': 'no',
+    },
+  });
 };

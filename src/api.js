@@ -1,4 +1,4 @@
-export async function generateScript({ topic, includeHooks, includeBRoll, includeNotes }) {
+export async function generateScript({ topic, includeHooks, includeBRoll, includeNotes, onChunk }) {
   const res = await fetch('/api/generate-script', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -19,8 +19,24 @@ export async function generateScript({ topic, includeHooks, includeBRoll, includ
     err.detail = `HTTP ${res.status} ${detail}`;
     throw err;
   }
-  const data = await res.json();
-  return data.text;
+
+  if (!res.body) {
+    const text = await res.text();
+    return text;
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let text = '';
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    const chunk = decoder.decode(value, { stream: true });
+    text += chunk;
+    if (onChunk) onChunk(chunk, text);
+  }
+  text += decoder.decode();
+  return text;
 }
 
 export async function fetchSession() {

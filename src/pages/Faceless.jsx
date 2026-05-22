@@ -151,6 +151,7 @@ function Engine({ session, onLogout }) {
         includeHooks: hooks,
         includeBRoll: broll,
         includeNotes: notes,
+        onChunk: (_chunk, accumulated) => setRaw(accumulated),
       });
       setRaw(text);
     } catch (e) {
