@@ -1,25 +1,19 @@
-import { createSessionCookie, normalizeEmail } from './_shared/auth.mjs';
+import { createSessionCookie, normalizeEmail, json } from './_shared/auth.mjs';
 import { isBuyer } from './_shared/store.mjs';
 
-export const handler = async (event) => {
-  if (event.httpMethod !== 'POST') {
-    return { statusCode: 405, body: 'Method not allowed' };
-  }
+export default async (req) => {
+  if (req.method !== 'POST') return new Response('Method not allowed', { status: 405 });
 
   let body;
   try {
-    body = JSON.parse(event.body || '{}');
+    body = await req.json();
   } catch {
-    return { statusCode: 400, body: JSON.stringify({ error: 'invalid_json' }) };
+    return json({ error: 'invalid_json' }, { status: 400 });
   }
 
   const email = normalizeEmail(body.email);
   if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
-    return {
-      statusCode: 400,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ error: 'invalid_email' }),
-    };
+    return json({ error: 'invalid_email' }, { status: 400 });
   }
 
   let ok;
@@ -27,26 +21,13 @@ export const handler = async (event) => {
     ok = await isBuyer(email);
   } catch (err) {
     console.error('auth-login isBuyer error:', err);
-    return {
-      statusCode: 500,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ error: 'lookup_failed', message: String(err?.message || err) }),
-    };
-  }
-  if (!ok) {
-    return {
-      statusCode: 403,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ error: 'not_a_buyer' }),
-    };
+    return json({ error: 'lookup_failed', message: String(err?.message || err) }, { status: 500 });
   }
 
-  return {
-    statusCode: 200,
-    headers: {
-      'Content-Type': 'application/json',
-      'Set-Cookie': createSessionCookie(email),
-    },
-    body: JSON.stringify({ email }),
-  };
+  if (!ok) return json({ error: 'not_a_buyer' }, { status: 403 });
+
+  return json({ email }, {
+    status: 200,
+    headers: { 'Set-Cookie': createSessionCookie(email) },
+  });
 };

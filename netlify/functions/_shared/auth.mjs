@@ -4,8 +4,8 @@ const COOKIE_NAME = 'f48_session';
 const SESSION_TTL_DAYS = 30;
 
 function getSecret() {
-  const s = process.env.SESSION_SECRET || process.env.PINBALL_WEBHOOK_SECRET;
-  if (!s) throw new Error('SESSION_SECRET (or PINBALL_WEBHOOK_SECRET fallback) is not set');
+  const s = process.env.SESSION_SECRET || process.env.PINBALL_WEBHOOK_TOKEN;
+  if (!s) throw new Error('SESSION_SECRET is not set');
   return s;
 }
 
@@ -39,8 +39,17 @@ export function readSession(cookieHeader) {
   const parts = value.split('.');
   if (parts.length !== 3) return null;
   const [emailB64, expStr, sig] = parts;
-  const expected = sign(`${emailB64}.${expStr}`);
-  if (!crypto.timingSafeEqual(Buffer.from(sig, 'hex'), Buffer.from(expected, 'hex'))) {
+  let expected;
+  try {
+    expected = sign(`${emailB64}.${expStr}`);
+  } catch {
+    return null;
+  }
+  try {
+    if (!crypto.timingSafeEqual(Buffer.from(sig, 'hex'), Buffer.from(expected, 'hex'))) {
+      return null;
+    }
+  } catch {
     return null;
   }
   const exp = parseInt(expStr, 10);
@@ -49,6 +58,12 @@ export function readSession(cookieHeader) {
   return { email, exp };
 }
 
-export function getCookieHeader(event) {
-  return event.headers?.cookie || event.headers?.Cookie || '';
+export function readCookies(req) {
+  return req.headers.get('cookie') || '';
+}
+
+export function json(body, init = {}) {
+  const headers = new Headers(init.headers || {});
+  headers.set('Content-Type', 'application/json');
+  return new Response(JSON.stringify(body), { ...init, headers });
 }

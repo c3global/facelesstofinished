@@ -1,15 +1,10 @@
 import crypto from 'node:crypto';
 import { addBuyer, removeBuyer } from './_shared/store.mjs';
 
-function extractToken(event) {
-  const params = new URLSearchParams(event.rawQuery || '');
-  return params.get('token') || event.queryStringParameters?.token || null;
-}
-
-function verifyToken(event) {
+function verifyToken(req) {
   const expected = process.env.PINBALL_WEBHOOK_TOKEN;
   if (!expected) return false;
-  const provided = extractToken(event);
+  const provided = new URL(req.url).searchParams.get('token');
   if (!provided) return false;
   try {
     return crypto.timingSafeEqual(
@@ -21,71 +16,81 @@ function verifyToken(event) {
   }
 }
 
-function extractEmail(payload) {
+function extractEmail(p) {
   return (
-    payload?.customer?.email ||
-    payload?.data?.customer?.email ||
-    payload?.data?.email ||
-    payload?.order?.customer?.email ||
-    payload?.data?.order?.customer?.email ||
-    payload?.email ||
+    p?.customer?.email ||
+    p?.data?.customer?.email ||
+    p?.data?.email ||
+    p?.order?.customer?.email ||
+    p?.data?.order?.customer?.email ||
+    p?.email ||
     null
   );
 }
 
-function extractOrderId(payload) {
+function extractOrderId(p) {
   return (
-    payload?.order?.id ||
-    payload?.data?.order?.id ||
-    payload?.order_id ||
-    payload?.data?.order_id ||
-    payload?.id ||
-    payload?.data?.id ||
+    p?.order?.id ||
+    p?.data?.order?.id ||
+    p?.order_id ||
+    p?.data?.order_id ||
+    p?.id ||
+    p?.data?.id ||
     null
   );
 }
 
-function extractEvent(payload, event) {
+function extractEvent(p, req) {
   return (
-    payload?.event ||
-    payload?.type ||
-    event.headers?.['x-pinball-event'] ||
-    event.headers?.['x-event-type'] ||
+    p?.event ||
+    p?.type ||
+    req.headers.get('x-pinball-event') ||
+    req.headers.get('x-event-type') ||
     null
   );
 }
 
-export const handler = async (event) => {
-  if (event.httpMethod !== 'POST') {
-    return { statusCode: 405, body: 'Method not allowed' };
-  }
+export default async (req) => {
+  if (req.method !== 'POST') return new Response('Method not allowed', { status: 405 });
 
-  const rawBody = event.body || '';
-
-  if (!verifyToken(event)) {
-    return { statusCode: 401, body: 'Invalid or missing token' };
+  if (!verifyToken(req)) {
+    return new Response('Invalid or missing token', { status: 401 });
   }
 
   let payload;
   try {
-    payload = JSON.parse(rawBody);
+    payload = await req.json();
   } catch {
-    return { statusCode: 400, body: 'Invalid JSON' };
+    return new Response('Invalid JSON', { status: 400 });
   }
 
-  const eventType = extractEvent(payload, event);
+  const eventType = extractEvent(payload, req);
   const email = extractEmail(payload);
   const orderId = extractOrderId(payload);
 
   if (!email) {
-    return { statusCode: 400, body: 'No email in payload' };
+    console.error('pinball-webhook: no email in payload', JSON.stringify(payload).slice(0, 500));
+    return new Response('No email in payload', { status: 400 });
   }
 
-  if (eventType && /refund/i.test(eventType)) {
-    await removeBuyer(email);
-    return { statusCode: 200, body: JSON.stringify({ ok: true, action: 'removed', email }) };
+  try {
+    if (eventType && /refund/i.test(eventType)) {
+      await removeBuyer(email);
+      return new Response(JSON.stringify({ ok: true, action: 'removed', email }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    await addBuyer(email, { orderId, event: eventType });
+    return new Response(JSON.stringify({ ok: true, action: 'added', email }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  } catch (err) {
+    console.error('pinball-webhook store error:', err);
+    return new Response(
+      JSON.stringify({ error: 'store_failed', message: String(err?.message || err) }),
+      { status: 500, headers: { 'Content-Type': 'application/json' } }
+    );
   }
-
-  await addBuyer(email, { orderId, event: eventType });
-  return { statusCode: 200, body: JSON.stringify({ ok: true, action: 'added', email }) };
 };

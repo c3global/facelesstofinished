@@ -1,44 +1,28 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { readSession, getCookieHeader } from './_shared/auth.mjs';
+import { readSession, readCookies, json } from './_shared/auth.mjs';
 import { SYSTEM_PROMPT } from './_shared/systemPrompt.mjs';
 
 const MODEL = 'claude-sonnet-4-20250514';
 const MAX_TOKENS = 4000;
 
-export const handler = async (event) => {
-  if (event.httpMethod !== 'POST') {
-    return { statusCode: 405, body: 'Method not allowed' };
-  }
+export default async (req) => {
+  if (req.method !== 'POST') return new Response('Method not allowed', { status: 405 });
 
-  const session = readSession(getCookieHeader(event));
-  if (!session) {
-    return {
-      statusCode: 401,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ error: 'unauthorized' }),
-    };
-  }
+  const session = readSession(readCookies(req));
+  if (!session) return json({ error: 'unauthorized' }, { status: 401 });
 
   const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    return {
-      statusCode: 500,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ error: 'server_misconfigured' }),
-    };
-  }
+  if (!apiKey) return json({ error: 'server_misconfigured' }, { status: 500 });
 
   let body;
   try {
-    body = JSON.parse(event.body || '{}');
+    body = await req.json();
   } catch {
-    return { statusCode: 400, body: JSON.stringify({ error: 'invalid_json' }) };
+    return json({ error: 'invalid_json' }, { status: 400 });
   }
 
   const topic = String(body.topic || '').trim();
-  if (!topic) {
-    return { statusCode: 400, body: JSON.stringify({ error: 'topic_required' }) };
-  }
+  if (!topic) return json({ error: 'topic_required' }, { status: 400 });
 
   const includeHooks = body.includeHooks !== false;
   const includeBRoll = body.includeBRoll !== false;
@@ -64,17 +48,9 @@ export const handler = async (event) => {
       .map((b) => b.text)
       .join('\n');
 
-    return {
-      statusCode: 200,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text }),
-    };
+    return json({ text });
   } catch (err) {
     console.error('Anthropic error:', err);
-    return {
-      statusCode: 502,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ error: 'generation_failed' }),
-    };
+    return json({ error: 'generation_failed', message: String(err?.message || err) }, { status: 502 });
   }
 };

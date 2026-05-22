@@ -1,56 +1,53 @@
-import { isAdmin, unauthorized } from './_shared/admin.mjs';
+import { isAdmin } from './_shared/admin.mjs';
 import { buyers, addBuyer, removeBuyer } from './_shared/store.mjs';
-import { normalizeEmail } from './_shared/auth.mjs';
+import { normalizeEmail, json } from './_shared/auth.mjs';
 
-export const handler = async (event) => {
-  if (!isAdmin(event)) return unauthorized();
+export default async (req) => {
+  if (!isAdmin(req)) return json({ error: 'unauthorized' }, { status: 401 });
 
-  if (event.httpMethod === 'GET') {
+  if (req.method === 'GET') {
     try {
       const store = buyers();
       const result = await store.list();
-      const blobs = result?.blobs || [];
+      const blobsList = result?.blobs || [];
       const items = await Promise.all(
-        blobs.map(async (b) => {
+        blobsList.map(async (b) => {
           const meta = await store.get(b.key, { type: 'json' }).catch(() => null);
           return { email: b.key, ...(meta || {}) };
         })
       );
       items.sort((a, b) => (a.addedAt || '').localeCompare(b.addedAt || ''));
-      return {
-        statusCode: 200,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ buyers: items }),
-      };
+      return json({ buyers: items });
     } catch (err) {
       console.error('admin-buyers list error:', err);
-      return {
-        statusCode: 500,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ error: 'list_failed', message: String(err?.message || err) }),
-      };
+      return json({ error: 'list_failed', message: String(err?.message || err) }, { status: 500 });
     }
   }
 
   let body = {};
   try {
-    body = JSON.parse(event.body || '{}');
+    body = await req.json();
   } catch {
-    return { statusCode: 400, body: JSON.stringify({ error: 'invalid_json' }) };
+    return json({ error: 'invalid_json' }, { status: 400 });
   }
   const email = normalizeEmail(body.email);
   if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
-    return { statusCode: 400, body: JSON.stringify({ error: 'invalid_email' }) };
+    return json({ error: 'invalid_email' }, { status: 400 });
   }
 
-  if (event.httpMethod === 'POST') {
-    await addBuyer(email, { source: 'admin' });
-    return { statusCode: 200, body: JSON.stringify({ ok: true, action: 'added', email }) };
-  }
-  if (event.httpMethod === 'DELETE') {
-    await removeBuyer(email);
-    return { statusCode: 200, body: JSON.stringify({ ok: true, action: 'removed', email }) };
+  try {
+    if (req.method === 'POST') {
+      await addBuyer(email, { source: 'admin' });
+      return json({ ok: true, action: 'added', email });
+    }
+    if (req.method === 'DELETE') {
+      await removeBuyer(email);
+      return json({ ok: true, action: 'removed', email });
+    }
+  } catch (err) {
+    console.error('admin-buyers write error:', err);
+    return json({ error: 'write_failed', message: String(err?.message || err) }, { status: 500 });
   }
 
-  return { statusCode: 405, body: 'Method not allowed' };
+  return new Response('Method not allowed', { status: 405 });
 };

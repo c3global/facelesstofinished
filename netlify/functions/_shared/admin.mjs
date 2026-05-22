@@ -1,12 +1,9 @@
 import crypto from 'node:crypto';
 
-export function isAdmin(event) {
+export function isAdmin(req) {
   const expected = process.env.ADMIN_TOKEN;
   if (!expected) return false;
-  const provided =
-    event.headers?.['x-admin-token'] ||
-    event.headers?.['X-Admin-Token'] ||
-    null;
+  const provided = req.headers.get('x-admin-token');
   if (!provided) return false;
   try {
     return crypto.timingSafeEqual(
@@ -16,12 +13,4 @@ export function isAdmin(event) {
   } catch {
     return false;
   }
-}
-
-export function unauthorized() {
-  return {
-    statusCode: 401,
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ error: 'unauthorized' }),
-  };
 }
