@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { generateScript, fetchSession, loginWithEmail, logout } from '../api.js';
 import { parseSections } from '../parser.js';
 import Markdown from '../Markdown.jsx';
+import ThemeToggle from '../ThemeToggle.jsx';
 
 const STAGE_BY_KEY = {
   angles: 'Generating topic angles…',
@@ -109,13 +110,15 @@ function LoginGate({ onLogin }) {
   return (
     <div className="page">
       <header className="site-header">
-        <a className="header-logo" href="/faceless" aria-label="Faceless 48">
+        <a className="header-logo" href="/" aria-label="Faceless 48">
           <img src="/faceless48-lockup.png" alt="Faceless 48" />
         </a>
         <div className="title-block">
           <h1 className="title">AI Script Engine</h1>
         </div>
-        <div className="header-spacer" aria-hidden="true" />
+        <nav className="header-nav">
+          <ThemeToggle />
+        </nav>
       </header>
 
       <main className="main">
@@ -239,13 +242,14 @@ function Engine({ session, onLogout }) {
   return (
     <div className="page">
       <header className="site-header">
-        <a className="header-logo" href="/faceless" aria-label="Faceless 48 — The 48-Hour Publishing System">
+        <a className="header-logo" href="/" aria-label="Faceless 48 — The 48-Hour Publishing System">
           <img src="/faceless48-lockup.png" alt="Faceless 48 — The 48-Hour Publishing System" />
         </a>
         <div className="title-block">
           <h1 className="title">AI Script Engine</h1>
         </div>
         <nav className="header-nav">
+          <ThemeToggle />
           <Link to="/resources" className="header-nav-link">Resource Library →</Link>
           <button className="header-nav-link header-nav-button" onClick={handleLogout} title={session.email}>
             Sign out

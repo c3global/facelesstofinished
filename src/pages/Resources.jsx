@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Link, Navigate } from 'react-router-dom';
 import { fetchSession } from '../api.js';
+import ThemeToggle from '../ThemeToggle.jsx';
 
 const RESOURCES = [
   {
@@ -52,18 +53,20 @@ export default function Resources() {
     fetchSession().then(setSession).finally(() => setLoading(false));
   }, []);
   if (loading) return <div className="page"><div className="loading-shell">Loading…</div></div>;
-  if (!session) return <Navigate to="/faceless" replace />;
+  if (!session) return <Navigate to="/" replace />;
 
   return (
     <div className="page">
       <header className="site-header">
-        <a className="header-logo" href="/faceless" aria-label="Faceless 48 — The 48-Hour Publishing System">
+        <a className="header-logo" href="/" aria-label="Faceless 48 — The 48-Hour Publishing System">
           <img src="/faceless48-lockup.png" alt="Faceless 48 — The 48-Hour Publishing System" />
         </a>
         <div className="title-block">
           <h1 className="title">Resource Library</h1>
         </div>
-        <div className="header-spacer" aria-hidden="true" />
+        <nav className="header-nav">
+          <ThemeToggle />
+        </nav>
       </header>
 
       <main className="main">
