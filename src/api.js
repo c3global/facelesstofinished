@@ -1,9 +1,9 @@
-export async function generateScript({ topic, includeHooks, includeBRoll, includeNotes, onChunk }) {
+export async function generateScript({ topic, length, includeHooks, includeBRoll, includeNotes, onChunk }) {
   const res = await fetch('/api/generate-script', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
-    body: JSON.stringify({ topic, includeHooks, includeBRoll, includeNotes }),
+    body: JSON.stringify({ topic, length, includeHooks, includeBRoll, includeNotes }),
   });
 
   if (res.status === 401) {

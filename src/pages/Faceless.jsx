@@ -4,6 +4,43 @@ import { generateScript, fetchSession, loginWithEmail, logout } from '../api.js'
 import { parseSections } from '../parser.js';
 import Markdown from '../Markdown.jsx';
 
+const STAGE_BY_KEY = {
+  angles: 'Generating topic angles…',
+  concept: 'Generating video concept…',
+  hooks: 'Writing hook variations…',
+  outline: 'Mapping the outline…',
+  script: 'Writing the full script…',
+  transitions: 'Crafting transitions…',
+  broll: 'Compiling B-roll shot list…',
+  notes: 'Adding production notes…',
+};
+
+const STAGE_ORDER = ['angles', 'concept', 'hooks', 'outline', 'script', 'transitions', 'broll', 'notes'];
+
+function detectStage(text) {
+  let last = null;
+  const re = /###\s+([^\n]+)/g;
+  let m;
+  while ((m = re.exec(text)) !== null) last = m[1];
+  if (!last) return 'Starting…';
+  const upper = last.toUpperCase();
+  if (upper.includes('TOPIC ANGLE')) return STAGE_BY_KEY.angles;
+  if (upper.includes('VIDEO CONCEPT')) return STAGE_BY_KEY.concept;
+  if (upper.includes('HOOK')) return STAGE_BY_KEY.hooks;
+  if (upper.includes('OUTLINE')) return STAGE_BY_KEY.outline;
+  if (upper.includes('NARRATION') || upper.includes('FULL SCRIPT') || upper.includes('SCRIPT')) return STAGE_BY_KEY.script;
+  if (upper.includes('TRANSITION')) return STAGE_BY_KEY.transitions;
+  if (upper.includes('B-ROLL') || upper.includes('BROLL')) return STAGE_BY_KEY.broll;
+  if (upper.includes('PRODUCTION')) return STAGE_BY_KEY.notes;
+  return 'Generating…';
+}
+
+const LENGTH_OPTIONS = [
+  { value: 'short', label: 'Short', sub: '5–8 min' },
+  { value: 'medium', label: 'Medium', sub: '10–15 min' },
+  { value: 'long', label: 'Long', sub: '18–25 min' },
+];
+
 const CARDS = [
   { key: 'angles', title: 'Topic Angles', accent: '#E0A458' },
   { key: 'concept', title: 'Video Concept', accent: '#7F77DD' },
@@ -123,12 +160,14 @@ function LoginGate({ onLogin }) {
 
 function Engine({ session, onLogout }) {
   const [topic, setTopic] = useState('');
+  const [videoLength, setVideoLength] = useState('medium');
   const [hooks, setHooks] = useState(true);
   const [broll, setBroll] = useState(true);
   const [notes, setNotes] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [raw, setRaw] = useState('');
+  const [progress, setProgress] = useState('');
   const [shake, setShake] = useState(false);
   const inputRef = useRef(null);
 
@@ -145,13 +184,18 @@ function Engine({ session, onLogout }) {
     }
     setLoading(true);
     setRaw('');
+    setProgress('Starting…');
     try {
       const text = await generateScript({
         topic: topic.trim(),
+        length: videoLength,
         includeHooks: hooks,
         includeBRoll: broll,
         includeNotes: notes,
-        onChunk: (_chunk, accumulated) => setRaw(accumulated),
+        onChunk: (_chunk, accumulated) => {
+          setRaw(accumulated);
+          setProgress(detectStage(accumulated));
+        },
       });
       setRaw(text);
     } catch (e) {
@@ -163,6 +207,7 @@ function Engine({ session, onLogout }) {
       }
     } finally {
       setLoading(false);
+      setProgress('');
     }
   };
 
@@ -170,6 +215,7 @@ function Engine({ session, onLogout }) {
     setRaw('');
     setError('');
     setTopic('');
+    setProgress('');
     setTimeout(() => inputRef.current?.focus(), 0);
   };
 
@@ -230,6 +276,23 @@ function Engine({ session, onLogout }) {
             />
           </div>
 
+          <div className="length-picker" role="radiogroup" aria-label="Video length">
+            {LENGTH_OPTIONS.map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                role="radio"
+                aria-checked={videoLength === opt.value}
+                className={`length-option ${videoLength === opt.value ? 'is-selected' : ''}`}
+                onClick={() => setVideoLength(opt.value)}
+                disabled={loading}
+              >
+                <span className="length-label">{opt.label}</span>
+                <span className="length-sub">{opt.sub}</span>
+              </button>
+            ))}
+          </div>
+
           <div className="toggles">
             <Toggle label="Include hook variations" checked={hooks} onChange={setHooks} />
             <Toggle label="Include B-roll shot list" checked={broll} onChange={setBroll} />
@@ -241,7 +304,7 @@ function Engine({ session, onLogout }) {
             onClick={handleGenerate}
             disabled={loading}
           >
-            {loading ? 'Generating...' : 'Generate Script'}
+            {loading ? (progress || 'Generating…') : 'Generate Script'}
           </button>
 
           {error && <div className="error">{error}</div>}
