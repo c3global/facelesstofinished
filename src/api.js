@@ -12,8 +12,11 @@ export async function generateScript({ topic, includeHooks, includeBRoll, includ
     throw err;
   }
   if (!res.ok) {
+    let detail = '';
+    try { detail = JSON.stringify(await res.json()); } catch { detail = await res.text().catch(() => ''); }
     const err = new Error(`generate_failed_${res.status}`);
     err.code = 'generate_failed';
+    err.detail = `HTTP ${res.status} ${detail}`;
     throw err;
   }
   const data = await res.json();

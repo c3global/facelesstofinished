@@ -158,7 +158,7 @@ function Engine({ session, onLogout }) {
       if (e.code === 'unauthorized') {
         setError('Your session expired. Refresh and sign in again.');
       } else {
-        setError('Something went wrong. Please try again.');
+        setError(e.detail ? `Something went wrong. ${e.detail}` : 'Something went wrong. Please try again.');
       }
     } finally {
       setLoading(false);
