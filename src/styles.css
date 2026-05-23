@@ -30,7 +30,7 @@ html[data-theme="light"] {
   --border-soft: rgba(120, 110, 170, 0.25);
   --primary: #5E55C2;
   --text: #1A1530;
-  --muted: #6B6590;
+  --muted: #5B5680;
   --input-bg: #FFFFFF;
   --aurora-1: rgba(127, 119, 221, 0.10);
   --aurora-2: rgba(55, 138, 221, 0.07);
@@ -39,6 +39,26 @@ html[data-theme="light"] {
   --card-surface-hover: #FAF8FF;
   /* Header band intentionally stays dark in both modes so the white lockup remains legible. */
 }
+
+/* Light-mode component overrides — places where the dark-mode rules
+   used hardcoded colors that don't translate cleanly. */
+html[data-theme="light"] .hero-headline {
+  background: linear-gradient(135deg, #1A1530 0%, #5E55C2 55%, #B07843 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+html[data-theme="light"] .hero-sub { color: #3A3560; }
+html[data-theme="light"] .eyebrow { color: #B07843; }
+html[data-theme="light"] .toggle { background: #FFFFFF; }
+html[data-theme="light"] .switch { background: #E0DCEF; }
+html[data-theme="light"] .knob { background: #FFFFFF; box-shadow: 0 1px 2px rgba(0,0,0,0.15); }
+html[data-theme="light"] .toggle-label { color: var(--text); }
+html[data-theme="light"] .topic-input::placeholder { color: #8A85A8; }
+html[data-theme="light"] .resource-desc { color: #5B5680; }
+html[data-theme="light"] .history-tip { background: rgba(201, 149, 108, 0.10); }
+html[data-theme="light"] .card { box-shadow: 0 4px 16px rgba(127, 119, 221, 0.08); }
+html[data-theme="light"] .login-card { box-shadow: 0 6px 24px rgba(127, 119, 221, 0.10); }
 
 * { box-sizing: border-box; }
 
