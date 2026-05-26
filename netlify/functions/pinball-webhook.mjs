@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { addBuyer, removeBuyer } from './_shared/store.mjs';
+import { grantEntitlement, revokeEntitlement, KNOWN_ENTITLEMENTS } from './_shared/store.mjs';
 
 function verifyToken(req) {
   const expected = process.env.PINBALL_WEBHOOK_TOKEN;
@@ -67,6 +67,8 @@ export default async (req) => {
   const eventType = extractEvent(payload, req);
   const email = extractEmail(payload);
   const orderId = extractOrderId(payload);
+  const productParam = new URL(req.url).searchParams.get('product') || 'base';
+  const product = KNOWN_ENTITLEMENTS.includes(productParam) ? productParam : 'base';
 
   if (!email) {
     console.error('pinball-webhook: no email in payload', JSON.stringify(payload).slice(0, 500));
@@ -75,14 +77,14 @@ export default async (req) => {
 
   try {
     if (eventType && /refund/i.test(eventType)) {
-      await removeBuyer(email);
-      return new Response(JSON.stringify({ ok: true, action: 'removed', email }), {
+      await revokeEntitlement(email, product);
+      return new Response(JSON.stringify({ ok: true, action: 'revoked', email, product }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       });
     }
-    await addBuyer(email, { orderId, event: eventType });
-    return new Response(JSON.stringify({ ok: true, action: 'added', email }), {
+    await grantEntitlement(email, product, { orderId, event: eventType });
+    return new Response(JSON.stringify({ ok: true, action: 'granted', email, product }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     });

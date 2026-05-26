@@ -28,6 +28,13 @@ export function parseSections(raw) {
 
 function classify(title) {
   const t = title.toUpperCase();
+  // Shorts-specific
+  if (t.includes('SHORT-FORM SCRIPT') || t.includes('SHORT FORM SCRIPT')) return 'shortScript';
+  if (t.includes('ON-SCREEN TEXT') || t.includes('ON SCREEN TEXT')) return 'onScreen';
+  if (t.includes('CAPTION')) return 'caption';
+  if (t.includes('HASHTAG')) return 'hashtags';
+  if (t.includes('TITLE') || t.includes('THUMBNAIL')) return 'titleVariants';
+  // Long-form
   if (t.includes('TOPIC ANGLE')) return 'angles';
   if (t.includes('HOOK VARIATION') || t.includes('HOOKS')) return 'hooks';
   if (t.includes('OUTLINE')) return 'outline';

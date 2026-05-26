@@ -18,13 +18,31 @@ const STAGE_BY_KEY = {
 
 const STAGE_ORDER = ['angles', 'concept', 'hooks', 'outline', 'script', 'transitions', 'broll', 'notes'];
 
-function detectStage(text) {
+const STAGE_BY_KEY_SHORTS = {
+  hooks: 'Writing hook variations…',
+  shortScript: 'Writing the short-form script…',
+  onScreen: 'Compiling on-screen text…',
+  caption: 'Crafting the caption…',
+  hashtags: 'Picking hashtags…',
+  titleVariants: 'Generating title variants…',
+};
+
+function detectStage(text, mode = 'long') {
   let last = null;
   const re = /###\s+([^\n]+)/g;
   let m;
   while ((m = re.exec(text)) !== null) last = m[1];
   if (!last) return 'Starting…';
   const upper = last.toUpperCase();
+  if (mode === 'shorts') {
+    if (upper.includes('HOOK')) return STAGE_BY_KEY_SHORTS.hooks;
+    if (upper.includes('SHORT-FORM SCRIPT') || upper.includes('SHORT FORM SCRIPT')) return STAGE_BY_KEY_SHORTS.shortScript;
+    if (upper.includes('ON-SCREEN') || upper.includes('ON SCREEN')) return STAGE_BY_KEY_SHORTS.onScreen;
+    if (upper.includes('CAPTION')) return STAGE_BY_KEY_SHORTS.caption;
+    if (upper.includes('HASHTAG')) return STAGE_BY_KEY_SHORTS.hashtags;
+    if (upper.includes('TITLE') || upper.includes('THUMBNAIL')) return STAGE_BY_KEY_SHORTS.titleVariants;
+    return 'Generating…';
+  }
   if (upper.includes('TOPIC ANGLE')) return STAGE_BY_KEY.angles;
   if (upper.includes('VIDEO CONCEPT')) return STAGE_BY_KEY.concept;
   if (upper.includes('HOOK')) return STAGE_BY_KEY.hooks;
@@ -42,7 +60,13 @@ const LENGTH_OPTIONS = [
   { value: 'long', label: 'Long', sub: '18–25 min' },
 ];
 
-const CARDS = [
+const PLATFORM_OPTIONS = [
+  { value: 'youtube', label: 'YouTube Shorts', sub: '15–60s' },
+  { value: 'reels', label: 'Instagram Reels', sub: '15–60s' },
+  { value: 'tiktok', label: 'TikTok', sub: '21–60s' },
+];
+
+const CARDS_LONG = [
   { key: 'angles', title: 'Topic Angles', accent: '#E0A458' },
   { key: 'concept', title: 'Video Concept', accent: '#7F77DD' },
   { key: 'hooks', title: 'Hook Variations', accent: '#C41A18' },
@@ -52,6 +76,17 @@ const CARDS = [
   { key: 'broll', title: 'B-Roll Shot List', accent: '#378ADD' },
   { key: 'notes', title: 'Production Notes', accent: '#C9956C' },
 ];
+
+const CARDS_SHORTS = [
+  { key: 'hooks', title: 'Hook Variations', accent: '#C41A18' },
+  { key: 'shortScript', title: 'Short-Form Script', accent: '#1D9E75', large: true },
+  { key: 'onScreen', title: 'On-Screen Text', accent: '#7F77DD' },
+  { key: 'caption', title: 'Caption', accent: '#378ADD' },
+  { key: 'hashtags', title: 'Hashtags', accent: '#9C6DD1' },
+  { key: 'titleVariants', title: 'Title / Thumbnail Variants', accent: '#E0A458' },
+];
+
+const SHORTS_CHECKOUT_URL = import.meta.env.VITE_SHORTS_CHECKOUT_URL || 'https://pinball.dev/your-shorts-checkout-url';
 
 export default function Faceless() {
   const [session, setSession] = useState(null);
@@ -162,8 +197,10 @@ function LoginGate({ onLogin }) {
 }
 
 function Engine({ session, onLogout }) {
+  const [mode, setMode] = useState('long');
   const [topic, setTopic] = useState('');
   const [videoLength, setVideoLength] = useState('medium');
+  const [platform, setPlatform] = useState('youtube');
   const [hooks, setHooks] = useState(true);
   const [broll, setBroll] = useState(true);
   const [notes, setNotes] = useState(true);
@@ -174,7 +211,19 @@ function Engine({ session, onLogout }) {
   const [shake, setShake] = useState(false);
   const inputRef = useRef(null);
 
+  const entitlements = session.entitlements || [];
+  const hasShorts = entitlements.includes('shorts');
   const sections = parseSections(raw);
+  const activeCards = mode === 'shorts' ? CARDS_SHORTS : CARDS_LONG;
+
+  // When switching modes, clear output so cards from the other mode don't leak through.
+  const switchMode = (next) => {
+    if (next === mode) return;
+    setMode(next);
+    setRaw('');
+    setError('');
+    setProgress('');
+  };
 
   const handleGenerate = async () => {
     setError('');
@@ -190,14 +239,16 @@ function Engine({ session, onLogout }) {
     setProgress('Starting…');
     try {
       const text = await generateScript({
+        mode,
         topic: topic.trim(),
         length: videoLength,
+        platform,
         includeHooks: hooks,
         includeBRoll: broll,
         includeNotes: notes,
         onChunk: (_chunk, accumulated) => {
           setRaw(accumulated);
-          setProgress(detectStage(accumulated));
+          setProgress(detectStage(accumulated, mode));
         },
       });
       setRaw(text);
@@ -205,6 +256,8 @@ function Engine({ session, onLogout }) {
       console.error(e);
       if (e.code === 'unauthorized') {
         setError('Your session expired. Refresh and sign in again.');
+      } else if (e.code === 'entitlement_required') {
+        setError(`You don't own ${e.entitlement === 'shorts' ? 'Faceless Shorts' : 'this feature'} yet.`);
       } else {
         setError(e.detail ? `Something went wrong. ${e.detail}` : 'Something went wrong. Please try again.');
       }
@@ -234,7 +287,7 @@ function Engine({ session, onLogout }) {
     onLogout();
   };
 
-  const fullText = CARDS.map((c) => sections[c.key])
+  const fullText = activeCards.map((c) => sections[c.key])
     .filter(Boolean)
     .map((s) => `### ${s.title.toUpperCase()}\n\n${s.body}`)
     .join('\n\n');
@@ -261,62 +314,99 @@ function Engine({ session, onLogout }) {
         <section className="hero">
           <div>
             <p className="eyebrow">Faceless to Finished · in 48 hours</p>
-            <h2 className="hero-headline">Type a topic.<br/>Get a complete script.</h2>
+            <h2 className="hero-headline">
+              {mode === 'shorts' ? <>Type a topic.<br/>Get a short-form script.</> : <>Type a topic.<br/>Get a complete script.</>}
+            </h2>
             <p className="hero-sub">
-              A full faceless YouTube video — angles, hooks, outline, narration, B-roll, and production notes — generated in seconds.
+              {mode === 'shorts'
+                ? 'A short-form video script — hook, body, CTA, on-screen text, caption, and hashtags — tuned to your platform.'
+                : 'A full faceless YouTube video — angles, hooks, outline, narration, B-roll, and production notes — generated in seconds.'}
             </p>
           </div>
 
-          <div className="input-wrap">
-            <input
-              ref={inputRef}
-              className={`topic-input ${shake ? 'shake' : ''}`}
-              type="text"
-              value={topic}
-              onChange={(e) => setTopic(e.target.value)}
-              onKeyDown={onKeyDown}
-              placeholder="Enter your topic or keyword (e.g. How to start investing with $100)"
-              disabled={loading}
-            />
-          </div>
+          <ModeTabs mode={mode} hasShorts={hasShorts} onChange={switchMode} />
 
-          <div className="length-picker" role="radiogroup" aria-label="Video length">
-            {LENGTH_OPTIONS.map((opt) => (
+          {mode === 'shorts' && !hasShorts ? (
+            <ShortsUpsell />
+          ) : (
+            <>
+              <div className="input-wrap">
+                <input
+                  ref={inputRef}
+                  className={`topic-input ${shake ? 'shake' : ''}`}
+                  type="text"
+                  value={topic}
+                  onChange={(e) => setTopic(e.target.value)}
+                  onKeyDown={onKeyDown}
+                  placeholder={mode === 'shorts'
+                    ? 'Enter your short-form topic (e.g. 3 productivity hacks that actually work)'
+                    : 'Enter your topic or keyword (e.g. How to start investing with $100)'}
+                  disabled={loading}
+                />
+              </div>
+
+              {mode === 'shorts' ? (
+                <div className="length-picker" role="radiogroup" aria-label="Platform">
+                  {PLATFORM_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      role="radio"
+                      aria-checked={platform === opt.value}
+                      className={`length-option ${platform === opt.value ? 'is-selected' : ''}`}
+                      onClick={() => setPlatform(opt.value)}
+                      disabled={loading}
+                    >
+                      <span className="length-label">{opt.label}</span>
+                      <span className="length-sub">{opt.sub}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="length-picker" role="radiogroup" aria-label="Video length">
+                  {LENGTH_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      role="radio"
+                      aria-checked={videoLength === opt.value}
+                      className={`length-option ${videoLength === opt.value ? 'is-selected' : ''}`}
+                      onClick={() => setVideoLength(opt.value)}
+                      disabled={loading}
+                    >
+                      <span className="length-label">{opt.label}</span>
+                      <span className="length-sub">{opt.sub}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {mode === 'long' && (
+                <div className="toggles">
+                  <Toggle label="Include hook variations" checked={hooks} onChange={setHooks} />
+                  <Toggle label="Include B-roll shot list" checked={broll} onChange={setBroll} />
+                  <Toggle label="Include production notes" checked={notes} onChange={setNotes} />
+                </div>
+              )}
+
               <button
-                key={opt.value}
-                type="button"
-                role="radio"
-                aria-checked={videoLength === opt.value}
-                className={`length-option ${videoLength === opt.value ? 'is-selected' : ''}`}
-                onClick={() => setVideoLength(opt.value)}
+                className={`generate-btn ${loading ? 'pulsing' : ''}`}
+                onClick={handleGenerate}
                 disabled={loading}
               >
-                <span className="length-label">{opt.label}</span>
-                <span className="length-sub">{opt.sub}</span>
+                {loading
+                  ? (progress || 'Generating…')
+                  : (mode === 'shorts' ? 'Generate Short Script' : 'Generate Script')}
               </button>
-            ))}
-          </div>
 
-          <div className="toggles">
-            <Toggle label="Include hook variations" checked={hooks} onChange={setHooks} />
-            <Toggle label="Include B-roll shot list" checked={broll} onChange={setBroll} />
-            <Toggle label="Include production notes" checked={notes} onChange={setNotes} />
-          </div>
-
-          <button
-            className={`generate-btn ${loading ? 'pulsing' : ''}`}
-            onClick={handleGenerate}
-            disabled={loading}
-          >
-            {loading ? (progress || 'Generating…') : 'Generate Script'}
-          </button>
-
-          {error && <div className="error">{error}</div>}
+              {error && <div className="error">{error}</div>}
+            </>
+          )}
         </section>
 
         {raw && (
           <section className="output">
-            {CARDS.map((card) => {
+            {activeCards.map((card) => {
               const section = sections[card.key];
               if (!section) return null;
               return (
@@ -381,6 +471,61 @@ function Card({ title, accent, body, large }) {
         <Markdown text={body} />
       </div>
     </article>
+  );
+}
+
+function ModeTabs({ mode, hasShorts, onChange }) {
+  return (
+    <div className="mode-tabs" role="tablist" aria-label="Generator mode">
+      <button
+        type="button"
+        role="tab"
+        aria-selected={mode === 'long'}
+        className={`mode-tab ${mode === 'long' ? 'is-selected' : ''}`}
+        onClick={() => onChange('long')}
+      >
+        Full Video
+      </button>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={mode === 'shorts'}
+        className={`mode-tab ${mode === 'shorts' ? 'is-selected' : ''} ${hasShorts ? '' : 'is-locked'}`}
+        onClick={() => onChange('shorts')}
+      >
+        {hasShorts ? null : <span className="mode-lock" aria-hidden="true">🔒</span>}
+        Shorts
+      </button>
+    </div>
+  );
+}
+
+function ShortsUpsell() {
+  return (
+    <div className="shorts-upsell">
+      <p className="eyebrow">Upgrade</p>
+      <h3 className="shorts-upsell-title">Unlock Faceless Shorts</h3>
+      <p className="shorts-upsell-sub">
+        Generate short-form scripts for YouTube Shorts, Instagram Reels, and TikTok — right inside the tool you're already using. One-time $37. No subscription.
+      </p>
+      <ul className="shorts-upsell-list">
+        <li>Optimized for under-60-second content across all three platforms</li>
+        <li>Hook variations, body, CTA, and on-screen text suggestions</li>
+        <li>Platform-tailored captions and hashtags</li>
+        <li>3 thumbnail / title variants per script</li>
+      </ul>
+      <a
+        className="generate-btn shorts-upsell-cta"
+        href={SHORTS_CHECKOUT_URL}
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        Add Faceless Shorts for $37 →
+      </a>
+      <p className="shorts-upsell-fine">
+        Already purchased? Sign out and back in so your access refreshes.
+      </p>
+    </div>
   );
 }
 

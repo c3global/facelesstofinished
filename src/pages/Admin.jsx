@@ -6,7 +6,9 @@ export default function Admin() {
   const [token, setToken] = useState(() => localStorage.getItem(TOKEN_KEY) || '');
   const [authed, setAuthed] = useState(false);
   const [list, setList] = useState([]);
+  const [knownEnts, setKnownEnts] = useState(['base', 'shorts']);
   const [newEmail, setNewEmail] = useState('');
+  const [newEnts, setNewEnts] = useState({ base: true, shorts: false });
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -29,6 +31,9 @@ export default function Admin() {
     }
     const data = await res.json();
     setList(data.buyers || []);
+    if (Array.isArray(data.knownEntitlements) && data.knownEntitlements.length) {
+      setKnownEnts(data.knownEntitlements);
+    }
     setAuthed(true);
     localStorage.setItem(TOKEN_KEY, token);
   };
@@ -41,12 +46,17 @@ export default function Admin() {
   const add = async (e) => {
     e?.preventDefault();
     if (!newEmail.trim()) return;
+    const entitlements = Object.entries(newEnts).filter(([, v]) => v).map(([k]) => k);
+    if (entitlements.length === 0) {
+      setError('Pick at least one entitlement.');
+      return;
+    }
     setBusy(true);
     setError('');
     const res = await fetch('/api/admin-buyers', {
       method: 'POST',
       headers,
-      body: JSON.stringify({ email: newEmail.trim() }),
+      body: JSON.stringify({ email: newEmail.trim(), entitlements }),
     });
     setBusy(false);
     if (!res.ok) {
@@ -54,11 +64,35 @@ export default function Admin() {
       return;
     }
     setNewEmail('');
+    setNewEnts({ base: true, shorts: false });
+    refresh();
+  };
+
+  const grant = async (email, entitlement) => {
+    setBusy(true);
+    await fetch('/api/admin-buyers?action=grant', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ email, entitlement }),
+    });
+    setBusy(false);
+    refresh();
+  };
+
+  const revoke = async (email, entitlement) => {
+    if (!confirm(`Revoke "${entitlement}" from ${email}?`)) return;
+    setBusy(true);
+    await fetch('/api/admin-buyers?action=revoke', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ email, entitlement }),
+    });
+    setBusy(false);
     refresh();
   };
 
   const remove = async (email) => {
-    if (!confirm(`Remove ${email}?`)) return;
+    if (!confirm(`Remove ${email} entirely?`)) return;
     setBusy(true);
     await fetch('/api/admin-buyers', {
       method: 'DELETE',
@@ -109,7 +143,7 @@ export default function Admin() {
             <p className="hero-sub">{list.length} buyer{list.length === 1 ? '' : 's'}.</p>
           </div>
 
-          <form className="login-form" onSubmit={add} style={{ maxWidth: 480 }}>
+          <form className="login-form" onSubmit={add} style={{ maxWidth: 520 }}>
             <input
               className="topic-input"
               type="email"
@@ -118,6 +152,20 @@ export default function Admin() {
               onChange={(e) => setNewEmail(e.target.value)}
               disabled={busy}
             />
+            <div className="admin-ent-picker">
+              <span style={{ fontSize: 13, opacity: 0.7 }}>Grant:</span>
+              {knownEnts.map((ent) => (
+                <label key={ent} className="admin-ent-check">
+                  <input
+                    type="checkbox"
+                    checked={!!newEnts[ent]}
+                    onChange={(e) => setNewEnts((s) => ({ ...s, [ent]: e.target.checked }))}
+                    disabled={busy}
+                  />
+                  <span>{ent}</span>
+                </label>
+              ))}
+            </div>
             <button className="generate-btn" type="submit" disabled={busy}>
               {busy ? 'Working…' : 'Add buyer'}
             </button>
@@ -139,24 +187,47 @@ export default function Admin() {
                   <thead>
                     <tr>
                       <th>Email</th>
+                      <th>Entitlements</th>
                       <th>Source</th>
                       <th>Added</th>
                       <th></th>
                     </tr>
                   </thead>
                   <tbody>
-                    {list.map((b) => (
-                      <tr key={b.email}>
-                        <td>{b.email}</td>
-                        <td>{b.source || b.event || '—'}</td>
-                        <td>{b.addedAt ? new Date(b.addedAt).toLocaleString() : '—'}</td>
-                        <td>
-                          <button className="copy-btn" onClick={() => remove(b.email)} disabled={busy}>
-                            Remove
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
+                    {list.map((b) => {
+                      const ents = Array.isArray(b.entitlements) ? b.entitlements : ['base'];
+                      return (
+                        <tr key={b.email}>
+                          <td>{b.email}</td>
+                          <td>
+                            <div className="ent-badges">
+                              {knownEnts.map((ent) => {
+                                const has = ents.includes(ent);
+                                return (
+                                  <button
+                                    key={ent}
+                                    type="button"
+                                    className={`ent-badge ${has ? 'is-on' : 'is-off'}`}
+                                    onClick={() => has ? revoke(b.email, ent) : grant(b.email, ent)}
+                                    disabled={busy}
+                                    title={has ? `Revoke ${ent}` : `Grant ${ent}`}
+                                  >
+                                    {has ? '✓' : '+'} {ent}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </td>
+                          <td>{b.source || b.event || '—'}</td>
+                          <td>{b.addedAt ? new Date(b.addedAt).toLocaleString() : '—'}</td>
+                          <td>
+                            <button className="copy-btn" onClick={() => remove(b.email)} disabled={busy}>
+                              Remove
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               )}

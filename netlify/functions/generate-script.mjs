@@ -1,10 +1,11 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { readSession, readCookies, json } from './_shared/auth.mjs';
-import { buildSystemPrompt } from './_shared/systemPrompt.mjs';
+import { hasEntitlement } from './_shared/store.mjs';
+import { buildSystemPrompt, buildShortsSystemPrompt } from './_shared/systemPrompt.mjs';
 
 const MODEL = 'claude-sonnet-4-20250514';
-const MAX_TOKENS = 8192;
 const VALID_LENGTHS = new Set(['short', 'medium', 'long']);
+const VALID_PLATFORMS = new Set(['youtube', 'reels', 'tiktok']);
 
 export default async (req) => {
   if (req.method !== 'POST') return new Response('Method not allowed', { status: 405 });
@@ -25,17 +26,41 @@ export default async (req) => {
   const topic = String(body.topic || '').trim();
   if (!topic) return json({ error: 'topic_required' }, { status: 400 });
 
-  const includeHooks = body.includeHooks !== false;
-  const includeBRoll = body.includeBRoll !== false;
-  const includeNotes = body.includeNotes !== false;
-  const length = VALID_LENGTHS.has(body.length) ? body.length : 'medium';
+  const mode = body.mode === 'shorts' ? 'shorts' : 'long';
+  const requiredEntitlement = mode === 'shorts' ? 'shorts' : 'base';
 
-  let userMessage = `Generate a complete faceless YouTube video package for this topic: ${topic}`;
-  if (!includeBRoll) userMessage += '\nDo not include the consolidated B-roll Shot List section. Inline cues inside the narration are still required.';
-  if (!includeNotes) userMessage += '\nDo not include the Production Notes section.';
-  if (!includeHooks) userMessage += '\nSkip the alternate hook variations section.';
+  const allowed = await hasEntitlement(session.email, requiredEntitlement).catch(() => false);
+  if (!allowed) {
+    return json(
+      { error: 'entitlement_required', entitlement: requiredEntitlement },
+      { status: 403 }
+    );
+  }
 
-  const systemPrompt = buildSystemPrompt({ length });
+  let systemPrompt;
+  let userMessage;
+  let maxTokens;
+
+  if (mode === 'shorts') {
+    const platform = VALID_PLATFORMS.has(body.platform) ? body.platform : 'youtube';
+    systemPrompt = buildShortsSystemPrompt({ platform });
+    userMessage = `Generate a complete faceless short-form video package for this topic: ${topic}`;
+    maxTokens = 2000;
+  } else {
+    const includeHooks = body.includeHooks !== false;
+    const includeBRoll = body.includeBRoll !== false;
+    const includeNotes = body.includeNotes !== false;
+    const length = VALID_LENGTHS.has(body.length) ? body.length : 'medium';
+
+    let msg = `Generate a complete faceless YouTube video package for this topic: ${topic}`;
+    if (!includeBRoll) msg += '\nDo not include the consolidated B-roll Shot List section. Inline cues inside the narration are still required.';
+    if (!includeNotes) msg += '\nDo not include the Production Notes section.';
+    if (!includeHooks) msg += '\nSkip the alternate hook variations section.';
+    userMessage = msg;
+    systemPrompt = buildSystemPrompt({ length });
+    maxTokens = 8192;
+  }
+
   const client = new Anthropic({ apiKey });
 
   const encoder = new TextEncoder();
@@ -44,7 +69,7 @@ export default async (req) => {
       try {
         const stream = client.messages.stream({
           model: MODEL,
-          max_tokens: MAX_TOKENS,
+          max_tokens: maxTokens,
           system: systemPrompt,
           messages: [{ role: 'user', content: userMessage }],
         });

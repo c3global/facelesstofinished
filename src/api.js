@@ -1,14 +1,31 @@
-export async function generateScript({ topic, length, includeHooks, includeBRoll, includeNotes, onChunk }) {
+export async function generateScript({
+  mode = 'long',
+  topic,
+  length,
+  platform,
+  includeHooks,
+  includeBRoll,
+  includeNotes,
+  onChunk,
+}) {
   const res = await fetch('/api/generate-script', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
-    body: JSON.stringify({ topic, length, includeHooks, includeBRoll, includeNotes }),
+    body: JSON.stringify({ mode, topic, length, platform, includeHooks, includeBRoll, includeNotes }),
   });
 
   if (res.status === 401) {
     const err = new Error('unauthorized');
     err.code = 'unauthorized';
+    throw err;
+  }
+  if (res.status === 403) {
+    let detail = null;
+    try { detail = await res.json(); } catch {}
+    const err = new Error('entitlement_required');
+    err.code = 'entitlement_required';
+    err.entitlement = detail?.entitlement || null;
     throw err;
   }
   if (!res.ok) {
@@ -43,7 +60,9 @@ export async function fetchSession() {
   const res = await fetch('/api/auth-me', { credentials: 'include' });
   if (!res.ok) return null;
   const data = await res.json();
-  return data.authenticated ? { email: data.email } : null;
+  return data.authenticated
+    ? { email: data.email, entitlements: data.entitlements || [] }
+    : null;
 }
 
 export async function loginWithEmail(email) {
@@ -71,7 +90,8 @@ export async function loginWithEmail(email) {
     err.detail = `HTTP ${res.status} ${detail}`;
     throw err;
   }
-  return res.json();
+  const data = await res.json();
+  return { email: data.email, entitlements: data.entitlements || [] };
 }
 
 export async function logout() {

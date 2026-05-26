@@ -1,5 +1,5 @@
 import { createSessionCookie, normalizeEmail, json } from './_shared/auth.mjs';
-import { isBuyer } from './_shared/store.mjs';
+import { isBuyer, listEntitlements } from './_shared/store.mjs';
 
 export default async (req) => {
   if (req.method !== 'POST') return new Response('Method not allowed', { status: 405 });
@@ -26,7 +26,9 @@ export default async (req) => {
 
   if (!ok) return json({ error: 'not_a_buyer' }, { status: 403 });
 
-  return json({ email }, {
+  const entitlements = await listEntitlements(email).catch(() => ['base']);
+
+  return json({ email, entitlements }, {
     status: 200,
     headers: { 'Set-Cookie': createSessionCookie(email) },
   });
