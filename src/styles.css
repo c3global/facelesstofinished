@@ -811,6 +811,34 @@ input[type="text"] { font-family: inherit; }
   background: linear-gradient(135deg, #FFFFFF 0%, #E8E4FF 40%, var(--platform-accent, #C9956C) 100%);
   -webkit-background-clip: text; background-clip: text; color: transparent;
 }
+html[data-theme="light"] .page[data-mode="shorts"] .hero-headline {
+  background: linear-gradient(135deg, #1A1530 0%, #5E55C2 45%, var(--platform-accent, #C9956C) 100%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+html[data-theme="light"] .batched-header h3 {
+  background: linear-gradient(135deg, #1A1530, var(--platform-accent, #5E55C2));
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+html[data-theme="light"] .hashtag-chip {
+  background: rgba(94, 85, 194, 0.10);
+  color: #5E55C2;
+  border-color: rgba(94, 85, 194, 0.35);
+}
+html[data-theme="light"] .hashtag-chip:hover {
+  background: rgba(94, 85, 194, 0.20);
+  color: #2A2370;
+}
+html[data-theme="light"] .workflow-card { background: #FFFFFF; }
+html[data-theme="light"] .sprint-opt:not(.is-selected) { color: var(--muted); }
+html[data-theme="light"] .sprint-badge { background: rgba(0,0,0,0.15); color: #fff; }
+html[data-theme="light"] .sprint-opt:not(.is-selected) .sprint-badge { background: rgba(94, 85, 194, 0.18); color: #5E55C2; }
+html[data-theme="light"] .result-mini { background: #FFFFFF; }
+html[data-theme="light"] .repurpose-cta {
+  background: linear-gradient(135deg, color-mix(in srgb, var(--primary) 6%, #FFFFFF), color-mix(in srgb, var(--red) 4%, #FFFFFF));
+}
+html[data-theme="light"] .repurpose-pill { background: #FFFFFF; }
+html[data-theme="light"] .multi-platform-toggle { background: #FFFFFF; }
+html[data-theme="light"] .workflow-col-title { color: #5B5680; border-bottom-color: rgba(120, 110, 170, 0.3); }
 
 /* ---------- Sprint segmented toggle ---------- */
 .sprint-toggle {
