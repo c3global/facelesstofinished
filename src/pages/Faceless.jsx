@@ -110,7 +110,7 @@ const CARDS_SHORTS = [
   { key: 'notes', title: 'Production Notes', accent: '#C9956C' },
 ];
 
-const SHORTS_CHECKOUT_URL = import.meta.env.VITE_SHORTS_CHECKOUT_URL || 'https://pinball.dev/your-shorts-checkout-url';
+const SHORTS_CHECKOUT_URL = import.meta.env.VITE_SHORTS_CHECKOUT_URL || 'https://hub.c3global.co/payment-link/6a151b0d3f4eb69bef72feae';
 
 export default function Faceless() {
   const [session, setSession] = useState(null);
@@ -722,7 +722,7 @@ function ShortsUpsell() {
       <p className="eyebrow">Upgrade</p>
       <h3 className="shorts-upsell-title">Unlock Faceless Shorts</h3>
       <p className="shorts-upsell-sub">
-        Generate short-form scripts for YouTube Shorts, Instagram Reels, and TikTok — right inside the tool you're already using. One-time $37. No subscription.
+        Generate short-form scripts for YouTube Shorts, Instagram Reels, and TikTok — right inside the tool you're already using. $67 one-time. No subscription.
       </p>
       <ul className="shorts-upsell-list">
         <li><strong>Content Sprint</strong> — generate 5 distinct shorts on one topic in a single click (a week of content per prompt)</li>
@@ -738,7 +738,7 @@ function ShortsUpsell() {
         target="_blank"
         rel="noopener noreferrer"
       >
-        Add Faceless Shorts for $37 →
+        Unlock Faceless Shorts for $67 →
       </a>
       <p className="shorts-upsell-fine">
         Already purchased? Sign out and back in so your access refreshes.
@@ -761,7 +761,7 @@ function RepurposeCTA({ hasShorts, open, onToggle, platform, onPlatform, count, 
           target="_blank"
           rel="noopener noreferrer"
         >
-          🔒 Unlock for $37 →
+          🔒 Unlock for $67 →
         </a>
       </div>
     );
