@@ -33,6 +33,7 @@ function classify(title) {
   if (t.includes('ON-SCREEN TEXT') || t.includes('ON SCREEN TEXT')) return 'onScreen';
   if (t.includes('CAPTION')) return 'caption';
   if (t.includes('HASHTAG')) return 'hashtags';
+  if (t.includes('COVER IMAGE') || t.includes('COVER PROMPT')) return 'coverPrompts';
   if (t.includes('TITLE') || t.includes('THUMBNAIL')) return 'titleVariants';
   // Long-form
   if (t.includes('TOPIC ANGLE')) return 'angles';

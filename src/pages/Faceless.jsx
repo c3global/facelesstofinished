@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { generateScript, fetchSession, loginWithEmail, logout } from '../api.js';
+import { generateScript, repurposeAsShort, fetchSession, loginWithEmail, logout } from '../api.js';
 import { parseSections } from '../parser.js';
 import Markdown from '../Markdown.jsx';
 import ThemeToggle from '../ThemeToggle.jsx';
+import ResultGrid, { ShortsWorkflow } from '../components/ResultGrid.jsx';
 
 const STAGE_BY_KEY = {
   angles: 'Generating topic angles…',
@@ -26,7 +27,22 @@ const STAGE_BY_KEY_SHORTS = {
   caption: 'Crafting the caption…',
   hashtags: 'Picking hashtags…',
   titleVariants: 'Generating title variants…',
+  coverPrompts: 'Writing cover image prompts…',
   notes: 'Adding production notes…',
+};
+
+const SPRINT_ANGLES = [
+  { id: 'curiosity', label: 'Curiosity', accent: '#7F77DD' },
+  { id: 'contrarian', label: 'Contrarian', accent: '#C41A18' },
+  { id: 'how-to', label: 'How-To', accent: '#1D9E75' },
+  { id: 'story', label: 'Story', accent: '#E0A458' },
+  { id: 'list', label: 'List', accent: '#378ADD' },
+];
+
+const PLATFORM_META = {
+  youtube: { label: 'YouTube Shorts', accent: '#FF0033' },
+  reels: { label: 'Reels', accent: '#E1306C' },
+  tiktok: { label: 'TikTok', accent: '#25F4EE' },
 };
 
 function detectStage(text, mode = 'long') {
@@ -43,6 +59,7 @@ function detectStage(text, mode = 'long') {
     if (upper.includes('B-ROLL') || upper.includes('BROLL')) return STAGE_BY_KEY_SHORTS.broll;
     if (upper.includes('CAPTION')) return STAGE_BY_KEY_SHORTS.caption;
     if (upper.includes('HASHTAG')) return STAGE_BY_KEY_SHORTS.hashtags;
+    if (upper.includes('COVER IMAGE') || upper.includes('COVER PROMPT')) return STAGE_BY_KEY_SHORTS.coverPrompts;
     if (upper.includes('TITLE') || upper.includes('THUMBNAIL')) return STAGE_BY_KEY_SHORTS.titleVariants;
     if (upper.includes('PRODUCTION')) return STAGE_BY_KEY_SHORTS.notes;
     return 'Generating…';
@@ -89,6 +106,7 @@ const CARDS_SHORTS = [
   { key: 'caption', title: 'Caption', accent: '#5BA0F2' },
   { key: 'hashtags', title: 'Hashtags', accent: '#9C6DD1' },
   { key: 'titleVariants', title: 'Title / Thumbnail Variants', accent: '#E0A458' },
+  { key: 'coverPrompts', title: 'Cover Image Prompts', accent: '#E7B23C' },
   { key: 'notes', title: 'Production Notes', accent: '#C9956C' },
 ];
 
@@ -210,10 +228,20 @@ function Engine({ session, onLogout }) {
   const [hooks, setHooks] = useState(true);
   const [broll, setBroll] = useState(true);
   const [notes, setNotes] = useState(true);
+  // Shorts-only controls
+  const [shortsVariant, setShortsVariant] = useState('single'); // 'single' | 'sprint'
+  const [multiPlatform, setMultiPlatform] = useState(false);
+  // Long-form -> Shorts repurposer panel state
+  const [repurposeOpen, setRepurposeOpen] = useState(false);
+  const [repurposePlatform, setRepurposePlatform] = useState('youtube');
+  const [repurposeCount, setRepurposeCount] = useState(3);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [raw, setRaw] = useState('');
   const [progress, setProgress] = useState('');
+  // Batched results (Sprint, Multi-platform pack, Repurposer) — array of {id, label, accent, platform, raw, status}
+  const [batchItems, setBatchItems] = useState(null);
+  const [expandedIdx, setExpandedIdx] = useState(0);
   const [shake, setShake] = useState(false);
   const inputRef = useRef(null);
 
@@ -221,14 +249,52 @@ function Engine({ session, onLogout }) {
   const hasShorts = entitlements.includes('shorts');
   const sections = parseSections(raw);
   const activeCards = mode === 'shorts' ? CARDS_SHORTS : CARDS_LONG;
+  const platformAccent = PLATFORM_META[platform]?.accent || '#FF0033';
 
-  // When switching modes, clear output so cards from the other mode don't leak through.
   const switchMode = (next) => {
     if (next === mode) return;
     setMode(next);
     setRaw('');
     setError('');
     setProgress('');
+    setBatchItems(null);
+    setRepurposeOpen(false);
+  };
+
+  const runBatch = async (specs, runner) => {
+    // Initialize all panels in 'pending' state and expand the first.
+    const initial = specs.map((s) => ({ ...s, raw: '', status: 'streaming' }));
+    setBatchItems(initial);
+    setExpandedIdx(0);
+    await Promise.all(
+      specs.map((spec, i) =>
+        runner(spec, (chunk, accumulated) => {
+          setBatchItems((prev) => {
+            if (!prev) return prev;
+            const next = prev.slice();
+            next[i] = { ...next[i], raw: accumulated };
+            return next;
+          });
+        })
+          .then((finalText) => {
+            setBatchItems((prev) => {
+              if (!prev) return prev;
+              const next = prev.slice();
+              next[i] = { ...next[i], raw: finalText, status: 'done' };
+              return next;
+            });
+          })
+          .catch((err) => {
+            console.error('batch item failed', err);
+            setBatchItems((prev) => {
+              if (!prev) return prev;
+              const next = prev.slice();
+              next[i] = { ...next[i], status: 'error' };
+              return next;
+            });
+          })
+      )
+    );
   };
 
   const handleGenerate = async () => {
@@ -242,22 +308,51 @@ function Engine({ session, onLogout }) {
     }
     setLoading(true);
     setRaw('');
+    setBatchItems(null);
     setProgress('Starting…');
     try {
-      const text = await generateScript({
-        mode,
-        topic: topic.trim(),
-        length: videoLength,
-        platform,
-        includeHooks: hooks,
-        includeBRoll: broll,
-        includeNotes: notes,
-        onChunk: (_chunk, accumulated) => {
-          setRaw(accumulated);
-          setProgress(detectStage(accumulated, mode));
-        },
-      });
-      setRaw(text);
+      // Shorts: Sprint mode (5 angles)
+      if (mode === 'shorts' && shortsVariant === 'sprint') {
+        const specs = SPRINT_ANGLES.map((a) => ({
+          id: a.id,
+          label: a.label,
+          accent: a.accent,
+          platform,
+          angle: a.id,
+        }));
+        await runBatch(specs, (spec, onChunk) =>
+          generateScript({ mode: 'shorts', topic: topic.trim(), platform: spec.platform, angle: spec.angle, onChunk })
+        );
+      }
+      // Shorts: Multi-platform pack (3 platforms)
+      else if (mode === 'shorts' && multiPlatform) {
+        const specs = ['youtube', 'reels', 'tiktok'].map((p) => ({
+          id: p,
+          label: PLATFORM_META[p].label,
+          accent: PLATFORM_META[p].accent,
+          platform: p,
+        }));
+        await runBatch(specs, (spec, onChunk) =>
+          generateScript({ mode: 'shorts', topic: topic.trim(), platform: spec.platform, onChunk })
+        );
+      }
+      // Single (long or single short)
+      else {
+        const text = await generateScript({
+          mode,
+          topic: topic.trim(),
+          length: videoLength,
+          platform,
+          includeHooks: hooks,
+          includeBRoll: broll,
+          includeNotes: notes,
+          onChunk: (_chunk, accumulated) => {
+            setRaw(accumulated);
+            setProgress(detectStage(accumulated, mode));
+          },
+        });
+        setRaw(text);
+      }
     } catch (e) {
       console.error(e);
       if (e.code === 'unauthorized') {
@@ -273,11 +368,41 @@ function Engine({ session, onLogout }) {
     }
   };
 
+  const handleRepurpose = async () => {
+    if (!raw) return;
+    if (!hasShorts) return;
+    setRepurposeOpen(false);
+    setError('');
+    setLoading(true);
+    try {
+      const angles = SPRINT_ANGLES.slice(0, repurposeCount);
+      const specs = angles.map((a) => ({
+        id: `rp-${a.id}`,
+        label: a.label,
+        accent: a.accent,
+        platform: repurposePlatform,
+        angle: a.id,
+      }));
+      const sourceScript = raw;
+      // Move long-form output out of the way visually by stashing batchItems — but keep raw for context.
+      await runBatch(specs, (spec, onChunk) =>
+        repurposeAsShort({ sourceScript, platform: spec.platform, angle: spec.angle, onChunk })
+      );
+    } catch (e) {
+      console.error(e);
+      setError(e.detail || 'Repurpose failed. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleReset = () => {
     setRaw('');
     setError('');
     setTopic('');
     setProgress('');
+    setBatchItems(null);
+    setRepurposeOpen(false);
     setTimeout(() => inputRef.current?.focus(), 0);
   };
 
@@ -299,7 +424,7 @@ function Engine({ session, onLogout }) {
     .join('\n\n');
 
   return (
-    <div className="page">
+    <div className="page" data-mode={mode} data-platform={mode === 'shorts' ? platform : undefined} style={mode === 'shorts' ? { '--platform-accent': platformAccent } : undefined}>
       <header className="site-header">
         <a className="header-logo" href="/" aria-label="Faceless 48 — The 48-Hour Publishing System">
           <img src="/faceless48-lockup.png" alt="Faceless 48 — The 48-Hour Publishing System" />
@@ -316,7 +441,7 @@ function Engine({ session, onLogout }) {
         </nav>
       </header>
 
-      <main className="main">
+      <main className={`main ${mode === 'shorts' && hasShorts ? 'main-wide' : ''}`}>
         <section className="hero">
           <div>
             <p className="eyebrow">Faceless to Finished · in 48 hours</p>
@@ -352,22 +477,61 @@ function Engine({ session, onLogout }) {
               </div>
 
               {mode === 'shorts' ? (
-                <div className="length-picker" role="radiogroup" aria-label="Platform">
-                  {PLATFORM_OPTIONS.map((opt) => (
+                <>
+                  <div className="sprint-toggle" role="radiogroup" aria-label="Generation mode">
                     <button
-                      key={opt.value}
                       type="button"
                       role="radio"
-                      aria-checked={platform === opt.value}
-                      className={`length-option ${platform === opt.value ? 'is-selected' : ''}`}
-                      onClick={() => setPlatform(opt.value)}
+                      aria-checked={shortsVariant === 'single'}
+                      className={`sprint-opt ${shortsVariant === 'single' ? 'is-selected' : ''}`}
+                      onClick={() => setShortsVariant('single')}
                       disabled={loading}
                     >
-                      <span className="length-label">{opt.label}</span>
-                      <span className="length-sub">{opt.sub}</span>
+                      Single Short
                     </button>
-                  ))}
-                </div>
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={shortsVariant === 'sprint'}
+                      className={`sprint-opt ${shortsVariant === 'sprint' ? 'is-selected' : ''}`}
+                      onClick={() => { setShortsVariant('sprint'); setMultiPlatform(false); }}
+                      disabled={loading}
+                      title="Generate 5 distinct shorts from one topic"
+                    >
+                      Content Sprint <span className="sprint-badge">5</span>
+                    </button>
+                  </div>
+                  <div className="length-picker" role="radiogroup" aria-label="Platform">
+                    {PLATFORM_OPTIONS.map((opt) => (
+                      <button
+                        key={opt.value}
+                        type="button"
+                        role="radio"
+                        aria-checked={platform === opt.value}
+                        className={`length-option ${platform === opt.value ? 'is-selected' : ''}`}
+                        onClick={() => setPlatform(opt.value)}
+                        disabled={loading}
+                      >
+                        <span className="length-label">{opt.label}</span>
+                        <span className="length-sub">{opt.sub}</span>
+                      </button>
+                    ))}
+                  </div>
+                  {shortsVariant === 'single' && (
+                    <label className={`multi-platform-toggle ${multiPlatform ? 'is-on' : ''}`}>
+                      <input
+                        type="checkbox"
+                        checked={multiPlatform}
+                        onChange={(e) => setMultiPlatform(e.target.checked)}
+                        disabled={loading}
+                      />
+                      <span>Generate for all 3 platforms at once</span>
+                    </label>
+                  )}
+                  {shortsVariant === 'sprint' && (
+                    <p className="sprint-note">5 shorts on this topic — each from a different angle (Curiosity / Contrarian / How-To / Story / List).</p>
+                  )}
+                </>
               ) : (
                 <div className="length-picker" role="radiogroup" aria-label="Video length">
                   {LENGTH_OPTIONS.map((opt) => (
@@ -402,7 +566,13 @@ function Engine({ session, onLogout }) {
               >
                 {loading
                   ? (progress || 'Generating…')
-                  : (mode === 'shorts' ? 'Generate Short Script' : 'Generate Script')}
+                  : mode === 'shorts'
+                    ? shortsVariant === 'sprint'
+                      ? 'Generate Content Sprint (5)'
+                      : multiPlatform
+                        ? 'Generate for All 3 Platforms'
+                        : 'Generate Short Script'
+                    : 'Generate Script'}
               </button>
 
               {error && <div className="error">{error}</div>}
@@ -410,8 +580,32 @@ function Engine({ session, onLogout }) {
           )}
         </section>
 
-        {raw && (
+        {raw && mode === 'shorts' && (
           <section className="output">
+            <ShortsWorkflow sections={sections} platform={platform} />
+            <div className="output-actions">
+              <CopyButton text={fullText} label="Copy Full Package" primary />
+              <button className="ghost-btn" onClick={handleReset}>
+                Generate New Short
+              </button>
+            </div>
+          </section>
+        )}
+
+        {raw && mode === 'long' && (
+          <section className="output">
+            <RepurposeCTA
+                hasShorts={hasShorts}
+                open={repurposeOpen}
+                onToggle={() => setRepurposeOpen((v) => !v)}
+                platform={repurposePlatform}
+                onPlatform={setRepurposePlatform}
+                count={repurposeCount}
+                onCount={setRepurposeCount}
+                onGo={handleRepurpose}
+                loading={loading}
+              />
+
             {activeCards.map((card) => {
               const section = sections[card.key];
               if (!section) return null;
@@ -436,6 +630,22 @@ function Engine({ session, onLogout }) {
                 Generate New Script
               </button>
             </div>
+          </section>
+        )}
+
+        {batchItems && batchItems.length > 0 && (
+          <section className="output batched-output">
+            <header className="batched-header">
+              <h3>
+                {batchItems[0].id?.startsWith('rp-')
+                  ? 'Shorts Derived from Your Script'
+                  : batchItems[0].id === 'youtube' || batchItems[0].id === 'reels' || batchItems[0].id === 'tiktok'
+                    ? 'Multi-Platform Pack'
+                    : 'Content Sprint'}
+              </h3>
+              <p className="batched-sub">Tap a phone to expand it.</p>
+            </header>
+            <ResultGrid items={batchItems} expandedIdx={expandedIdx} onExpand={setExpandedIdx} />
           </section>
         )}
       </main>
@@ -515,10 +725,12 @@ function ShortsUpsell() {
         Generate short-form scripts for YouTube Shorts, Instagram Reels, and TikTok — right inside the tool you're already using. One-time $37. No subscription.
       </p>
       <ul className="shorts-upsell-list">
-        <li>Optimized for under-60-second content across all three platforms</li>
-        <li>Hook variations, body, CTA, and on-screen text suggestions</li>
-        <li>Platform-tailored captions and hashtags</li>
-        <li>3 thumbnail / title variants per script</li>
+        <li><strong>Content Sprint</strong> — generate 5 distinct shorts on one topic in a single click (a week of content per prompt)</li>
+        <li><strong>Multi-Platform Pack</strong> — same topic, generated for YouTube Shorts + Reels + TikTok simultaneously</li>
+        <li><strong>Cut Long-Form Into Shorts</strong> — turn any full video script into 3–5 ready-to-shoot shorts derived from your own hooks and beats</li>
+        <li><strong>AI Cover Image Prompts</strong> — paste-ready Midjourney/Sora prompts for every title variant</li>
+        <li>Inline on-screen text + B-roll cues, consolidated shot lists, platform-tuned captions & hashtags</li>
+        <li>9:16 phone-mockup preview so your script <em>looks</em> like the final video</li>
       </ul>
       <a
         className="generate-btn shorts-upsell-cta"
@@ -531,6 +743,77 @@ function ShortsUpsell() {
       <p className="shorts-upsell-fine">
         Already purchased? Sign out and back in so your access refreshes.
       </p>
+    </div>
+  );
+}
+
+function RepurposeCTA({ hasShorts, open, onToggle, platform, onPlatform, count, onCount, onGo, loading }) {
+  if (!hasShorts) {
+    return (
+      <div className="repurpose-cta repurpose-cta-locked">
+        <div className="repurpose-cta-text">
+          <strong>Want shorts from this script?</strong>
+          <span> Unlock Faceless Shorts to auto-cut this long-form into 3–5 ready-to-shoot shorts.</span>
+        </div>
+        <a
+          className="repurpose-cta-btn"
+          href={SHORTS_CHECKOUT_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          🔒 Unlock for $37 →
+        </a>
+      </div>
+    );
+  }
+  return (
+    <div className={`repurpose-cta ${open ? 'is-open' : ''}`}>
+      <div className="repurpose-cta-header" onClick={onToggle} role="button" tabIndex={0}>
+        <div className="repurpose-cta-text">
+          <strong>✂️ Cut into Shorts</strong>
+          <span> Auto-derive ready-to-shoot shorts from this script.</span>
+        </div>
+        <span className="repurpose-chevron">{open ? '▴' : '▾'}</span>
+      </div>
+      {open && (
+        <div className="repurpose-cta-panel">
+          <div className="repurpose-row">
+            <label>Platform</label>
+            <div className="repurpose-pills">
+              {PLATFORM_OPTIONS.map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  className={`repurpose-pill ${platform === opt.value ? 'is-on' : ''}`}
+                  onClick={() => onPlatform(opt.value)}
+                  disabled={loading}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="repurpose-row">
+            <label>How many shorts?</label>
+            <div className="repurpose-pills">
+              {[3, 5].map((n) => (
+                <button
+                  key={n}
+                  type="button"
+                  className={`repurpose-pill ${count === n ? 'is-on' : ''}`}
+                  onClick={() => onCount(n)}
+                  disabled={loading}
+                >
+                  {n}
+                </button>
+              ))}
+            </div>
+          </div>
+          <button className="repurpose-go" onClick={onGo} disabled={loading}>
+            {loading ? 'Generating…' : `Generate ${count} Shorts →`}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

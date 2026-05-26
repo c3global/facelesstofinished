@@ -43,9 +43,13 @@ export default async (req) => {
 
   if (mode === 'shorts') {
     const platform = VALID_PLATFORMS.has(body.platform) ? body.platform : 'youtube';
+    const angle = typeof body.angle === 'string' && body.angle.trim() ? body.angle.trim().slice(0, 40) : null;
     systemPrompt = buildShortsSystemPrompt({ platform });
     userMessage = `Generate a complete faceless short-form video package for this topic: ${topic}`;
-    maxTokens = 3000;
+    if (angle) {
+      userMessage += `\n\nHOOK ANGLE BIAS FOR THIS SHORT: ${angle}. Every other short in this batch is using a different angle, so commit fully to this one — don't hedge.`;
+    }
+    maxTokens = 3500;
   } else {
     const includeHooks = body.includeHooks !== false;
     const includeBRoll = body.includeBRoll !== false;

@@ -198,6 +198,12 @@ Provide hashtags following the platform's specific style described above. Space-
 2. [Bold Claim] — [text]
 3. [Question] — [text]
 
+### 🎨 COVER IMAGE PROMPTS
+For each of the 3 title variants above, write a vivid AI-image prompt the creator can paste directly into Midjourney, Sora, Nano Banana, DALL·E, or any image generator. Each prompt is one paragraph and must include: subject, composition, lighting, mood, art style, color palette. End every prompt with \`--ar 9:16 --no text\`. Do NOT bake the title text into the image — the cover text is added later in the editor. Label each:
+1. [matches title variant 1] — [prompt]
+2. [matches title variant 2] — [prompt]
+3. [matches title variant 3] — [prompt]
+
 ### 💡 PRODUCTION NOTES
 4–6 short bullets tailored to short-form. Always cover:
 - Aspect ratio (vertical 9:16, safe zone 1080×1920 with center-column readability)

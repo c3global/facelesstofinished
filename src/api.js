@@ -3,6 +3,7 @@ export async function generateScript({
   topic,
   length,
   platform,
+  angle,
   includeHooks,
   includeBRoll,
   includeNotes,
@@ -12,7 +13,7 @@ export async function generateScript({
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
-    body: JSON.stringify({ mode, topic, length, platform, includeHooks, includeBRoll, includeNotes }),
+    body: JSON.stringify({ mode, topic, length, platform, angle, includeHooks, includeBRoll, includeNotes }),
   });
 
   if (res.status === 401) {
@@ -42,6 +43,51 @@ export async function generateScript({
     return text;
   }
 
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let text = '';
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    const chunk = decoder.decode(value, { stream: true });
+    text += chunk;
+    if (onChunk) onChunk(chunk, text);
+  }
+  text += decoder.decode();
+  return text;
+}
+
+export async function repurposeAsShort({ sourceScript, platform, angle, onChunk }) {
+  const res = await fetch('/api/generate-shorts-from-script', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ sourceScript, platform, angle }),
+  });
+
+  if (res.status === 401) {
+    const err = new Error('unauthorized');
+    err.code = 'unauthorized';
+    throw err;
+  }
+  if (res.status === 403) {
+    let detail = null;
+    try { detail = await res.json(); } catch {}
+    const err = new Error('entitlement_required');
+    err.code = 'entitlement_required';
+    err.entitlement = detail?.entitlement || null;
+    throw err;
+  }
+  if (!res.ok) {
+    let detail = '';
+    try { detail = JSON.stringify(await res.json()); } catch { detail = await res.text().catch(() => ''); }
+    const err = new Error(`repurpose_failed_${res.status}`);
+    err.code = 'repurpose_failed';
+    err.detail = `HTTP ${res.status} ${detail}`;
+    throw err;
+  }
+
+  if (!res.body) return await res.text();
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let text = '';
