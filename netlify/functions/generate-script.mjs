@@ -45,7 +45,7 @@ export default async (req) => {
     const platform = VALID_PLATFORMS.has(body.platform) ? body.platform : 'youtube';
     systemPrompt = buildShortsSystemPrompt({ platform });
     userMessage = `Generate a complete faceless short-form video package for this topic: ${topic}`;
-    maxTokens = 2000;
+    maxTokens = 3000;
   } else {
     const includeHooks = body.includeHooks !== false;
     const includeBRoll = body.includeBRoll !== false;

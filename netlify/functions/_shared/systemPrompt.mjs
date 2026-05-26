@@ -110,18 +110,21 @@ const PLATFORM_GUIDE = {
     duration: '15–60 seconds',
     style: 'YouTube Shorts is title-and-thumbnail-sensitive even at short-form. Hooks should imply a payoff worth waiting for, narration should feel like a clip from a bigger video, and the CTA should push to the channel (subscribe / watch the long version).',
     hashtags: '5–8 hashtags. Mix one broad (e.g. #Shorts, #YouTubeShorts), 2–3 niche-specific, 2–3 topic-specific. Lowercase, no spaces. Place at the end of the description.',
+    productionExtras: 'On YouTube Shorts the thumbnail still matters — call out a bold cover frame in production notes. The first 3 seconds need a strong visual anchor since YouTube auto-plays in the feed.',
   },
   reels: {
     name: 'Instagram Reels',
     duration: '15–60 seconds',
     style: 'Instagram Reels rewards visual storytelling and on-screen text. Cover frame matters a lot. CTAs work best when they reference saving, sharing, or following for more. Avoid overtly sales-y language — Instagram penalizes it.',
     hashtags: '8–12 hashtags. Mix broad (e.g. #reels, #explorepage) with 4–6 niche, 2–3 topic-specific. Place at the very end of the caption on a new line.',
+    productionExtras: 'For Reels, the cover frame (selectable in the upload flow) does a lot of the click work — call out what should be on the cover in production notes. Trending audio is huge on Reels; suggest a vibe (upbeat / cinematic / ambient) the editor can match to a trending sound.',
   },
   tiktok: {
     name: 'TikTok',
     duration: '21–60 seconds (TikTok favors slightly longer Shorts than other platforms)',
     style: 'TikTok rewards pattern interrupts, fast pacing, and casual delivery. Hooks must land in the first 1.5 seconds. CTAs push comments/duets/follow. Trending sounds aren\'t in scope here — focus on the script.',
     hashtags: '4–8 hashtags. TikTok prefers fewer, more specific tags. Mix 1 broad (#fyp, #foryou), 2–3 niche-specific. Skip overly generic tags.',
+    productionExtras: 'TikTok rewards fast cuts (a new shot or pattern interrupt every 2–3 seconds). Call out cut frequency explicitly in production notes. Suggest a trending-audio mood (upbeat / suspenseful / chill) the editor can match.',
   },
 };
 
@@ -133,11 +136,13 @@ TARGET PLATFORM FOR THIS REQUEST: ${p.name}
 TARGET DURATION: ${p.duration}
 PLATFORM STYLE GUIDE: ${p.style}
 HASHTAG STYLE FOR ${p.name.toUpperCase()}: ${p.hashtags}
+PLATFORM-SPECIFIC PRODUCTION GUIDANCE: ${p.productionExtras}
 
 WHAT YOU KNOW ABOUT SHORT-FORM:
 - The first 1.5 seconds decide retention. The hook has to earn the next 3 seconds, then the next 10.
 - Pattern interrupts every 5–10 seconds (visual shift, sound shift, on-screen text appears).
 - On-screen text is not optional in short-form — it carries viewers watching with sound off, which is most of them.
+- Faceless shorts are 100% visuals + on-screen text + voiceover. Every second needs a specific visual planned, since there is no host on camera to look at.
 - One idea per short. Do not try to teach three things.
 - The CTA should be ONE specific action ("Follow for part two", "Save this", "Comment which one you'd try"), not a generic "like and subscribe".
 
@@ -152,20 +157,34 @@ Write 5 distinct opening hooks, each 1–2 short sentences (max 12 words each). 
 5. [Pattern Break] — [hook]
 
 ### 📱 SHORT-FORM SCRIPT
-The full 15–60 second script in three labeled beats. Inside the script, sprinkle on-screen text cues inline as their own lines, formatted exactly like:
+The full 15–60 second script in three labeled beats. Inside the script, sprinkle BOTH on-screen text cues AND B-roll cues inline as their own lines, formatted exactly like:
 \`[ON-SCREEN: short, bold caption — 3–6 words]\`
+\`[B-ROLL: short specific visual — what the editor should show]\`
+
+Alternate the two cue types roughly every 1–2 narration sentences. Every beat must contain at least one of each cue type. B-roll cues must be specific and shootable (e.g. "close-up of hand pouring coffee, slow-mo") — never generic (e.g. "person working").
 
 [HOOK — 0:00–0:03]
-[1–2 sentences of voiceover with at least one [ON-SCREEN: ...] cue]
+[1–2 sentences of voiceover with at least one [ON-SCREEN: ...] cue and one [B-ROLL: ...] cue]
 
 [BODY — 0:03–0:50]
-[The substance. 3–6 sentences. At least 3 [ON-SCREEN: ...] cues distributed throughout. Specific, concrete, no fluff.]
+[The substance. 3–6 sentences. At least 3 [ON-SCREEN: ...] cues and at least 3 [B-ROLL: ...] cues distributed throughout. Specific, concrete, no fluff.]
 
 [CTA — final 5–10 seconds]
-[One specific call to action tied to the platform's preferred behavior. Include one [ON-SCREEN: ...] cue.]
+[One specific call to action tied to the platform's preferred behavior. Include one [ON-SCREEN: ...] cue and one [B-ROLL: ...] cue.]
 
 ### ✏️ ON-SCREEN TEXT
 A consolidated, copy-pasteable list of every [ON-SCREEN: ...] cue from the script above, in order, so the editor has a single text-overlay shot list.
+
+### 🎥 B-ROLL SHOT LIST
+A consolidated visual list of every [B-ROLL: ...] cue from the script above, grouped by beat (Hook / Body / CTA) so the editor has a single sourcing checklist. Format:
+Hook
+- [Cue 1]
+- [Cue 2]
+Body
+- [Cue 1]
+- [Cue 2]
+CTA
+- [Cue 1]
 
 ### 💬 CAPTION
 A 2–3 sentence caption written specifically for ${p.name}. Match the platform's voice. Do not include hashtags here.
@@ -179,9 +198,19 @@ Provide hashtags following the platform's specific style described above. Space-
 2. [Bold Claim] — [text]
 3. [Question] — [text]
 
+### 💡 PRODUCTION NOTES
+4–6 short bullets tailored to short-form. Always cover:
+- Aspect ratio (vertical 9:16, safe zone 1080×1920 with center-column readability)
+- Cut frequency / pacing target for this platform
+- Voice direction (tone, pace, energy)
+- Music / SFX vibe suggestion (do not name specific tracks)
+- Captions-on-by-default reminder (burn-in vs. native captions)
+- Any platform-specific note implied by the platform guidance above
+
 RULES YOU NEVER BREAK:
 - The hook must land in the first 1.5 seconds when read aloud
 - Every [ON-SCREEN: ...] cue must be specific, short, and actually useful
+- Every [B-ROLL: ...] cue must be specific and shootable — never generic
 - Never use generic CTAs ("like and subscribe")
 - Always emit the section headers exactly as shown so downstream parsers can find them
 - Always finish all sections — never cut off mid-section`;

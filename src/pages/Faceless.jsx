@@ -22,9 +22,11 @@ const STAGE_BY_KEY_SHORTS = {
   hooks: 'Writing hook variations…',
   shortScript: 'Writing the short-form script…',
   onScreen: 'Compiling on-screen text…',
+  broll: 'Compiling B-roll shot list…',
   caption: 'Crafting the caption…',
   hashtags: 'Picking hashtags…',
   titleVariants: 'Generating title variants…',
+  notes: 'Adding production notes…',
 };
 
 function detectStage(text, mode = 'long') {
@@ -38,9 +40,11 @@ function detectStage(text, mode = 'long') {
     if (upper.includes('HOOK')) return STAGE_BY_KEY_SHORTS.hooks;
     if (upper.includes('SHORT-FORM SCRIPT') || upper.includes('SHORT FORM SCRIPT')) return STAGE_BY_KEY_SHORTS.shortScript;
     if (upper.includes('ON-SCREEN') || upper.includes('ON SCREEN')) return STAGE_BY_KEY_SHORTS.onScreen;
+    if (upper.includes('B-ROLL') || upper.includes('BROLL')) return STAGE_BY_KEY_SHORTS.broll;
     if (upper.includes('CAPTION')) return STAGE_BY_KEY_SHORTS.caption;
     if (upper.includes('HASHTAG')) return STAGE_BY_KEY_SHORTS.hashtags;
     if (upper.includes('TITLE') || upper.includes('THUMBNAIL')) return STAGE_BY_KEY_SHORTS.titleVariants;
+    if (upper.includes('PRODUCTION')) return STAGE_BY_KEY_SHORTS.notes;
     return 'Generating…';
   }
   if (upper.includes('TOPIC ANGLE')) return STAGE_BY_KEY.angles;
@@ -81,9 +85,11 @@ const CARDS_SHORTS = [
   { key: 'hooks', title: 'Hook Variations', accent: '#C41A18' },
   { key: 'shortScript', title: 'Short-Form Script', accent: '#1D9E75', large: true },
   { key: 'onScreen', title: 'On-Screen Text', accent: '#7F77DD' },
-  { key: 'caption', title: 'Caption', accent: '#378ADD' },
+  { key: 'broll', title: 'B-Roll Shot List', accent: '#378ADD' },
+  { key: 'caption', title: 'Caption', accent: '#5BA0F2' },
   { key: 'hashtags', title: 'Hashtags', accent: '#9C6DD1' },
   { key: 'titleVariants', title: 'Title / Thumbnail Variants', accent: '#E0A458' },
+  { key: 'notes', title: 'Production Notes', accent: '#C9956C' },
 ];
 
 const SHORTS_CHECKOUT_URL = import.meta.env.VITE_SHORTS_CHECKOUT_URL || 'https://pinball.dev/your-shorts-checkout-url';
