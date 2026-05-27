@@ -1,6 +1,13 @@
 import crypto from 'node:crypto';
 import { grantEntitlement, revokeEntitlement, KNOWN_ENTITLEMENTS } from './_shared/store.mjs';
 
+// Map GHL/Pinball product IDs → app entitlements. Add a row here when you create a new product.
+// Bumps and bonuses (Topic Vault, etc.) intentionally omitted — they're delivered separately, not as app entitlements.
+const PRODUCT_ID_TO_ENTITLEMENT = {
+  '01ks3pmetahzgx2mfg7q5crs0j': 'base',   // Faceless to Finished in 48
+  '01ksgx97wad7vcc27ycvw0erg7': 'shorts', // Faceless Shorts (OTO + backend)
+};
+
 function verifyToken(req) {
   const expected = process.env.PINBALL_WEBHOOK_TOKEN;
   if (!expected) return false;
@@ -50,6 +57,29 @@ function extractEvent(p, req) {
   );
 }
 
+function extractItems(p) {
+  if (Array.isArray(p?.items)) return p.items;
+  if (Array.isArray(p?.data?.items)) return p.data.items;
+  if (Array.isArray(p?.order?.items)) return p.order.items;
+  if (Array.isArray(p?.data?.order?.items)) return p.data.order.items;
+  return [];
+}
+
+// Returns the entitlement codes implied by a webhook payload. Prefers items[] (GHL/Pinball
+// funnel format) since one funnel completion can grant multiple entitlements at once.
+// Falls back to the legacy ?product= query param if no items array is present.
+function resolveEntitlements(payload, productParamRaw) {
+  const items = extractItems(payload);
+  const matched = new Set();
+  for (const it of items) {
+    const id = it?.product_id;
+    if (id && PRODUCT_ID_TO_ENTITLEMENT[id]) matched.add(PRODUCT_ID_TO_ENTITLEMENT[id]);
+  }
+  if (matched.size > 0) return [...matched];
+  const fallback = KNOWN_ENTITLEMENTS.includes(productParamRaw) ? productParamRaw : 'base';
+  return [fallback];
+}
+
 export default async (req) => {
   if (req.method !== 'POST') return new Response('Method not allowed', { status: 405 });
 
@@ -68,23 +98,27 @@ export default async (req) => {
   const email = extractEmail(payload);
   const orderId = extractOrderId(payload);
   const productParam = new URL(req.url).searchParams.get('product') || 'base';
-  const product = KNOWN_ENTITLEMENTS.includes(productParam) ? productParam : 'base';
+  const entitlements = resolveEntitlements(payload, productParam);
 
   if (!email) {
     console.error('pinball-webhook: no email in payload', JSON.stringify(payload).slice(0, 500));
     return new Response('No email in payload', { status: 400 });
   }
 
+  const isRefund = eventType && /refund/i.test(eventType);
+
   try {
-    if (eventType && /refund/i.test(eventType)) {
-      await revokeEntitlement(email, product);
-      return new Response(JSON.stringify({ ok: true, action: 'revoked', email, product }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      });
+    const results = [];
+    for (const product of entitlements) {
+      if (isRefund) {
+        await revokeEntitlement(email, product);
+        results.push({ product, action: 'revoked' });
+      } else {
+        await grantEntitlement(email, product, { orderId, event: eventType });
+        results.push({ product, action: 'granted' });
+      }
     }
-    await grantEntitlement(email, product, { orderId, event: eventType });
-    return new Response(JSON.stringify({ ok: true, action: 'granted', email, product }), {
+    return new Response(JSON.stringify({ ok: true, email, results }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     });
