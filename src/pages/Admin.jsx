@@ -49,6 +49,7 @@ export default function Admin() {
   const [newEnts, setNewEnts] = useState({ base: true, shorts: false });
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [selected, setSelected] = useState(() => new Set());
 
   const buildHeaders = () => {
     const h = { 'Content-Type': 'application/json' };
@@ -73,7 +74,14 @@ export default function Admin() {
       return;
     }
     const data = await res.json();
-    setList(data.buyers || []);
+    const buyers = data.buyers || [];
+    setList(buyers);
+    setSelected((cur) => {
+      const stillExisting = new Set(buyers.map((b) => b.email));
+      const next = new Set();
+      cur.forEach((email) => { if (stillExisting.has(email)) next.add(email); });
+      return next;
+    });
     setTotals(data.totals || null);
     setSignupsPerDay(Array.isArray(data.signupsPerDay) ? data.signupsPerDay : []);
     if (Array.isArray(data.knownEntitlements) && data.knownEntitlements.length) {
@@ -183,17 +191,93 @@ export default function Admin() {
     refresh();
   };
 
-  const remove = async (email) => {
-    if (!confirm(`Remove ${email} entirely?`)) return;
-    setBusy(true);
-    await fetch('/api/admin-buyers', {
+  const deleteOne = async (email) => {
+    const res = await fetch('/api/admin-buyers', {
       method: 'DELETE',
       headers: buildHeaders(),
       credentials: 'include',
       body: JSON.stringify({ email }),
     });
-    setBusy(false);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  };
+
+  const remove = async (email) => {
+    if (!confirm(`Remove ${email} entirely?`)) return;
+    const prev = list;
+    const prevTotals = totals;
+    setError('');
+    setList((cur) => cur.filter((b) => b.email !== email));
+    if (totals && typeof totals.customers === 'number') {
+      setTotals({ ...totals, customers: Math.max(0, totals.customers - 1) });
+    }
+    setSelected((cur) => {
+      if (!cur.has(email)) return cur;
+      const next = new Set(cur);
+      next.delete(email);
+      return next;
+    });
+    try {
+      await deleteOne(email);
+    } catch (e) {
+      setList(prev);
+      setTotals(prevTotals);
+      setError(`Failed to remove ${email}: ${e.message}`);
+      return;
+    }
     refresh();
+  };
+
+  const removeSelected = async () => {
+    if (selected.size === 0) return;
+    const emails = Array.from(selected);
+    if (!confirm(`Remove ${emails.length} buyer${emails.length === 1 ? '' : 's'} entirely?`)) return;
+    const prev = list;
+    const prevTotals = totals;
+    setError('');
+    const toRemove = new Set(emails);
+    setList((cur) => cur.filter((b) => !toRemove.has(b.email)));
+    if (totals && typeof totals.customers === 'number') {
+      setTotals({ ...totals, customers: Math.max(0, totals.customers - emails.length) });
+    }
+    const results = await Promise.all(
+      emails.map((email) => deleteOne(email).then(() => ({ email, ok: true })).catch((e) => ({ email, ok: false, err: e.message })))
+    );
+    const failed = results.filter((r) => !r.ok);
+    if (failed.length > 0) {
+      const failedEmails = new Set(failed.map((r) => r.email));
+      // Roll back failed ones by restoring them from prev.
+      setList((cur) => {
+        const present = new Set(cur.map((b) => b.email));
+        const restored = prev.filter((b) => failedEmails.has(b.email) && !present.has(b.email));
+        return [...cur, ...restored];
+      });
+      // Roll back totals partially: only successes were actually removed.
+      if (prevTotals && typeof prevTotals.customers === 'number') {
+        const successes = emails.length - failed.length;
+        setTotals({ ...prevTotals, customers: Math.max(0, prevTotals.customers - successes) });
+      }
+      setSelected(new Set(failed.map((r) => r.email)));
+      setError(`Failed to remove: ${failed.map((r) => `${r.email} (${r.err})`).join(', ')}`);
+    } else {
+      setSelected(new Set());
+    }
+    refresh();
+  };
+
+  const toggleSelected = (email) => {
+    setSelected((cur) => {
+      const next = new Set(cur);
+      if (next.has(email)) next.delete(email);
+      else next.add(email);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    setSelected((cur) => {
+      if (cur.size === list.length && list.length > 0) return new Set();
+      return new Set(list.map((b) => b.email));
+    });
   };
 
   if (sessionLoading) {
@@ -343,7 +427,18 @@ export default function Admin() {
           <article className="card">
             <header className="card-header">
               <h2 className="card-title">Authorized buyers</h2>
-              <button className="copy-btn" onClick={refresh} disabled={busy}>Refresh</button>
+              <div style={{ display: 'flex', gap: 8 }}>
+                {selected.size > 0 && (
+                  <button
+                    className="copy-btn"
+                    onClick={removeSelected}
+                    style={{ background: '#c0392b', color: '#fff', borderColor: '#c0392b' }}
+                  >
+                    Delete selected ({selected.size})
+                  </button>
+                )}
+                <button className="copy-btn" onClick={refresh}>Refresh</button>
+              </div>
             </header>
             <div className="card-body">
               {list.length === 0 ? (
@@ -352,6 +447,17 @@ export default function Admin() {
                 <table className="admin-table">
                   <thead>
                     <tr>
+                      <th style={{ width: 28 }}>
+                        <input
+                          type="checkbox"
+                          aria-label="Select all"
+                          checked={list.length > 0 && selected.size === list.length}
+                          ref={(el) => {
+                            if (el) el.indeterminate = selected.size > 0 && selected.size < list.length;
+                          }}
+                          onChange={toggleSelectAll}
+                        />
+                      </th>
                       <th>Email</th>
                       <th>Status</th>
                       <th>Entitlements</th>
@@ -375,6 +481,14 @@ export default function Admin() {
                           : `${b.daysSinceLastLogin}d ago`;
                       return (
                         <tr key={b.email}>
+                          <td>
+                            <input
+                              type="checkbox"
+                              aria-label={`Select ${b.email}`}
+                              checked={selected.has(b.email)}
+                              onChange={() => toggleSelected(b.email)}
+                            />
+                          </td>
                           <td>{b.email}</td>
                           <td>
                             {badge ? (
