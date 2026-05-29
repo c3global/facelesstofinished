@@ -131,27 +131,55 @@ export default function Admin() {
   };
 
   const grant = async (email, entitlement) => {
-    setBusy(true);
-    await fetch('/api/admin-buyers?action=grant', {
-      method: 'POST',
-      headers: buildHeaders(),
-      credentials: 'include',
-      body: JSON.stringify({ email, entitlement }),
-    });
-    setBusy(false);
+    const prev = list;
+    setError('');
+    setList((cur) =>
+      cur.map((b) =>
+        b.email === email
+          ? { ...b, entitlements: Array.from(new Set([...(b.entitlements || []), entitlement])) }
+          : b
+      )
+    );
+    try {
+      const res = await fetch('/api/admin-buyers?action=grant', {
+        method: 'POST',
+        headers: buildHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({ email, entitlement }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch (e) {
+      setList(prev);
+      setError(`Failed to grant "${entitlement}" to ${email}: ${e.message}`);
+      return;
+    }
     refresh();
   };
 
   const revoke = async (email, entitlement) => {
     if (!confirm(`Revoke "${entitlement}" from ${email}?`)) return;
-    setBusy(true);
-    await fetch('/api/admin-buyers?action=revoke', {
-      method: 'POST',
-      headers: buildHeaders(),
-      credentials: 'include',
-      body: JSON.stringify({ email, entitlement }),
-    });
-    setBusy(false);
+    const prev = list;
+    setError('');
+    setList((cur) =>
+      cur.map((b) =>
+        b.email === email
+          ? { ...b, entitlements: (b.entitlements || []).filter((e) => e !== entitlement) }
+          : b
+      )
+    );
+    try {
+      const res = await fetch('/api/admin-buyers?action=revoke', {
+        method: 'POST',
+        headers: buildHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({ email, entitlement }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch (e) {
+      setList(prev);
+      setError(`Failed to revoke "${entitlement}" from ${email}: ${e.message}`);
+      return;
+    }
     refresh();
   };
 
@@ -376,7 +404,6 @@ export default function Admin() {
                                     type="button"
                                     className={`ent-badge ${has ? 'is-on' : 'is-off'}`}
                                     onClick={() => has ? revoke(b.email, ent) : grant(b.email, ent)}
-                                    disabled={busy}
                                     title={has ? `Revoke ${ent}` : `Grant ${ent}`}
                                   >
                                     {has ? '✓' : '+'} {ent}
