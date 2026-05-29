@@ -1,4 +1,6 @@
 import React, { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { fetchSession } from '../api.js';
 
 const TOKEN_KEY = 'f48_admin_token';
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -37,6 +39,8 @@ function rowBadge(b) {
 export default function Admin() {
   const [token, setToken] = useState(() => localStorage.getItem(TOKEN_KEY) || '');
   const [authed, setAuthed] = useState(false);
+  const [session, setSession] = useState(null);
+  const [sessionLoading, setSessionLoading] = useState(true);
   const [list, setList] = useState([]);
   const [totals, setTotals] = useState(null);
   const [signupsPerDay, setSignupsPerDay] = useState([]);
@@ -46,11 +50,16 @@ export default function Admin() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
-  const headers = { 'X-Admin-Token': token, 'Content-Type': 'application/json' };
+  const buildHeaders = () => {
+    const h = { 'Content-Type': 'application/json' };
+    if (token) h['X-Admin-Token'] = token;
+    return h;
+  };
+  const headers = buildHeaders();
 
   const refresh = async () => {
     setError('');
-    const res = await fetch('/api/admin-buyers', { headers });
+    const res = await fetch('/api/admin-buyers', { headers: buildHeaders(), credentials: 'include' });
     if (res.status === 401) {
       setAuthed(false);
       setError('Invalid admin token.');
@@ -75,7 +84,23 @@ export default function Admin() {
   };
 
   useEffect(() => {
-    if (token) refresh();
+    let cancelled = false;
+    fetchSession()
+      .then((s) => {
+        if (cancelled) return;
+        setSession(s);
+        if (s?.isAdmin) {
+          // Authenticated as admin via cookie — load straight away.
+          refresh();
+        } else if (token) {
+          // Fall back to legacy token if one is saved.
+          refresh();
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setSessionLoading(false);
+      });
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -91,7 +116,8 @@ export default function Admin() {
     setError('');
     const res = await fetch('/api/admin-buyers', {
       method: 'POST',
-      headers,
+      headers: buildHeaders(),
+      credentials: 'include',
       body: JSON.stringify({ email: newEmail.trim(), entitlements }),
     });
     setBusy(false);
@@ -108,7 +134,8 @@ export default function Admin() {
     setBusy(true);
     await fetch('/api/admin-buyers?action=grant', {
       method: 'POST',
-      headers,
+      headers: buildHeaders(),
+      credentials: 'include',
       body: JSON.stringify({ email, entitlement }),
     });
     setBusy(false);
@@ -120,7 +147,8 @@ export default function Admin() {
     setBusy(true);
     await fetch('/api/admin-buyers?action=revoke', {
       method: 'POST',
-      headers,
+      headers: buildHeaders(),
+      credentials: 'include',
       body: JSON.stringify({ email, entitlement }),
     });
     setBusy(false);
@@ -132,20 +160,52 @@ export default function Admin() {
     setBusy(true);
     await fetch('/api/admin-buyers', {
       method: 'DELETE',
-      headers,
+      headers: buildHeaders(),
+      credentials: 'include',
       body: JSON.stringify({ email }),
     });
     setBusy(false);
     refresh();
   };
 
+  if (sessionLoading) {
+    return (
+      <div className="page">
+        <div className="loading-shell">Loading…</div>
+      </div>
+    );
+  }
+
   if (!authed) {
+    // Logged in but not an admin → show "Not authorized".
+    if (session && !session.isAdmin) {
+      return (
+        <div className="page">
+          <main className="main">
+            <section className="login-card">
+              <h2 className="hero-headline">Not authorized</h2>
+              <p className="hero-sub">
+                You're signed in as <strong>{session.email}</strong>, but this account
+                isn't an admin.
+              </p>
+              <Link to="/" className="generate-btn">← Back to home</Link>
+            </section>
+          </main>
+        </div>
+      );
+    }
+
+    // Not logged in, or legacy admin-token entry path.
     return (
       <div className="page">
         <main className="main">
           <section className="login-card">
             <h2 className="hero-headline">Admin</h2>
-            <p className="hero-sub">Enter your admin token to manage the buyer list.</p>
+            <p className="hero-sub">
+              {session
+                ? 'Enter your admin token to manage the buyer list.'
+                : 'Sign in from the main app, or enter the admin token below.'}
+            </p>
             <form
               className="login-form"
               onSubmit={(e) => {
@@ -162,6 +222,11 @@ export default function Admin() {
               />
               <button className="generate-btn" type="submit">Enter</button>
             </form>
+            {!session && (
+              <p className="login-help" style={{ marginTop: 12 }}>
+                <Link to="/">← Back to home</Link>
+              </p>
+            )}
             {error && <div className="error">{error}</div>}
           </section>
         </main>

@@ -435,6 +435,9 @@ function Engine({ session, onLogout }) {
         <nav className="header-nav">
           <ThemeToggle />
           <Link to="/resources" className="header-nav-link">Resource Library →</Link>
+          {session.isAdmin && (
+            <Link to="/admin" className="header-nav-link">Admin</Link>
+          )}
           <button className="header-nav-link header-nav-button" onClick={handleLogout} title={session.email}>
             Sign out
           </button>

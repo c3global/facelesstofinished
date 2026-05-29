@@ -107,7 +107,7 @@ export async function fetchSession() {
   if (!res.ok) return null;
   const data = await res.json();
   return data.authenticated
-    ? { email: data.email, entitlements: data.entitlements || [] }
+    ? { email: data.email, entitlements: data.entitlements || [], isAdmin: !!data.isAdmin }
     : null;
 }
 
