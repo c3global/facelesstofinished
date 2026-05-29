@@ -50,12 +50,71 @@ export async function grantEntitlement(email, name, meta = {}) {
   };
   const set = new Set(existing.entitlements || []);
   set.add(name);
+
+  // Revenue tracking: dedupe orders by id, sum total_amount when known.
+  const seenOrderIds = Array.isArray(existing.seenOrderIds) ? [...existing.seenOrderIds] : [];
+  let totalSpendCents = Number.isFinite(existing.totalSpendCents) ? existing.totalSpendCents : 0;
+  const incomingOrderId = meta?.orderId;
+  const incomingTotal = Number(meta?.orderTotalCents);
+  if (incomingOrderId && !seenOrderIds.includes(incomingOrderId)) {
+    seenOrderIds.push(incomingOrderId);
+    if (Number.isFinite(incomingTotal) && incomingTotal > 0) {
+      totalSpendCents += incomingTotal;
+    }
+  }
+
+  // Strip the helper-only field from meta before merging.
+  const { orderTotalCents: _omit, ...metaForRecord } = meta || {};
+
   const updated = {
     ...existing,
     entitlements: Array.from(set),
-    ...meta,
+    ...metaForRecord,
+    seenOrderIds,
+    totalSpendCents,
   };
   if (!updated.addedAt) updated.addedAt = new Date().toISOString();
+  await writeRecord(email, updated);
+}
+
+export async function recordLogin(email) {
+  const key = normalizeEmail(email);
+  if (!key) return;
+  const existing = await readRecord(email);
+  if (!existing) return;
+  const updated = {
+    ...existing,
+    lastLoginAt: new Date().toISOString(),
+    loginCount: (Number.isFinite(existing.loginCount) ? existing.loginCount : 0) + 1,
+  };
+  await writeRecord(email, updated);
+}
+
+export async function recordScriptGeneration(email) {
+  const key = normalizeEmail(email);
+  if (!key) return;
+  const existing = await readRecord(email);
+  if (!existing) return;
+  const now = new Date().toISOString();
+  const updated = {
+    ...existing,
+    scriptCount: (Number.isFinite(existing.scriptCount) ? existing.scriptCount : 0) + 1,
+    firstUseAt: existing.firstUseAt || now,
+  };
+  await writeRecord(email, updated);
+}
+
+export async function recordShortsGeneration(email) {
+  const key = normalizeEmail(email);
+  if (!key) return;
+  const existing = await readRecord(email);
+  if (!existing) return;
+  const now = new Date().toISOString();
+  const updated = {
+    ...existing,
+    shortsCount: (Number.isFinite(existing.shortsCount) ? existing.shortsCount : 0) + 1,
+    firstUseAt: existing.firstUseAt || now,
+  };
   await writeRecord(email, updated);
 }
 

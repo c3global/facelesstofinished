@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { readSession, readCookies, json } from './_shared/auth.mjs';
-import { hasEntitlement } from './_shared/store.mjs';
+import { hasEntitlement, recordShortsGeneration } from './_shared/store.mjs';
 import { buildShortsSystemPrompt } from './_shared/systemPrompt.mjs';
 
 const MODEL = 'claude-sonnet-4-20250514';
@@ -67,6 +67,9 @@ Derive ONE faceless short from this source, biased toward the angle: "${angle}".
             controller.enqueue(encoder.encode(event.delta.text));
           }
         }
+        recordShortsGeneration(session.email).catch((err) =>
+          console.error('record generation error:', err)
+        );
         controller.close();
       } catch (err) {
         console.error('Anthropic stream error:', err);

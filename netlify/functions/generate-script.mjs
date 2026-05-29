@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { readSession, readCookies, json } from './_shared/auth.mjs';
-import { hasEntitlement } from './_shared/store.mjs';
+import { hasEntitlement, recordScriptGeneration, recordShortsGeneration } from './_shared/store.mjs';
 import { buildSystemPrompt, buildShortsSystemPrompt } from './_shared/systemPrompt.mjs';
 
 const MODEL = 'claude-sonnet-4-20250514';
@@ -87,6 +87,9 @@ export default async (req) => {
             controller.enqueue(encoder.encode(event.delta.text));
           }
         }
+        // Track generation only on successful completion of the stream.
+        const tracker = mode === 'shorts' ? recordShortsGeneration : recordScriptGeneration;
+        tracker(session.email).catch((err) => console.error('record generation error:', err));
         controller.close();
       } catch (err) {
         console.error('Anthropic stream error:', err);

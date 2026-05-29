@@ -35,6 +35,23 @@ function extractEmail(p) {
   );
 }
 
+// Extracts the order total in cents. Handles common shapes: integer cents,
+// decimal dollar strings, or floats. Returns null when nothing usable.
+function extractOrderTotalCents(p) {
+  const raw =
+    p?.data?.order?.total_amount ??
+    p?.order?.total_amount ??
+    p?.data?.total_amount ??
+    p?.total_amount ??
+    null;
+  if (raw == null) return null;
+  const num = typeof raw === 'string' ? Number(raw) : raw;
+  if (!Number.isFinite(num) || num <= 0) return null;
+  // Heuristic: integers >= 100 look like cents; small/decimal values look like dollars.
+  if (Number.isInteger(num) && num >= 100) return num;
+  return Math.round(num * 100);
+}
+
 function extractOrderId(p) {
   return (
     p?.order?.id ||
@@ -97,6 +114,7 @@ export default async (req) => {
   const eventType = extractEvent(payload, req);
   const email = extractEmail(payload);
   const orderId = extractOrderId(payload);
+  const orderTotalCents = extractOrderTotalCents(payload);
   const productParam = new URL(req.url).searchParams.get('product') || 'base';
   const entitlements = resolveEntitlements(payload, productParam);
 
@@ -114,7 +132,7 @@ export default async (req) => {
         await revokeEntitlement(email, product);
         results.push({ product, action: 'revoked' });
       } else {
-        await grantEntitlement(email, product, { orderId, event: eventType });
+        await grantEntitlement(email, product, { orderId, orderTotalCents, event: eventType });
         results.push({ product, action: 'granted' });
       }
     }
