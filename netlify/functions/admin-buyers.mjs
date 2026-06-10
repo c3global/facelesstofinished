@@ -141,13 +141,18 @@ export default async (req) => {
     }
   }
 
+  // DELETE requests don't reliably carry JSON bodies through Netlify
+  // Functions, so accept the email via query string as well as body.
   let body = {};
-  try {
-    body = await req.json();
-  } catch {
-    return json({ error: 'invalid_json' }, { status: 400 });
+  if (req.method !== 'DELETE') {
+    try {
+      body = await req.json();
+    } catch {
+      return json({ error: 'invalid_json' }, { status: 400 });
+    }
   }
-  const email = normalizeEmail(body.email);
+  const emailFromQuery = url.searchParams.get('email');
+  const email = normalizeEmail(emailFromQuery || body.email);
   if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
     return json({ error: 'invalid_email' }, { status: 400 });
   }

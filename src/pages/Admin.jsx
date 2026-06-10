@@ -29,8 +29,9 @@ function rowBadge(b) {
     Number.isFinite(lastLoginMs) && now - lastLoginMs <= 7 * DAY_MS;
   const isStuck =
     Number.isFinite(addedMs) &&
-    now - addedMs >= 7 * DAY_MS &&
-    !Number.isFinite(lastLoginMs);
+    now - addedMs >= 14 * DAY_MS &&
+    !Number.isFinite(lastLoginMs) &&
+    !b.firstUseAt;
   if (isStuck) return { label: 'Stuck', color: '#c0392b' };
   if (isActive) return { label: 'Active', color: '#27ae60' };
   if (isNew) return { label: 'New', color: '#2980b9' };
@@ -193,11 +194,10 @@ export default function Admin() {
   };
 
   const deleteOne = async (email) => {
-    const res = await fetch('/api/admin-buyers', {
+    const res = await fetch(`/api/admin-buyers?email=${encodeURIComponent(email)}`, {
       method: 'DELETE',
       headers: buildHeaders(),
       credentials: 'include',
-      body: JSON.stringify({ email }),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
   };
