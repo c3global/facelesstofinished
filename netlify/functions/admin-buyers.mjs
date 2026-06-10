@@ -211,8 +211,10 @@ export default async (req) => {
       return json({ ok: true, action: 'revoked', email, entitlement: name });
     }
 
-    // DELETE = remove the whole buyer
-    if (req.method === 'DELETE') {
+    // DELETE = remove the whole buyer (legacy path; the frontend prefers
+    // POST ?action=delete since Netlify Functions doesn't reliably carry
+    // a JSON body on DELETE).
+    if (req.method === 'DELETE' || (req.method === 'POST' && action === 'delete')) {
       await removeBuyer(email);
       await logActivity({
         type: 'remove',

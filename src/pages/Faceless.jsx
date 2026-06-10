@@ -118,9 +118,28 @@ export default function Faceless() {
   const [sessionLoading, setSessionLoading] = useState(true);
 
   useEffect(() => {
-    fetchSession()
-      .then((s) => setSession(s))
-      .finally(() => setSessionLoading(false));
+    let cancelled = false;
+    const load = (markLoading) => {
+      if (markLoading) setSessionLoading(true);
+      fetchSession()
+        .then((s) => { if (!cancelled) setSession(s); })
+        .finally(() => { if (!cancelled) setSessionLoading(false); });
+    };
+    load(true);
+    // Re-fetch entitlements when the tab regains focus so newly-granted
+    // access (e.g. admin granting shorts in another tab) appears without
+    // the user having to log out and back in.
+    const onFocus = () => load(false);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') load(false);
+    };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, []);
 
   if (sessionLoading) {

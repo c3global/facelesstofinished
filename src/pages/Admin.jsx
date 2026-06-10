@@ -388,10 +388,11 @@ export default function Admin() {
   };
 
   const deleteOne = async (email) => {
-    const res = await fetch(`/api/admin-buyers?email=${encodeURIComponent(email)}`, {
-      method: 'DELETE',
+    const res = await fetch('/api/admin-buyers?action=delete', {
+      method: 'POST',
       headers: buildHeaders(),
       credentials: 'include',
+      body: JSON.stringify({ email }),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
   };
