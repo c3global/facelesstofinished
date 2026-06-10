@@ -6,10 +6,14 @@ import {
   removeBuyer,
   KNOWN_ENTITLEMENTS,
 } from './_shared/store.mjs';
-import { normalizeEmail, json } from './_shared/auth.mjs';
+import { normalizeEmail, json, readSession, readCookies } from './_shared/auth.mjs';
+import { logActivity } from './_shared/activity.mjs';
 
 export default async (req) => {
   if (!isAdmin(req)) return json({ error: 'unauthorized' }, { status: 401 });
+  const sessionEmail = (() => {
+    try { return readSession(readCookies(req))?.email || null; } catch { return null; }
+  })();
 
   const url = new URL(req.url);
   const action = url.searchParams.get('action');
@@ -166,6 +170,12 @@ export default async (req) => {
       for (const ent of toGrant) {
         await grantEntitlement(email, ent, { source: 'admin' });
       }
+      await logActivity({
+        type: 'add',
+        email,
+        actor: sessionEmail,
+        detail: { entitlements: toGrant, source: 'admin' },
+      });
       return json({ ok: true, action: 'added', email, entitlements: toGrant });
     }
 
@@ -176,6 +186,12 @@ export default async (req) => {
         return json({ error: 'invalid_entitlement' }, { status: 400 });
       }
       await grantEntitlement(email, name, { source: 'admin' });
+      await logActivity({
+        type: 'grant',
+        email,
+        actor: sessionEmail,
+        detail: { entitlement: name, source: 'admin' },
+      });
       return json({ ok: true, action: 'granted', email, entitlement: name });
     }
 
@@ -186,12 +202,24 @@ export default async (req) => {
         return json({ error: 'invalid_entitlement' }, { status: 400 });
       }
       await revokeEntitlement(email, name);
+      await logActivity({
+        type: 'revoke',
+        email,
+        actor: sessionEmail,
+        detail: { entitlement: name, source: 'admin' },
+      });
       return json({ ok: true, action: 'revoked', email, entitlement: name });
     }
 
     // DELETE = remove the whole buyer
     if (req.method === 'DELETE') {
       await removeBuyer(email);
+      await logActivity({
+        type: 'remove',
+        email,
+        actor: sessionEmail,
+        detail: { source: 'admin' },
+      });
       return json({ ok: true, action: 'removed', email });
     }
   } catch (err) {

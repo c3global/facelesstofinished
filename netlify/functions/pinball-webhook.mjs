@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { grantEntitlement, revokeEntitlement, KNOWN_ENTITLEMENTS } from './_shared/store.mjs';
+import { logActivity, storeWebhookPayload } from './_shared/activity.mjs';
 
 // Map GHL/Pinball product IDs → app entitlements. Add a row here when you create a new product.
 // Bumps and bonuses (Topic Vault, etc.) intentionally omitted — they're delivered separately, not as app entitlements.
@@ -97,34 +98,39 @@ function resolveEntitlements(payload, productParamRaw) {
   return [fallback];
 }
 
-export default async (req) => {
-  if (req.method !== 'POST') return new Response('Method not allowed', { status: 405 });
-
-  if (!verifyToken(req)) {
-    return new Response('Invalid or missing token', { status: 401 });
-  }
-
-  let payload;
+function summarizePayload(payload) {
   try {
-    payload = await req.json();
+    const s = JSON.stringify(payload);
+    return s.length > 500 ? `${s.slice(0, 500)}…[truncated]` : s;
   } catch {
-    return new Response('Invalid JSON', { status: 400 });
+    return '[unserializable]';
   }
+}
 
-  const eventType = extractEvent(payload, req);
+// Core handler — extracted so the admin replay endpoint can invoke it without
+// going through HTTP. Pass `extraMeta` to tag the replay in activity entries.
+export async function processWebhook(payload, { event: forcedEvent, productParam = 'base', extraMeta = {} } = {}) {
+  const eventType = forcedEvent || payload?.event || payload?.type || null;
   const email = extractEmail(payload);
   const orderId = extractOrderId(payload);
   const orderTotalCents = extractOrderTotalCents(payload);
-  const productParam = new URL(req.url).searchParams.get('product') || 'base';
   const entitlements = resolveEntitlements(payload, productParam);
 
   if (!email) {
-    console.error('pinball-webhook: no email in payload', JSON.stringify(payload).slice(0, 500));
-    return new Response('No email in payload', { status: 400 });
+    await logActivity({
+      type: 'webhook_failed',
+      email: null,
+      detail: {
+        reason: 'no_email_in_payload',
+        payloadSummary: summarizePayload(payload),
+        httpStatus: 400,
+        ...extraMeta,
+      },
+    });
+    return { ok: false, status: 400, body: 'No email in payload' };
   }
 
   const isRefund = eventType && /refund/i.test(eventType);
-
   try {
     const results = [];
     for (const product of entitlements) {
@@ -136,15 +142,82 @@ export default async (req) => {
         results.push({ product, action: 'granted' });
       }
     }
-    return new Response(JSON.stringify({ ok: true, email, results }), {
+    const activity = await logActivity({
+      type: 'webhook',
+      email,
+      detail: {
+        event: eventType,
+        orderId,
+        products: results.map((r) => r.product),
+        actions: results,
+        ...extraMeta,
+      },
+    });
+    // Stash raw payload for future replay (keyed by activity id).
+    if (activity?.id) {
+      await storeWebhookPayload(activity.id, payload, { event: eventType, email, orderId });
+    }
+    return { ok: true, status: 200, body: { ok: true, email, results, activityId: activity?.id || null } };
+  } catch (err) {
+    console.error('pinball-webhook store error:', err);
+    await logActivity({
+      type: 'webhook_failed',
+      email,
+      detail: {
+        reason: 'store_failed',
+        error: String(err?.message || err),
+        payloadSummary: summarizePayload(payload),
+        httpStatus: 500,
+        ...extraMeta,
+      },
+    });
+    return {
+      ok: false,
+      status: 500,
+      body: { error: 'store_failed', message: String(err?.message || err) },
+    };
+  }
+}
+
+export default async (req) => {
+  if (req.method !== 'POST') return new Response('Method not allowed', { status: 405 });
+
+  if (!verifyToken(req)) {
+    await logActivity({
+      type: 'webhook_failed',
+      email: null,
+      detail: { reason: 'invalid_token', httpStatus: 401 },
+    });
+    return new Response('Invalid or missing token', { status: 401 });
+  }
+
+  let payload;
+  try {
+    payload = await req.json();
+  } catch {
+    await logActivity({
+      type: 'webhook_failed',
+      email: null,
+      detail: { reason: 'invalid_json', httpStatus: 400 },
+    });
+    return new Response('Invalid JSON', { status: 400 });
+  }
+
+  const eventType = extractEvent(payload, req);
+  const productParam = new URL(req.url).searchParams.get('product') || 'base';
+  const result = await processWebhook(payload, { event: eventType, productParam });
+
+  if (result.ok) {
+    return new Response(JSON.stringify(result.body), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     });
-  } catch (err) {
-    console.error('pinball-webhook store error:', err);
-    return new Response(
-      JSON.stringify({ error: 'store_failed', message: String(err?.message || err) }),
-      { status: 500, headers: { 'Content-Type': 'application/json' } }
-    );
   }
+  if (typeof result.body === 'string') {
+    return new Response(result.body, { status: result.status });
+  }
+  return new Response(JSON.stringify(result.body), {
+    status: result.status,
+    headers: { 'Content-Type': 'application/json' },
+  });
 };
