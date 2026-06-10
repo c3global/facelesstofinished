@@ -156,8 +156,14 @@ export default async (req) => {
     }
   }
   const emailFromQuery = url.searchParams.get('email');
-  const email = normalizeEmail(emailFromQuery || body.email);
-  if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+  const isDelete = req.method === 'DELETE' || (req.method === 'POST' && action === 'delete');
+  // For delete, we look up an existing blob key — which may be a corrupted
+  // address (eg. earlier records stored with a space where the user typed `+`).
+  // Skip the email format regex so we can clean those up. For everything
+  // else, keep the strict validation so we don't write bad records.
+  const rawEmail = (emailFromQuery || body.email || '').trim().toLowerCase();
+  const email = isDelete ? rawEmail : normalizeEmail(emailFromQuery || body.email);
+  if (!email || (!isDelete && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))) {
     return json({ error: 'invalid_email' }, { status: 400 });
   }
 
