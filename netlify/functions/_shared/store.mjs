@@ -2,7 +2,7 @@ import { getStore } from '@netlify/blobs';
 import { normalizeEmail } from './auth.mjs';
 
 const STORE_NAME = 'f48-buyers';
-export const KNOWN_ENTITLEMENTS = ['base', 'shorts'];
+export const KNOWN_ENTITLEMENTS = ['base', 'shorts', 'studio'];
 
 const MAX_UPDATE_RETRIES = 5;
 const BACKOFF_MS = [50, 100, 200, 400, 800];

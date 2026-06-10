@@ -5,6 +5,7 @@ import { parseSections } from '../parser.js';
 import Markdown from '../Markdown.jsx';
 import ThemeToggle from '../ThemeToggle.jsx';
 import ResultGrid, { ShortsWorkflow } from '../components/ResultGrid.jsx';
+import Footer from '../Footer.jsx';
 
 const STAGE_BY_KEY = {
   angles: 'Generating topic angles…',
@@ -210,12 +211,7 @@ function LoginGate({ onLogin }) {
         </section>
       </main>
 
-      <footer className="site-footer">
-        <img className="footer-mark" src="/faceless48-mark.png" alt="Faceless 48" />
-        <div className="footer-text">
-          <div>© 2026 C3 Global</div>
-        </div>
-      </footer>
+      <Footer />
     </div>
   );
 }
@@ -434,6 +430,7 @@ function Engine({ session, onLogout }) {
         </div>
         <nav className="header-nav">
           <ThemeToggle />
+          <Link to="/studio" className="header-nav-link">Studio</Link>
           <Link to="/resources" className="header-nav-link">Resource Library →</Link>
           {session.isAdmin && (
             <Link to="/admin" className="header-nav-link">Admin</Link>
@@ -653,12 +650,7 @@ function Engine({ session, onLogout }) {
         )}
       </main>
 
-      <footer className="site-footer">
-        <img className="footer-mark" src="/faceless48-mark.png" alt="Faceless 48" />
-        <div className="footer-text">
-          <div>© 2026 C3 Global</div>
-        </div>
-      </footer>
+      <Footer />
     </div>
   );
 }

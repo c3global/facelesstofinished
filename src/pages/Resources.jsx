@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Link, Navigate } from 'react-router-dom';
 import { fetchSession } from '../api.js';
 import ThemeToggle from '../ThemeToggle.jsx';
+import Footer from '../Footer.jsx';
 
 const RESOURCES = [
   {
@@ -9,7 +10,7 @@ const RESOURCES = [
     number: '01',
     title: 'Pitch Perfect AI Voiceover Guide',
     description: 'Voice selection, pacing, and delivery techniques for natural-sounding AI narration.',
-    file: '/resources/01_Voiceover_Guide.html',
+    file: 'https://assets.cdn.filesafe.space/RVXeSVbF3U7E56SwQumk/media/6a2753050de795fc131142a0.pdf',
     accent: '#7F77DD',
   },
   {
@@ -17,7 +18,7 @@ const RESOURCES = [
     number: '02',
     title: 'B-Roll Prompt Bank',
     description: 'Ready-to-use AI image and video prompts for every shot type in your script.',
-    file: '/resources/02_BRoll_Prompt_Bank.html',
+    file: 'https://assets.cdn.filesafe.space/RVXeSVbF3U7E56SwQumk/media/6a275305f607d4002bd7d862.pdf',
     accent: '#378ADD',
   },
   {
@@ -25,7 +26,7 @@ const RESOURCES = [
     number: '03',
     title: 'Thumbnail Kit',
     description: 'Click-worthy thumbnail templates, color theory, and composition formulas.',
-    file: '/resources/03_Thumbnail_Kit.html',
+    file: 'https://assets.cdn.filesafe.space/RVXeSVbF3U7E56SwQumk/media/6a275305d91f654725b62870.pdf',
     accent: '#C41A18',
   },
   {
@@ -33,7 +34,7 @@ const RESOURCES = [
     number: '04',
     title: 'Production Map',
     description: 'The 48-hour workflow from idea to upload, with timing for every step.',
-    file: '/resources/04_Production_Map.html',
+    file: 'https://assets.cdn.filesafe.space/RVXeSVbF3U7E56SwQumk/media/6a2753050de795fc131142a1.pdf',
     accent: '#1D9E75',
   },
   {
@@ -41,7 +42,7 @@ const RESOURCES = [
     number: '05',
     title: 'Publishing Checklist',
     description: 'Titles, tags, descriptions, end screens — everything you need before you hit publish.',
-    file: '/resources/05_Publishing_Checklist.html',
+    file: 'https://assets.cdn.filesafe.space/RVXeSVbF3U7E56SwQumk/media/6a27530549e55f8519bafdf2.pdf',
     accent: '#C9956C',
   },
 ];
@@ -103,12 +104,7 @@ export default function Resources() {
         </section>
       </main>
 
-      <footer className="site-footer">
-        <img className="footer-mark" src="/faceless48-mark.png" alt="Faceless 48" />
-        <div className="footer-text">
-          <div>© 2026 C3 Global</div>
-        </div>
-      </footer>
+      <Footer />
     </div>
   );
 }

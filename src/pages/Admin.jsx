@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { fetchSession } from '../api.js';
+import Footer from '../Footer.jsx';
 
 const TOKEN_KEY = 'f48_admin_token';
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -549,12 +550,7 @@ export default function Admin() {
         </section>
       </main>
 
-      <footer className="site-footer">
-        <img className="footer-mark" src="/faceless48-mark.png" alt="Faceless 48" />
-        <div className="footer-text">
-          <div>© 2026 C3 Global</div>
-        </div>
-      </footer>
+      <Footer />
     </div>
   );
 }
