@@ -138,6 +138,19 @@ export async function listUserJobs(email, limit = 10) {
   return mine.slice(0, limit);
 }
 
+export async function removeFromIndex(jobId) {
+  await updateIndex((items) => items.filter((j) => j.id !== jobId));
+}
+
+export async function deleteJob(jobId) {
+  try {
+    await jobsStore().delete(jobId);
+  } catch {
+    /* ignore */
+  }
+  await removeFromIndex(jobId);
+}
+
 export async function hasActiveJob(email) {
   const norm = normalizeEmail(email);
   const items = await readIndex();

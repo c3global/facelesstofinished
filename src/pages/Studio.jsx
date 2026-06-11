@@ -6,6 +6,35 @@ import Footer from '../Footer.jsx';
 
 const ACTIVE_STATUSES = new Set(['queued', 'voiceover', 'visuals', 'composing', 'polling']);
 
+const PAGE_SIZE = 24;
+
+const LANG_NAMES = {
+  'en-US': 'English (US)', 'en-GB': 'English (UK)', 'en-AU': 'English (Australia)',
+  'es-ES': 'Spanish (Spain)', 'es-MX': 'Spanish (Mexico)',
+  'fr-FR': 'French', 'de-DE': 'German', 'it-IT': 'Italian',
+  'pt-BR': 'Portuguese (Brazil)', 'pt-PT': 'Portuguese (Portugal)',
+  'ja-JP': 'Japanese', 'ko-KR': 'Korean', 'zh-CN': 'Chinese (Mainland)',
+  'ar-SA': 'Arabic', 'hi-IN': 'Hindi', 'ru-RU': 'Russian',
+};
+
+const COMMON_VOICE_LANGS = [
+  'en-US', 'en-GB', 'en-AU', 'es-ES', 'es-MX', 'fr-FR', 'de-DE',
+  'it-IT', 'pt-BR', 'ja-JP', 'ko-KR', 'zh-CN', 'hi-IN',
+];
+
+function langLabel(code) {
+  if (!code) return '';
+  return LANG_NAMES[code] || code;
+}
+
+function normalizeGender(g) {
+  const v = String(g || '').toLowerCase();
+  if (v === 'female' || v === 'f') return 'female';
+  if (v === 'male' || v === 'm') return 'male';
+  if (v) return 'other';
+  return '';
+}
+
 function formatDate(iso) {
   if (!iso) return '';
   try {
@@ -85,19 +114,20 @@ function StudioUpsell() {
 
 // Build scene cards from raw prompt text (one line = one scene).
 // Preserves any locked stock picks if the prompt text is unchanged.
-function syncScenes(promptText, prevScenes) {
+function syncScenes(promptText, prevScenes, defaultSource = 'ai') {
   const lines = promptText.split('\n').map((l) => l.trim()).filter(Boolean);
   const byPrompt = new Map();
   for (const s of prevScenes) {
     if (s.prompt) byPrompt.set(s.prompt, s);
   }
+  const seed = (defaultSource === 'pexels' || defaultSource === 'pixabay') ? defaultSource : 'ai';
   return lines.slice(0, 12).map((prompt, idx) => {
     const prev = byPrompt.get(prompt);
     if (prev) return { ...prev, prompt };
     return {
       id: `scene-${idx}-${Math.random().toString(36).slice(2, 8)}`,
       prompt,
-      source: 'ai',
+      source: seed,
       videoUrl: '',
       previewImageUrl: '',
       sourceName: '',
@@ -112,6 +142,7 @@ function StudioForm() {
   const [script, setScript] = useState('');
   const [prompts, setPrompts] = useState('');
   const [outputType, setOutputType] = useState('faceless');
+  const [brollSource, setBrollSource] = useState('ai'); // 'ai' | 'pexels' | 'pixabay' | 'mix'
   const [aspect, setAspect] = useState('9:16');
   const [captions, setCaptions] = useState(false);
   const [error, setError] = useState('');
@@ -138,8 +169,8 @@ function StudioForm() {
 
   // Keep scenes in sync with prompts textarea
   useEffect(() => {
-    setScenes((prev) => syncScenes(prompts, prev));
-  }, [prompts]);
+    setScenes((prev) => syncScenes(prompts, prev, brollSource));
+  }, [prompts, brollSource]);
 
   // Load avatars/voices when avatar mode active
   useEffect(() => {
@@ -245,6 +276,40 @@ function StudioForm() {
       }));
     }
   }, [orientation]);
+
+  // Auto-search stock when global source is Pexels/Pixabay
+  useEffect(() => {
+    if (outputType !== 'faceless') return;
+    if (brollSource !== 'pexels' && brollSource !== 'pixabay') return;
+    if (jobState && ACTIVE_STATUSES.has(jobState.status)) return;
+    for (const scene of scenes) {
+      if (scene.source !== brollSource) continue;
+      if (scene.videoUrl) continue;
+      const existing = stockResults[scene.id];
+      if (existing && (existing.loading || existing.query === scene.prompt)) continue;
+      runStockSearch(scene.id, brollSource, scene.prompt);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [brollSource, scenes, outputType]);
+
+  const changeBrollSource = (next) => {
+    if (next === brollSource) return;
+    const hasLocked = scenes.some((s) => s.videoUrl);
+    if (hasLocked && next !== 'mix') {
+      // eslint-disable-next-line no-alert
+      const ok = window.confirm('Switching source will clear your selected clips. Continue?');
+      if (!ok) return;
+    }
+    setBrollSource(next);
+    setScenes((prev) => prev.map((s) => {
+      if (next === 'mix') return s; // keep current per-scene state
+      if (next === 'ai') {
+        return { ...s, source: 'ai', videoUrl: '', previewImageUrl: '', sourceName: '' };
+      }
+      // pexels or pixabay
+      return { ...s, source: next, videoUrl: '', previewImageUrl: '', sourceName: '' };
+    }));
+  };
 
   const setSceneSource = (sceneId, source) => {
     setScenes((prev) => prev.map((s) =>
@@ -372,6 +437,30 @@ function StudioForm() {
     navigate('/studio', { replace: true });
   };
 
+  const handleDeleteHistory = async (jobId) => {
+    // eslint-disable-next-line no-alert
+    const ok = window.confirm('Remove this render from history?');
+    if (!ok) return;
+    const prev = history;
+    setHistory((cur) => cur.filter((j) => j.id !== jobId));
+    try {
+      const res = await fetch(`/api/studio-job-delete?jobId=${encodeURIComponent(jobId)}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}));
+        setHistory(prev);
+        // eslint-disable-next-line no-alert
+        window.alert(detail.message || detail.error || 'Could not delete this render.');
+      }
+    } catch (err) {
+      setHistory(prev);
+      // eslint-disable-next-line no-alert
+      window.alert(`Network error: ${err.message || err}`);
+    }
+  };
+
   const handleResume = (jobId) => {
     setActiveJobId(jobId);
     setJobState(null);
@@ -447,6 +536,30 @@ function StudioForm() {
         {outputType === 'faceless' && (
           <>
             <div className="studio-section">
+              <label className="studio-label">B-roll source</label>
+              <div className="length-picker" role="radiogroup" aria-label="B-roll source">
+                {[
+                  { value: 'ai', label: 'Generate with AI' },
+                  { value: 'pexels', label: 'Stock from Pexels' },
+                  { value: 'pixabay', label: 'Stock from Pixabay' },
+                  { value: 'mix', label: 'Mix per scene' },
+                ].map((opt) => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    role="radio"
+                    aria-checked={brollSource === opt.value}
+                    className={`length-option ${brollSource === opt.value ? 'is-selected' : ''}`}
+                    onClick={() => changeBrollSource(opt.value)}
+                    disabled={!!isRendering}
+                  >
+                    <span className="length-label">{opt.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="studio-section">
               <label className="studio-label" htmlFor="studio-prompts">B-roll prompts (one per line)</label>
               <textarea
                 id="studio-prompts"
@@ -469,6 +582,7 @@ function StudioForm() {
                       key={scene.id}
                       idx={idx}
                       scene={scene}
+                      brollSource={brollSource}
                       setSceneSource={setSceneSource}
                       runStockSearch={runStockSearch}
                       lockSceneStock={lockSceneStock}
@@ -627,89 +741,325 @@ function StudioForm() {
   );
 }
 
-function AvatarSection({
-  avatars, voices, avatarError, voiceError,
-  selectedAvatarId, setSelectedAvatarId,
-  selectedVoiceId, setSelectedVoiceId,
-  playVoicePreview, previewingVoiceId, disabled,
-}) {
+function FilterChips({ label, value, options, onChange, disabled }) {
   return (
-    <>
-      <div className="studio-section">
-        <label className="studio-label">Choose your avatar</label>
-        {avatars === null && <div className="studio-empty">Loading avatars…</div>}
-        {avatars !== null && avatars.length === 0 && (
-          <div className="studio-empty">
-            {avatarError ? `Couldn't load avatars — please check your account. (${avatarError})` : 'No avatars available.'}
-          </div>
-        )}
-        {avatars && avatars.length > 0 && (
-          <div className="studio-avatar-grid">
-            {avatars.map((a) => (
-              <button
-                key={a.id}
-                type="button"
-                className={`studio-avatar-card ${selectedAvatarId === a.id ? 'is-selected' : ''}`}
-                onClick={() => setSelectedAvatarId(a.id)}
-                disabled={disabled}
-              >
-                {a.previewImageUrl
-                  ? <img src={a.previewImageUrl} alt={a.name} loading="lazy" />
-                  : <div className="studio-avatar-placeholder" />}
-                <div className="studio-avatar-meta">
-                  <div className="studio-avatar-name">{a.name}</div>
-                  {a.gender && <div className="studio-avatar-sub">{a.gender}</div>}
-                </div>
-              </button>
-            ))}
-          </div>
-        )}
+    <div className="studio-filter-row" role="group" aria-label={label}>
+      <span className="studio-filter-label">{label}</span>
+      <div className="studio-filter-chips">
+        {options.map((opt) => (
+          <button
+            key={opt.value}
+            type="button"
+            className={`studio-filter-chip ${value === opt.value ? 'is-active' : ''}`}
+            aria-pressed={value === opt.value}
+            onClick={() => onChange(opt.value)}
+            disabled={disabled}
+          >
+            {opt.label}
+          </button>
+        ))}
       </div>
+    </div>
+  );
+}
 
-      <div className="studio-section">
-        <label className="studio-label">Choose your voice</label>
-        {voices === null && <div className="studio-empty">Loading voices…</div>}
-        {voices !== null && voices.length === 0 && (
-          <div className="studio-empty">
-            {voiceError ? `Couldn't load voices — please check your account. (${voiceError})` : 'No voices available.'}
+function AvatarPicker({ avatars, avatarError, selectedAvatarId, setSelectedAvatarId, disabled }) {
+  const [search, setSearch] = useState('');
+  const [gender, setGender] = useState('all');
+  const [visible, setVisible] = useState(PAGE_SIZE);
+
+  const list = avatars || [];
+
+  // Available genders to inform facets — but always show the canonical four.
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return list.filter((a) => {
+      if (q && !String(a.name || '').toLowerCase().includes(q)) return false;
+      if (gender !== 'all') {
+        const g = normalizeGender(a.gender);
+        if (gender === 'other') {
+          if (g === 'male' || g === 'female') return false;
+        } else if (g !== gender) {
+          return false;
+        }
+      }
+      return true;
+    });
+  }, [list, search, gender]);
+
+  useEffect(() => { setVisible(PAGE_SIZE); }, [search, gender]);
+
+  const hasFilters = !!search.trim() || gender !== 'all';
+  const clearFilters = () => { setSearch(''); setGender('all'); };
+
+  return (
+    <div className="studio-section">
+      <label className="studio-label">Choose your avatar</label>
+      {avatars === null && <div className="studio-empty">Loading avatars…</div>}
+      {avatars !== null && avatars.length === 0 && (
+        <div className="studio-empty">
+          {avatarError ? `Couldn't load avatars — please check your account. (${avatarError})` : 'No avatars available.'}
+        </div>
+      )}
+      {avatars && avatars.length > 0 && (
+        <>
+          <div className="studio-picker-controls">
+            <input
+              type="search"
+              className="studio-picker-search"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search avatars by name…"
+              disabled={disabled}
+              aria-label="Search avatars"
+            />
+            <FilterChips
+              label="Gender"
+              value={gender}
+              onChange={setGender}
+              disabled={disabled}
+              options={[
+                { value: 'all', label: 'All' },
+                { value: 'female', label: 'Female' },
+                { value: 'male', label: 'Male' },
+                { value: 'other', label: 'Other' },
+              ]}
+            />
+            {hasFilters && (
+              <button type="button" className="studio-clear-filters" onClick={clearFilters} disabled={disabled}>
+                Clear filters
+              </button>
+            )}
           </div>
-        )}
-        {voices && voices.length > 0 && (
-          <div className="studio-voice-list">
-            {voices.slice(0, 60).map((v) => (
-              <div
-                key={v.id}
-                className={`studio-voice-card ${selectedVoiceId === v.id ? 'is-selected' : ''}`}
-                onClick={() => !disabled && setSelectedVoiceId(v.id)}
-                role="button"
-                tabIndex={0}
-              >
-                <div className="studio-voice-meta">
-                  <div className="studio-voice-name">{v.name}</div>
-                  <div className="studio-voice-sub">
-                    {[v.language, v.gender].filter(Boolean).join(' · ')}
-                  </div>
-                </div>
-                {v.previewAudioUrl && (
+          {filtered.length === 0 ? (
+            <div className="studio-empty">No avatars match your filters.</div>
+          ) : (
+            <>
+              <div className="studio-avatar-grid">
+                {filtered.slice(0, visible).map((a) => (
+                  <button
+                    key={a.id}
+                    type="button"
+                    className={`studio-avatar-card ${selectedAvatarId === a.id ? 'is-selected' : ''}`}
+                    onClick={() => setSelectedAvatarId(a.id)}
+                    disabled={disabled}
+                  >
+                    {a.previewImageUrl
+                      ? <img src={a.previewImageUrl} alt={a.name} loading="lazy" />
+                      : <div className="studio-avatar-placeholder" />}
+                    <div className="studio-avatar-meta">
+                      <div className="studio-avatar-name">{a.name}</div>
+                      {a.gender && <div className="studio-avatar-sub">{a.gender}</div>}
+                    </div>
+                  </button>
+                ))}
+              </div>
+              <div className="studio-picker-footer">
+                <span className="studio-picker-count">
+                  Showing {Math.min(visible, filtered.length)} of {filtered.length}
+                </span>
+                {visible < filtered.length && (
                   <button
                     type="button"
-                    className="studio-voice-play"
-                    onClick={(e) => { e.stopPropagation(); playVoicePreview(v); }}
-                    aria-label={previewingVoiceId === v.id ? 'Stop preview' : 'Play preview'}
+                    className="studio-show-more"
+                    onClick={() => setVisible((v) => v + PAGE_SIZE)}
+                    disabled={disabled}
                   >
-                    {previewingVoiceId === v.id ? '■' : '▶'}
+                    Show more
                   </button>
                 )}
               </div>
-            ))}
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function VoicePicker({
+  voices, voiceError, selectedVoiceId, setSelectedVoiceId,
+  playVoicePreview, previewingVoiceId, disabled,
+}) {
+  const [search, setSearch] = useState('');
+  const [gender, setGender] = useState('all');
+  const [language, setLanguage] = useState('all');
+  const [visible, setVisible] = useState(PAGE_SIZE);
+
+  const list = voices || [];
+
+  // Pull unique languages from data, then intersect/union with common list.
+  const availableLangs = useMemo(() => {
+    const set = new Set();
+    for (const v of list) {
+      if (v.language) set.add(v.language);
+    }
+    return set;
+  }, [list]);
+
+  const langOptions = useMemo(() => {
+    const codes = COMMON_VOICE_LANGS.filter((c) => availableLangs.has(c));
+    // Add any languages not in the common list that exist in data
+    const extras = [...availableLangs].filter((c) => !COMMON_VOICE_LANGS.includes(c)).sort();
+    return [{ value: 'all', label: 'All languages' }, ...codes.concat(extras).map((c) => ({ value: c, label: langLabel(c) }))];
+  }, [availableLangs]);
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return list.filter((v) => {
+      if (q && !String(v.name || '').toLowerCase().includes(q)) return false;
+      if (gender !== 'all') {
+        const g = normalizeGender(v.gender);
+        if (g !== gender) return false;
+      }
+      if (language !== 'all' && v.language !== language) return false;
+      return true;
+    });
+  }, [list, search, gender, language]);
+
+  useEffect(() => { setVisible(PAGE_SIZE); }, [search, gender, language]);
+
+  const hasFilters = !!search.trim() || gender !== 'all' || language !== 'all';
+  const clearFilters = () => { setSearch(''); setGender('all'); setLanguage('all'); };
+
+  return (
+    <div className="studio-section">
+      <label className="studio-label">Choose your voice</label>
+      {voices === null && <div className="studio-empty">Loading voices…</div>}
+      {voices !== null && voices.length === 0 && (
+        <div className="studio-empty">
+          {voiceError ? `Couldn't load voices — please check your account. (${voiceError})` : 'No voices available.'}
+        </div>
+      )}
+      {voices && voices.length > 0 && (
+        <>
+          <div className="studio-picker-controls">
+            <input
+              type="search"
+              className="studio-picker-search"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search voices by name…"
+              disabled={disabled}
+              aria-label="Search voices"
+            />
+            <FilterChips
+              label="Gender"
+              value={gender}
+              onChange={setGender}
+              disabled={disabled}
+              options={[
+                { value: 'all', label: 'All' },
+                { value: 'female', label: 'Female' },
+                { value: 'male', label: 'Male' },
+              ]}
+            />
+            <div className="studio-filter-row">
+              <span className="studio-filter-label">Language</span>
+              <select
+                className="studio-filter-select"
+                value={language}
+                onChange={(e) => setLanguage(e.target.value)}
+                disabled={disabled}
+                aria-label="Filter by language"
+              >
+                {langOptions.map((opt) => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+            </div>
+            {hasFilters && (
+              <button type="button" className="studio-clear-filters" onClick={clearFilters} disabled={disabled}>
+                Clear filters
+              </button>
+            )}
           </div>
-        )}
-      </div>
+          {filtered.length === 0 ? (
+            <div className="studio-empty">No voices match your filters.</div>
+          ) : (
+            <>
+              <div className="studio-voice-list">
+                {filtered.slice(0, visible).map((v) => (
+                  <div
+                    key={v.id}
+                    className={`studio-voice-card ${selectedVoiceId === v.id ? 'is-selected' : ''}`}
+                    onClick={() => !disabled && setSelectedVoiceId(v.id)}
+                    role="button"
+                    tabIndex={0}
+                  >
+                    <div className="studio-voice-meta">
+                      <div className="studio-voice-name">{v.name}</div>
+                      <div className="studio-voice-sub">
+                        {[langLabel(v.language), v.gender].filter(Boolean).join(' · ')}
+                      </div>
+                    </div>
+                    {v.previewAudioUrl && (
+                      <button
+                        type="button"
+                        className="studio-voice-play"
+                        onClick={(e) => { e.stopPropagation(); playVoicePreview(v); }}
+                        aria-label={previewingVoiceId === v.id ? 'Stop preview' : 'Play preview'}
+                      >
+                        {previewingVoiceId === v.id ? '■' : '▶'}
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <div className="studio-picker-footer">
+                <span className="studio-picker-count">
+                  Showing {Math.min(visible, filtered.length)} of {filtered.length}
+                </span>
+                {visible < filtered.length && (
+                  <button
+                    type="button"
+                    className="studio-show-more"
+                    onClick={() => setVisible((v) => v + PAGE_SIZE)}
+                    disabled={disabled}
+                  >
+                    Show more
+                  </button>
+                )}
+              </div>
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function AvatarSection(props) {
+  const {
+    avatars, voices, avatarError, voiceError,
+    selectedAvatarId, setSelectedAvatarId,
+    selectedVoiceId, setSelectedVoiceId,
+    playVoicePreview, previewingVoiceId, disabled,
+  } = props;
+  return (
+    <>
+      <AvatarPicker
+        avatars={avatars}
+        avatarError={avatarError}
+        selectedAvatarId={selectedAvatarId}
+        setSelectedAvatarId={setSelectedAvatarId}
+        disabled={disabled}
+      />
+      <VoicePicker
+        voices={voices}
+        voiceError={voiceError}
+        selectedVoiceId={selectedVoiceId}
+        setSelectedVoiceId={setSelectedVoiceId}
+        playVoicePreview={playVoicePreview}
+        previewingVoiceId={previewingVoiceId}
+        disabled={disabled}
+      />
     </>
   );
 }
 
-function SceneCard({ idx, scene, setSceneSource, runStockSearch, lockSceneStock, stockState, disabled }) {
+function SceneCard({ idx, scene, brollSource = 'mix', setSceneSource, runStockSearch, lockSceneStock, stockState, disabled }) {
+  const showTabs = brollSource === 'mix';
   const [stockQuery, setStockQuery] = useState(scene.prompt);
   useEffect(() => { setStockQuery(scene.prompt); }, [scene.prompt]);
 
@@ -732,25 +1082,27 @@ function SceneCard({ idx, scene, setSceneSource, runStockSearch, lockSceneStock,
         <span className="studio-scene-num">Scene {idx + 1}</span>
         <span className="studio-scene-prompt">{scene.prompt}</span>
       </div>
-      <div className="studio-source-tabs" role="tablist">
-        {[
-          { v: 'ai', l: 'AI' },
-          { v: 'pexels', l: 'Pexels' },
-          { v: 'pixabay', l: 'Pixabay' },
-        ].map((t) => (
-          <button
-            key={t.v}
-            type="button"
-            role="tab"
-            aria-selected={activeTab === t.v}
-            className={`studio-source-tab ${activeTab === t.v ? 'is-active' : ''}`}
-            onClick={() => handleTab(t.v)}
-            disabled={disabled}
-          >
-            {t.l}
-          </button>
-        ))}
-      </div>
+      {showTabs && (
+        <div className="studio-source-tabs" role="tablist">
+          {[
+            { v: 'ai', l: 'AI' },
+            { v: 'pexels', l: 'Pexels' },
+            { v: 'pixabay', l: 'Pixabay' },
+          ].map((t) => (
+            <button
+              key={t.v}
+              type="button"
+              role="tab"
+              aria-selected={activeTab === t.v}
+              className={`studio-source-tab ${activeTab === t.v ? 'is-active' : ''}`}
+              onClick={() => handleTab(t.v)}
+              disabled={disabled}
+            >
+              {t.l}
+            </button>
+          ))}
+        </div>
+      )}
 
       {activeTab === 'ai' && (
         <div className="studio-scene-body">
