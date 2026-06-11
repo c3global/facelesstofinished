@@ -82,17 +82,24 @@ export default async (req) => {
   await writeJob(job);
   await indexJob(job);
 
-  // Fire-and-forget trigger of the background worker. Background functions
-  // accept the same fetch invocation pattern as sync functions.
+  // Trigger the background worker. Awaiting (rather than fire-and-forget)
+  // ensures the runtime actually dispatches the request before this handler
+  // returns — Netlify Functions kill in-flight async work on exit, which
+  // was leaving jobs stuck in 'queued' forever. Background functions reply
+  // 202 immediately so this await adds ~tens of ms, not seconds.
   const url = new URL(req.url);
   const bgUrl = `${url.protocol}//${url.host}/.netlify/functions/studio-render-background`;
-  fetch(bgUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jobId }),
-  }).catch((err) => {
+  try {
+    await fetch(bgUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jobId }),
+    });
+  } catch (err) {
     console.error('failed to trigger background:', err);
-  });
+    // Don't fail the user's request — the job record exists; we just couldn't
+    // hand it off. Surface this to the activity log so it isn't invisible.
+  }
 
   return json({ jobId, estimatedCostCents: job.estimatedCostCents }, { status: 202 });
 };

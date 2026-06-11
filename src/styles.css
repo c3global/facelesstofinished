@@ -221,7 +221,10 @@ input[type="text"] { font-family: inherit; }
 }
 .length-option.is-selected {
   border-color: var(--primary);
-  background: rgba(127, 119, 221, 0.12);
+  background: rgba(127, 119, 221, 0.28);
+  box-shadow: 0 0 0 2px rgba(127, 119, 221, 0.45);
+  color: var(--text);
+  font-weight: 600;
 }
 .length-option:disabled { opacity: 0.5; cursor: not-allowed; }
 .length-label { font-weight: 700; font-size: 14px; letter-spacing: 0.02em; }

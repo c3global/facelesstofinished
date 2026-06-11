@@ -172,7 +172,7 @@ function StudioForm() {
       setError('Paste a script of at least a few sentences before rendering.');
       return;
     }
-    if (promptLines.length === 0) {
+    if (outputType === 'faceless' && promptLines.length === 0) {
       setError('Add at least one B-roll prompt (one per line).');
       return;
     }
@@ -352,7 +352,6 @@ function StudioForm() {
         </div>
 
         <div className="studio-section">
-          <p className="studio-cost">Est. ~{formatCents(estimatedCents)}</p>
           <button
             className="generate-btn"
             onClick={handleGenerate}

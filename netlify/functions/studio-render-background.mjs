@@ -47,7 +47,7 @@ async function runAvatar(job) {
   await setStatus(job.id, {
     status: 'voiceover',
     progress: 10,
-    progressLabel: 'Sending script to HeyGen…',
+    progressLabel: 'Preparing your video…',
   });
 
   const videoInput = {
@@ -77,7 +77,7 @@ async function runAvatar(job) {
   await setStatus(job.id, {
     status: 'polling',
     progress: 25,
-    progressLabel: 'HeyGen rendering…',
+    progressLabel: 'Rendering your video…',
     heygenVideoId: videoId,
   });
 
@@ -113,7 +113,7 @@ async function runAvatar(job) {
     const elapsedFrac = Math.min(0.9, (Date.now() - startedAt) / MAX_POLL_MS);
     await setStatus(job.id, {
       progress: 25 + Math.round(elapsedFrac * 70),
-      progressLabel: 'HeyGen rendering…',
+      progressLabel: 'Rendering your video…',
     });
   }
   throw new Error('HeyGen polling timed out after 15 minutes');
