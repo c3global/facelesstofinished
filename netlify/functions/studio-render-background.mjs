@@ -40,9 +40,10 @@ async function runAvatar(job) {
 
   const avatarId = job.avatarId || process.env.HEYGEN_DEFAULT_AVATAR_ID || 'Daisy-inskirt-20220818';
   const voiceId = job.voiceId || process.env.HEYGEN_DEFAULT_VOICE_ID || '2d5b0e6cf36f460aa7fc47e3eee4ba54';
+  // HeyGen sometimes ignores undersized dimensions; use 1080p targets.
   const dim = job.aspect === '9_16'
-    ? { width: 720, height: 1280 }
-    : { width: 1280, height: 720 };
+    ? { width: 1080, height: 1920 }
+    : { width: 1920, height: 1080 };
 
   await setStatus(job.id, {
     status: 'voiceover',
@@ -55,16 +56,20 @@ async function runAvatar(job) {
     voice: { type: 'text', input_text: job.script, voice_id: voiceId },
     background: { type: 'color', value: '#000000' },
   };
-  if (job.captions) videoInput.caption = true;
+
+  // HeyGen v2: `caption` is a top-level boolean on the request body, not a
+  // field on video_inputs. Putting it on video_inputs silently does nothing.
+  const heygenBody = {
+    video_inputs: [videoInput],
+    dimension: dim,
+    test: false,
+  };
+  if (job.captions) heygenBody.caption = true;
 
   const genRes = await fetch(`${HEYGEN_BASE}/v2/video/generate`, {
     method: 'POST',
     headers: { 'X-Api-Key': apiKey, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      video_inputs: [videoInput],
-      dimension: dim,
-      test: false,
-    }),
+    body: JSON.stringify(heygenBody),
   });
   if (!genRes.ok) {
     const txt = await genRes.text().catch(() => '');
@@ -155,9 +160,10 @@ async function runFaceless(job) {
     progress: 5,
     progressLabel: 'Generating voiceover…',
   });
-  const ttsRes = await falPost('fal-ai/playai/tts/v3', {
-    input: job.script,
-    voice: 'Jennifer (English (US)/American)',
+  const ttsVoice = job.ttsVoiceId || 'af_bella';
+  const ttsRes = await falPost('fal-ai/kokoro/american-english', {
+    prompt: job.script,
+    voice: ttsVoice,
   });
   const audioUrl = ttsRes?.audio?.url || ttsRes?.audio_url;
   if (!audioUrl) throw new Error(`TTS returned no audio url: ${JSON.stringify(ttsRes).slice(0, 300)}`);

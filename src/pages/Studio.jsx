@@ -143,6 +143,7 @@ function StudioForm() {
   const [prompts, setPrompts] = useState('');
   const [outputType, setOutputType] = useState('faceless');
   const [brollSource, setBrollSource] = useState('ai'); // 'ai' | 'pexels' | 'pixabay' | 'mix'
+  const [ttsVoiceId, setTtsVoiceId] = useState('af_bella'); // Faceless TTS voice (Kokoro)
   const [aspect, setAspect] = useState('9:16');
   const [captions, setCaptions] = useState(false);
   const [error, setError] = useState('');
@@ -385,6 +386,7 @@ function StudioForm() {
           videoUrl: s.videoUrl || undefined,
           previewImageUrl: s.previewImageUrl || undefined,
         }));
+        payload.ttsVoiceId = ttsVoiceId || 'af_bella';
       }
       const res = await fetch('/api/studio-render', {
         method: 'POST',
@@ -557,6 +559,42 @@ function StudioForm() {
                   </button>
                 ))}
               </div>
+            </div>
+
+            <div className="studio-section">
+              <label className="studio-label" htmlFor="studio-tts-voice">Voiceover</label>
+              <select
+                id="studio-tts-voice"
+                className="studio-textarea"
+                value={ttsVoiceId}
+                onChange={(e) => setTtsVoiceId(e.target.value)}
+                disabled={!!isRendering}
+                style={{ height: 44, padding: '0 14px' }}
+              >
+                <optgroup label="American — Female">
+                  <option value="af_bella">Bella — warm, conversational</option>
+                  <option value="af_nicole">Nicole — calm, thoughtful</option>
+                  <option value="af_sarah">Sarah — clear, professional</option>
+                  <option value="af_sky">Sky — bright, upbeat</option>
+                  <option value="af_alloy">Alloy — neutral, narrator</option>
+                </optgroup>
+                <optgroup label="American — Male">
+                  <option value="am_adam">Adam — confident, authoritative</option>
+                  <option value="am_michael">Michael — friendly, casual</option>
+                  <option value="am_eric">Eric — energetic, youthful</option>
+                  <option value="am_liam">Liam — steady, narrator</option>
+                </optgroup>
+                <optgroup label="British — Female">
+                  <option value="bf_emma">Emma — refined, articulate</option>
+                  <option value="bf_isabella">Isabella — soft, storyteller</option>
+                  <option value="bf_alice">Alice — crisp, journalistic</option>
+                </optgroup>
+                <optgroup label="British — Male">
+                  <option value="bm_daniel">Daniel — composed, documentary</option>
+                  <option value="bm_george">George — gravelly, dramatic</option>
+                  <option value="bm_lewis">Lewis — bright, presenter</option>
+                </optgroup>
+              </select>
             </div>
 
             <div className="studio-section">

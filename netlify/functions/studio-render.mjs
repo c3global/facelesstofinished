@@ -86,6 +86,7 @@ export default async (req) => {
 
   const avatarId = mode === 'avatar' ? String(body.avatarId || '').trim() : '';
   const voiceId = mode === 'avatar' ? String(body.voiceId || '').trim() : '';
+  const ttsVoiceId = mode === 'faceless' ? String(body.ttsVoiceId || '').trim() : '';
 
   if (await hasActiveJob(session.email)) {
     return json({ error: 'job_in_progress' }, { status: 409 });
@@ -104,6 +105,7 @@ export default async (req) => {
     scenes,
     avatarId: avatarId || null,
     voiceId: voiceId || null,
+    ttsVoiceId: ttsVoiceId || null,
     status: 'queued',
     progress: 0,
     progressLabel: 'Queued',
