@@ -6,7 +6,7 @@ import Footer from '../Footer.jsx';
 
 const ACTIVE_STATUSES = new Set(['queued', 'voiceover', 'visuals', 'composing', 'polling']);
 
-const PAGE_SIZE = 24;
+const MODAL_PAGE_SIZE = 48;
 
 const LANG_NAMES = {
   'en-US': 'English (US)', 'en-GB': 'English (UK)', 'en-AU': 'English (Australia)',
@@ -167,6 +167,8 @@ function StudioForm() {
   const [selectedVoiceId, setSelectedVoiceId] = useState(null);
   const previewAudioRef = useRef(null);
   const [previewingVoiceId, setPreviewingVoiceId] = useState(null);
+  const [avatarModalOpen, setAvatarModalOpen] = useState(false);
+  const [voiceModalOpen, setVoiceModalOpen] = useState(false);
 
   // Keep scenes in sync with prompts textarea
   useEffect(() => {
@@ -327,6 +329,14 @@ function StudioForm() {
       ? { ...s, source: result.sourceId, videoUrl: result.videoUrl, previewImageUrl: result.previewImageUrl, sourceName: result.sourceName }
       : s
     ));
+  };
+
+  const stopVoicePreview = () => {
+    if (previewAudioRef.current) {
+      previewAudioRef.current.pause();
+      previewAudioRef.current = null;
+    }
+    setPreviewingVoiceId(null);
   };
 
   const playVoicePreview = (voice) => {
@@ -495,6 +505,62 @@ function StudioForm() {
             placeholder="Paste the script you generated with F2F48 Script Engine…"
             disabled={!!isRendering}
           />
+          {outputType === 'avatar' && (
+            <div className="studio-chip-row">
+              <button
+                type="button"
+                className="studio-chip-btn"
+                onClick={() => setAvatarModalOpen(true)}
+                disabled={!!isRendering || avatars === null}
+                aria-haspopup="dialog"
+              >
+                {avatars === null ? (
+                  <span className="studio-chip-loading">Loading avatars…</span>
+                ) : (
+                  <>
+                    {selectedAvatar?.previewImageUrl ? (
+                      <img className="studio-chip-thumb" src={selectedAvatar.previewImageUrl} alt="" />
+                    ) : (
+                      <span className="studio-chip-icon" aria-hidden="true">🖼</span>
+                    )}
+                    <span className="studio-chip-label">{selectedAvatar?.name || 'Choose avatar'}</span>
+                  </>
+                )}
+                <span className="studio-chip-caret" aria-hidden="true">▾</span>
+              </button>
+              <button
+                type="button"
+                className="studio-chip-btn"
+                onClick={() => setVoiceModalOpen(true)}
+                disabled={!!isRendering || voices === null}
+                aria-haspopup="dialog"
+              >
+                {voices === null ? (
+                  <span className="studio-chip-loading">Loading voices…</span>
+                ) : (
+                  <>
+                    <span className="studio-chip-icon" aria-hidden="true">🔊</span>
+                    <span className="studio-chip-label">
+                      {selectedVoice
+                        ? [selectedVoice.name, langLabel(selectedVoice.language)].filter(Boolean).join(' — ')
+                        : 'Choose voice'}
+                    </span>
+                  </>
+                )}
+                <span className="studio-chip-caret" aria-hidden="true">▾</span>
+              </button>
+            </div>
+          )}
+          {outputType === 'avatar' && avatars !== null && avatars.length === 0 && (
+            <p className="studio-helper">
+              {avatarError ? `Couldn't load avatars — please check your account. (${avatarError})` : 'No avatars available.'}
+            </p>
+          )}
+          {outputType === 'avatar' && voices !== null && voices.length === 0 && (
+            <p className="studio-helper">
+              {voiceError ? `Couldn't load voices — please check your account. (${voiceError})` : 'No voices available.'}
+            </p>
+          )}
         </div>
 
         <div className="studio-section">
@@ -518,22 +584,6 @@ function StudioForm() {
             ))}
           </div>
         </div>
-
-        {outputType === 'avatar' && (
-          <AvatarSection
-            avatars={avatars}
-            voices={voices}
-            avatarError={avatarError}
-            voiceError={voiceError}
-            selectedAvatarId={selectedAvatarId}
-            setSelectedAvatarId={setSelectedAvatarId}
-            selectedVoiceId={selectedVoiceId}
-            setSelectedVoiceId={setSelectedVoiceId}
-            playVoicePreview={playVoicePreview}
-            previewingVoiceId={previewingVoiceId}
-            disabled={!!isRendering}
-          />
-        )}
 
         {outputType === 'faceless' && (
           <>
@@ -775,43 +825,101 @@ function StudioForm() {
           </ul>
         )}
       </section>
+
+      {avatarModalOpen && (
+        <AvatarModal
+          avatars={avatars || []}
+          selectedAvatarId={selectedAvatarId}
+          onSelect={(id) => {
+            setSelectedAvatarId(id);
+            setAvatarModalOpen(false);
+          }}
+          onClose={() => setAvatarModalOpen(false)}
+        />
+      )}
+      {voiceModalOpen && (
+        <VoiceModal
+          voices={voices || []}
+          selectedVoiceId={selectedVoiceId}
+          onSelect={(id) => {
+            setSelectedVoiceId(id);
+            stopVoicePreview();
+            setVoiceModalOpen(false);
+          }}
+          onClose={() => {
+            stopVoicePreview();
+            setVoiceModalOpen(false);
+          }}
+          playVoicePreview={playVoicePreview}
+          previewingVoiceId={previewingVoiceId}
+        />
+      )}
     </>
   );
 }
 
-function FilterChips({ label, value, options, onChange, disabled }) {
+function StudioModal({ title, onClose, children }) {
+  useEffect(() => {
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKey = (e) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [onClose]);
+
   return (
-    <div className="studio-filter-row" role="group" aria-label={label}>
-      <span className="studio-filter-label">{label}</span>
-      <div className="studio-filter-chips">
-        {options.map((opt) => (
-          <button
-            key={opt.value}
-            type="button"
-            className={`studio-filter-chip ${value === opt.value ? 'is-active' : ''}`}
-            aria-pressed={value === opt.value}
-            onClick={() => onChange(opt.value)}
-            disabled={disabled}
-          >
-            {opt.label}
+    <div className="studio-modal-scrim" onClick={onClose}>
+      <div
+        className="studio-modal-card"
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="studio-modal-head">
+          <h3 className="studio-modal-title">{title}</h3>
+          <button type="button" className="studio-modal-close" onClick={onClose} aria-label="Close">
+            ×
           </button>
-        ))}
+        </div>
+        {children}
       </div>
     </div>
   );
 }
 
-function AvatarPicker({ avatars, avatarError, selectedAvatarId, setSelectedAvatarId, disabled }) {
+function ModalTabs({ label, value, options, onChange }) {
+  return (
+    <div className="studio-modal-tabs" role="tablist" aria-label={label}>
+      {options.map((opt) => (
+        <button
+          key={opt.value}
+          type="button"
+          role="tab"
+          aria-selected={value === opt.value}
+          className={`studio-modal-tab ${value === opt.value ? 'is-active' : ''}`}
+          onClick={() => onChange(opt.value)}
+        >
+          {opt.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function AvatarModal({ avatars, selectedAvatarId, onSelect, onClose }) {
   const [search, setSearch] = useState('');
   const [gender, setGender] = useState('all');
-  const [visible, setVisible] = useState(PAGE_SIZE);
+  const [visible, setVisible] = useState(MODAL_PAGE_SIZE);
 
-  const list = avatars || [];
-
-  // Available genders to inform facets — but always show the canonical four.
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return list.filter((a) => {
+    return avatars.filter((a) => {
       if (q && !String(a.name || '').toLowerCase().includes(q)) return false;
       if (gender !== 'all') {
         const g = normalizeGender(a.gender);
@@ -823,276 +931,200 @@ function AvatarPicker({ avatars, avatarError, selectedAvatarId, setSelectedAvata
       }
       return true;
     });
-  }, [list, search, gender]);
+  }, [avatars, search, gender]);
 
-  useEffect(() => { setVisible(PAGE_SIZE); }, [search, gender]);
-
-  const hasFilters = !!search.trim() || gender !== 'all';
-  const clearFilters = () => { setSearch(''); setGender('all'); };
+  useEffect(() => { setVisible(MODAL_PAGE_SIZE); }, [search, gender]);
 
   return (
-    <div className="studio-section">
-      <label className="studio-label">Choose your avatar</label>
-      {avatars === null && <div className="studio-empty">Loading avatars…</div>}
-      {avatars !== null && avatars.length === 0 && (
-        <div className="studio-empty">
-          {avatarError ? `Couldn't load avatars — please check your account. (${avatarError})` : 'No avatars available.'}
-        </div>
-      )}
-      {avatars && avatars.length > 0 && (
-        <>
-          <div className="studio-picker-controls">
-            <input
-              type="search"
-              className="studio-picker-search"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search avatars by name…"
-              disabled={disabled}
-              aria-label="Search avatars"
-            />
-            <FilterChips
-              label="Gender"
-              value={gender}
-              onChange={setGender}
-              disabled={disabled}
-              options={[
-                { value: 'all', label: 'All' },
-                { value: 'female', label: 'Female' },
-                { value: 'male', label: 'Male' },
-                { value: 'other', label: 'Other' },
-              ]}
-            />
-            {hasFilters && (
-              <button type="button" className="studio-clear-filters" onClick={clearFilters} disabled={disabled}>
-                Clear filters
-              </button>
+    <StudioModal title="Choose Your Avatar" onClose={onClose}>
+      <div className="studio-modal-filters">
+        <ModalTabs
+          label="Gender"
+          value={gender}
+          onChange={setGender}
+          options={[
+            { value: 'all', label: 'All' },
+            { value: 'female', label: 'Female' },
+            { value: 'male', label: 'Male' },
+            { value: 'other', label: 'Other' },
+          ]}
+        />
+        <input
+          type="search"
+          className="studio-modal-search"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search avatars…"
+          aria-label="Search avatars"
+        />
+      </div>
+      <div className="studio-modal-body">
+        {filtered.length === 0 ? (
+          <div className="studio-empty">No avatars match your filters.</div>
+        ) : (
+          <>
+            <div className="studio-modal-grid">
+              {filtered.slice(0, visible).map((a) => (
+                <button
+                  key={a.id}
+                  type="button"
+                  className={`studio-avatar-card ${selectedAvatarId === a.id ? 'is-selected' : ''}`}
+                  onClick={() => onSelect(a.id)}
+                >
+                  {a.previewImageUrl
+                    ? <img src={a.previewImageUrl} alt={a.name} loading="lazy" />
+                    : <div className="studio-avatar-placeholder" />}
+                  <div className="studio-avatar-meta">
+                    <div className="studio-avatar-name">{a.name}</div>
+                    {a.gender && <div className="studio-avatar-sub">{a.gender}</div>}
+                  </div>
+                  {selectedAvatarId === a.id && (
+                    <span className="studio-modal-check" aria-hidden="true">✓</span>
+                  )}
+                </button>
+              ))}
+            </div>
+            {visible < filtered.length && (
+              <div className="studio-modal-footer">
+                <button
+                  type="button"
+                  className="studio-modal-more"
+                  onClick={() => setVisible((v) => v + MODAL_PAGE_SIZE)}
+                >
+                  Show more ({Math.min(visible, filtered.length)} of {filtered.length})
+                </button>
+              </div>
             )}
-          </div>
-          {filtered.length === 0 ? (
-            <div className="studio-empty">No avatars match your filters.</div>
-          ) : (
-            <>
-              <div className="studio-avatar-grid">
-                {filtered.slice(0, visible).map((a) => (
-                  <button
-                    key={a.id}
-                    type="button"
-                    className={`studio-avatar-card ${selectedAvatarId === a.id ? 'is-selected' : ''}`}
-                    onClick={() => setSelectedAvatarId(a.id)}
-                    disabled={disabled}
-                  >
-                    {a.previewImageUrl
-                      ? <img src={a.previewImageUrl} alt={a.name} loading="lazy" />
-                      : <div className="studio-avatar-placeholder" />}
-                    <div className="studio-avatar-meta">
-                      <div className="studio-avatar-name">{a.name}</div>
-                      {a.gender && <div className="studio-avatar-sub">{a.gender}</div>}
-                    </div>
-                  </button>
-                ))}
-              </div>
-              <div className="studio-picker-footer">
-                <span className="studio-picker-count">
-                  Showing {Math.min(visible, filtered.length)} of {filtered.length}
-                </span>
-                {visible < filtered.length && (
-                  <button
-                    type="button"
-                    className="studio-show-more"
-                    onClick={() => setVisible((v) => v + PAGE_SIZE)}
-                    disabled={disabled}
-                  >
-                    Show more
-                  </button>
-                )}
-              </div>
-            </>
-          )}
-        </>
-      )}
-    </div>
+          </>
+        )}
+      </div>
+    </StudioModal>
   );
 }
 
-function VoicePicker({
-  voices, voiceError, selectedVoiceId, setSelectedVoiceId,
-  playVoicePreview, previewingVoiceId, disabled,
+function VoiceModal({
+  voices, selectedVoiceId, onSelect, onClose, playVoicePreview, previewingVoiceId,
 }) {
   const [search, setSearch] = useState('');
   const [gender, setGender] = useState('all');
   const [language, setLanguage] = useState('all');
-  const [visible, setVisible] = useState(PAGE_SIZE);
+  const [visible, setVisible] = useState(MODAL_PAGE_SIZE);
 
-  const list = voices || [];
-
-  // Pull unique languages from data, then intersect/union with common list.
   const availableLangs = useMemo(() => {
     const set = new Set();
-    for (const v of list) {
+    for (const v of voices) {
       if (v.language) set.add(v.language);
     }
     return set;
-  }, [list]);
+  }, [voices]);
 
   const langOptions = useMemo(() => {
     const codes = COMMON_VOICE_LANGS.filter((c) => availableLangs.has(c));
-    // Add any languages not in the common list that exist in data
     const extras = [...availableLangs].filter((c) => !COMMON_VOICE_LANGS.includes(c)).sort();
-    return [{ value: 'all', label: 'All languages' }, ...codes.concat(extras).map((c) => ({ value: c, label: langLabel(c) }))];
+    return [
+      { value: 'all', label: 'All languages' },
+      ...codes.concat(extras).map((c) => ({ value: c, label: langLabel(c) })),
+    ];
   }, [availableLangs]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return list.filter((v) => {
+    return voices.filter((v) => {
       if (q && !String(v.name || '').toLowerCase().includes(q)) return false;
-      if (gender !== 'all') {
-        const g = normalizeGender(v.gender);
-        if (g !== gender) return false;
-      }
+      if (gender !== 'all' && normalizeGender(v.gender) !== gender) return false;
       if (language !== 'all' && v.language !== language) return false;
       return true;
     });
-  }, [list, search, gender, language]);
+  }, [voices, search, gender, language]);
 
-  useEffect(() => { setVisible(PAGE_SIZE); }, [search, gender, language]);
-
-  const hasFilters = !!search.trim() || gender !== 'all' || language !== 'all';
-  const clearFilters = () => { setSearch(''); setGender('all'); setLanguage('all'); };
+  useEffect(() => { setVisible(MODAL_PAGE_SIZE); }, [search, gender, language]);
 
   return (
-    <div className="studio-section">
-      <label className="studio-label">Choose your voice</label>
-      {voices === null && <div className="studio-empty">Loading voices…</div>}
-      {voices !== null && voices.length === 0 && (
-        <div className="studio-empty">
-          {voiceError ? `Couldn't load voices — please check your account. (${voiceError})` : 'No voices available.'}
-        </div>
-      )}
-      {voices && voices.length > 0 && (
-        <>
-          <div className="studio-picker-controls">
-            <input
-              type="search"
-              className="studio-picker-search"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search voices by name…"
-              disabled={disabled}
-              aria-label="Search voices"
-            />
-            <FilterChips
-              label="Gender"
-              value={gender}
-              onChange={setGender}
-              disabled={disabled}
-              options={[
-                { value: 'all', label: 'All' },
-                { value: 'female', label: 'Female' },
-                { value: 'male', label: 'Male' },
-              ]}
-            />
-            <div className="studio-filter-row">
-              <span className="studio-filter-label">Language</span>
-              <select
-                className="studio-filter-select"
-                value={language}
-                onChange={(e) => setLanguage(e.target.value)}
-                disabled={disabled}
-                aria-label="Filter by language"
-              >
-                {langOptions.map((opt) => (
-                  <option key={opt.value} value={opt.value}>{opt.label}</option>
-                ))}
-              </select>
-            </div>
-            {hasFilters && (
-              <button type="button" className="studio-clear-filters" onClick={clearFilters} disabled={disabled}>
-                Clear filters
-              </button>
-            )}
-          </div>
-          {filtered.length === 0 ? (
-            <div className="studio-empty">No voices match your filters.</div>
-          ) : (
-            <>
-              <div className="studio-voice-list">
-                {filtered.slice(0, visible).map((v) => (
-                  <div
-                    key={v.id}
-                    className={`studio-voice-card ${selectedVoiceId === v.id ? 'is-selected' : ''}`}
-                    onClick={() => !disabled && setSelectedVoiceId(v.id)}
-                    role="button"
-                    tabIndex={0}
-                  >
-                    <div className="studio-voice-meta">
-                      <div className="studio-voice-name">{v.name}</div>
-                      <div className="studio-voice-sub">
-                        {[langLabel(v.language), v.gender].filter(Boolean).join(' · ')}
-                      </div>
+    <StudioModal title="Choose Your Voice" onClose={onClose}>
+      <div className="studio-modal-filters">
+        <ModalTabs
+          label="Gender"
+          value={gender}
+          onChange={setGender}
+          options={[
+            { value: 'all', label: 'All' },
+            { value: 'female', label: 'Female' },
+            { value: 'male', label: 'Male' },
+          ]}
+        />
+        <select
+          className="studio-modal-select"
+          value={language}
+          onChange={(e) => setLanguage(e.target.value)}
+          aria-label="Filter by language"
+        >
+          {langOptions.map((opt) => (
+            <option key={opt.value} value={opt.value}>{opt.label}</option>
+          ))}
+        </select>
+        <input
+          type="search"
+          className="studio-modal-search"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search voices…"
+          aria-label="Search voices"
+        />
+      </div>
+      <div className="studio-modal-body">
+        {filtered.length === 0 ? (
+          <div className="studio-empty">No voices match your filters.</div>
+        ) : (
+          <>
+            <div className="studio-modal-voice-list">
+              {filtered.slice(0, visible).map((v) => (
+                <div
+                  key={v.id}
+                  className={`studio-voice-card ${selectedVoiceId === v.id ? 'is-selected' : ''}`}
+                  onClick={() => onSelect(v.id)}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      onSelect(v.id);
+                    }
+                  }}
+                >
+                  <div className="studio-voice-meta">
+                    <div className="studio-voice-name">{v.name}</div>
+                    <div className="studio-voice-sub">
+                      {[langLabel(v.language), v.gender].filter(Boolean).join(' · ')}
                     </div>
-                    {v.previewAudioUrl && (
-                      <button
-                        type="button"
-                        className="studio-voice-play"
-                        onClick={(e) => { e.stopPropagation(); playVoicePreview(v); }}
-                        aria-label={previewingVoiceId === v.id ? 'Stop preview' : 'Play preview'}
-                      >
-                        {previewingVoiceId === v.id ? '■' : '▶'}
-                      </button>
-                    )}
                   </div>
-                ))}
+                  {v.previewAudioUrl && (
+                    <button
+                      type="button"
+                      className="studio-voice-play"
+                      onClick={(e) => { e.stopPropagation(); playVoicePreview(v); }}
+                      aria-label={previewingVoiceId === v.id ? 'Stop preview' : 'Play preview'}
+                    >
+                      {previewingVoiceId === v.id ? '■' : '▶'}
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+            {visible < filtered.length && (
+              <div className="studio-modal-footer">
+                <button
+                  type="button"
+                  className="studio-modal-more"
+                  onClick={() => setVisible((v) => v + MODAL_PAGE_SIZE)}
+                >
+                  Show more ({Math.min(visible, filtered.length)} of {filtered.length})
+                </button>
               </div>
-              <div className="studio-picker-footer">
-                <span className="studio-picker-count">
-                  Showing {Math.min(visible, filtered.length)} of {filtered.length}
-                </span>
-                {visible < filtered.length && (
-                  <button
-                    type="button"
-                    className="studio-show-more"
-                    onClick={() => setVisible((v) => v + PAGE_SIZE)}
-                    disabled={disabled}
-                  >
-                    Show more
-                  </button>
-                )}
-              </div>
-            </>
-          )}
-        </>
-      )}
-    </div>
-  );
-}
-
-function AvatarSection(props) {
-  const {
-    avatars, voices, avatarError, voiceError,
-    selectedAvatarId, setSelectedAvatarId,
-    selectedVoiceId, setSelectedVoiceId,
-    playVoicePreview, previewingVoiceId, disabled,
-  } = props;
-  return (
-    <>
-      <AvatarPicker
-        avatars={avatars}
-        avatarError={avatarError}
-        selectedAvatarId={selectedAvatarId}
-        setSelectedAvatarId={setSelectedAvatarId}
-        disabled={disabled}
-      />
-      <VoicePicker
-        voices={voices}
-        voiceError={voiceError}
-        selectedVoiceId={selectedVoiceId}
-        setSelectedVoiceId={setSelectedVoiceId}
-        playVoicePreview={playVoicePreview}
-        previewingVoiceId={previewingVoiceId}
-        disabled={disabled}
-      />
-    </>
+            )}
+          </>
+        )}
+      </div>
+    </StudioModal>
   );
 }
 
