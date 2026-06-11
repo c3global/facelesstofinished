@@ -9,14 +9,15 @@ import {
 
 const VALID_MODES = new Set(['avatar', 'faceless']);
 const VALID_ASPECTS = new Set(['9_16', '16_9']);
+const VALID_SOURCES = new Set(['ai', 'pexels', 'pixabay']);
 
-function estimateCostCents({ mode, script, prompts }) {
+function estimateCostCents({ mode, script, scenes }) {
   const words = script.split(/\s+/).filter(Boolean).length;
   const seconds = (words / 150) * 60;
   if (mode === 'avatar') {
     return Math.round(30 + (seconds / 30) * 10);
   }
-  return Math.round(10 + prompts.length * 5);
+  return Math.round(10 + (scenes?.length || 0) * 5);
 }
 
 export default async (req) => {
@@ -41,19 +42,50 @@ export default async (req) => {
   const aspect = String(body.aspect || '').replace(':', '_');
   const captions = Boolean(body.captions);
   const script = String(body.script || '').trim();
+
+  if (!VALID_MODES.has(mode)) return json({ error: 'invalid_mode' }, { status: 400 });
+  if (!VALID_ASPECTS.has(aspect)) return json({ error: 'invalid_aspect' }, { status: 400 });
+  if (script.length < 10) return json({ error: 'script_too_short' }, { status: 400 });
+  if (script.length > 8000) return json({ error: 'script_too_long' }, { status: 400 });
+
+  // Build scenes from request. Back-compat: accept legacy `prompts` array.
   const promptsIn = Array.isArray(body.prompts) ? body.prompts : [];
   const prompts = promptsIn
     .map((p) => String(p || '').trim())
     .filter(Boolean)
     .slice(0, 12);
 
-  if (!VALID_MODES.has(mode)) return json({ error: 'invalid_mode' }, { status: 400 });
-  if (!VALID_ASPECTS.has(aspect)) return json({ error: 'invalid_aspect' }, { status: 400 });
-  if (script.length < 10) return json({ error: 'script_too_short' }, { status: 400 });
-  if (script.length > 8000) return json({ error: 'script_too_long' }, { status: 400 });
-  if (prompts.length < 1 || prompts.length > 12) {
-    return json({ error: 'invalid_prompts_count' }, { status: 400 });
+  let scenes = [];
+  if (Array.isArray(body.scenes) && body.scenes.length) {
+    scenes = body.scenes.slice(0, 12).map((s) => {
+      const source = VALID_SOURCES.has(String(s?.source)) ? String(s.source) : 'ai';
+      return {
+        source,
+        prompt: String(s?.prompt || '').trim(),
+        videoUrl: source !== 'ai' ? String(s?.videoUrl || '') : '',
+        previewImageUrl: source !== 'ai' ? String(s?.previewImageUrl || '') : '',
+        sourceMeta: s?.sourceMeta || null,
+      };
+    }).filter((s) => s.prompt || s.videoUrl);
+  } else if (prompts.length) {
+    scenes = prompts.map((p) => ({
+      source: 'ai',
+      prompt: p,
+      videoUrl: '',
+      previewImageUrl: '',
+      sourceMeta: null,
+    }));
   }
+
+  // Faceless mode: must have at least 1 scene. Avatar mode: skip the count check.
+  if (mode === 'faceless') {
+    if (scenes.length < 1 || scenes.length > 12) {
+      return json({ error: 'invalid_prompts_count' }, { status: 400 });
+    }
+  }
+
+  const avatarId = mode === 'avatar' ? String(body.avatarId || '').trim() : '';
+  const voiceId = mode === 'avatar' ? String(body.voiceId || '').trim() : '';
 
   if (await hasActiveJob(session.email)) {
     return json({ error: 'job_in_progress' }, { status: 409 });
@@ -68,13 +100,16 @@ export default async (req) => {
     aspect,
     captions,
     script,
-    prompts,
+    prompts: scenes.map((s) => s.prompt).filter(Boolean), // back-compat
+    scenes,
+    avatarId: avatarId || null,
+    voiceId: voiceId || null,
     status: 'queued',
     progress: 0,
     progressLabel: 'Queued',
     resultUrl: null,
     error: null,
-    estimatedCostCents: estimateCostCents({ mode, script, prompts }),
+    estimatedCostCents: estimateCostCents({ mode, script, scenes }),
     createdAt: now,
     completedAt: null,
   };
@@ -82,11 +117,6 @@ export default async (req) => {
   await writeJob(job);
   await indexJob(job);
 
-  // Trigger the background worker. Awaiting (rather than fire-and-forget)
-  // ensures the runtime actually dispatches the request before this handler
-  // returns — Netlify Functions kill in-flight async work on exit, which
-  // was leaving jobs stuck in 'queued' forever. Background functions reply
-  // 202 immediately so this await adds ~tens of ms, not seconds.
   const url = new URL(req.url);
   const bgUrl = `${url.protocol}//${url.host}/.netlify/functions/studio-render-background`;
   try {
@@ -97,8 +127,6 @@ export default async (req) => {
     });
   } catch (err) {
     console.error('failed to trigger background:', err);
-    // Don't fail the user's request — the job record exists; we just couldn't
-    // hand it off. Surface this to the activity log so it isn't invisible.
   }
 
   return json({ jobId, estimatedCostCents: job.estimatedCostCents }, { status: 202 });

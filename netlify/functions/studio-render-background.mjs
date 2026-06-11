@@ -38,8 +38,8 @@ async function runAvatar(job) {
   const apiKey = process.env.HEYGEN_API_KEY;
   if (!apiKey) throw new Error('HEYGEN_API_KEY not set');
 
-  const avatarId = process.env.HEYGEN_DEFAULT_AVATAR_ID || 'Daisy-inskirt-20220818';
-  const voiceId = process.env.HEYGEN_DEFAULT_VOICE_ID || '2d5b0e6cf36f460aa7fc47e3eee4ba54';
+  const avatarId = job.avatarId || process.env.HEYGEN_DEFAULT_AVATAR_ID || 'Daisy-inskirt-20220818';
+  const voiceId = job.voiceId || process.env.HEYGEN_DEFAULT_VOICE_ID || '2d5b0e6cf36f460aa7fc47e3eee4ba54';
   const dim = job.aspect === '9_16'
     ? { width: 720, height: 1280 }
     : { width: 1280, height: 720 };
@@ -144,6 +144,11 @@ async function runFaceless(job) {
   const width = aspect === '9_16' ? 720 : 1280;
   const height = aspect === '9_16' ? 1280 : 720;
 
+  // Normalize scenes (back-compat: build from prompts if scenes missing)
+  const scenes = Array.isArray(job.scenes) && job.scenes.length
+    ? job.scenes
+    : (job.prompts || []).map((p) => ({ source: 'ai', prompt: p }));
+
   // 1) TTS
   await setStatus(job.id, {
     status: 'voiceover',
@@ -157,30 +162,37 @@ async function runFaceless(job) {
   const audioUrl = ttsRes?.audio?.url || ttsRes?.audio_url;
   if (!audioUrl) throw new Error(`TTS returned no audio url: ${JSON.stringify(ttsRes).slice(0, 300)}`);
 
-  // 2) Images per prompt
+  // 2) Build asset URL per scene (image via Flux, or use stock video URL directly)
   await setStatus(job.id, {
     status: 'visuals',
     progress: 15,
-    progressLabel: `Generating scene 1 of ${job.prompts.length}…`,
+    progressLabel: `Preparing scene 1 of ${scenes.length}…`,
   });
   const imageSize = aspect === '9_16' ? 'portrait_16_9' : 'landscape_16_9';
-  const imageUrls = [];
-  for (let i = 0; i < job.prompts.length; i += 1) {
+  // assets[i] = { kind: 'image'|'video', url }
+  const assets = [];
+  for (let i = 0; i < scenes.length; i += 1) {
+    const sc = scenes[i];
     await setStatus(job.id, {
       status: 'visuals',
-      progress: 15 + Math.round(((i) / job.prompts.length) * 55),
-      progressLabel: `Generating scene ${i + 1} of ${job.prompts.length}…`,
+      progress: 15 + Math.round((i / scenes.length) * 55),
+      progressLabel: `Preparing scene ${i + 1} of ${scenes.length}…`,
     });
-    const imgRes = await falPost('fal-ai/flux/schnell', {
-      prompt: job.prompts[i],
-      image_size: imageSize,
-      num_inference_steps: 4,
-      num_images: 1,
-      enable_safety_checker: true,
-    });
-    const url = imgRes?.images?.[0]?.url;
-    if (!url) throw new Error(`Flux returned no image for prompt ${i + 1}`);
-    imageUrls.push(url);
+    if (sc.source === 'pexels' || sc.source === 'pixabay') {
+      if (!sc.videoUrl) throw new Error(`Scene ${i + 1} missing stock videoUrl`);
+      assets.push({ kind: 'video', url: sc.videoUrl });
+    } else {
+      const imgRes = await falPost('fal-ai/flux/schnell', {
+        prompt: sc.prompt,
+        image_size: imageSize,
+        num_inference_steps: 4,
+        num_images: 1,
+        enable_safety_checker: true,
+      });
+      const url = imgRes?.images?.[0]?.url;
+      if (!url) throw new Error(`Flux returned no image for scene ${i + 1}`);
+      assets.push({ kind: 'image', url });
+    }
   }
 
   // 3) Compose
@@ -193,15 +205,20 @@ async function runFaceless(job) {
   // Estimate audio length from script length: 150 wpm.
   const words = job.script.split(/\s+/).filter(Boolean).length;
   const audioLength = Math.max(8, (words / 150) * 60);
-  const sceneDuration = audioLength / imageUrls.length;
+  const sceneDuration = audioLength / assets.length;
 
+  // The Fal ffmpeg-api/compose endpoint accepts a `video` track with keyframes of
+  // either image or video URLs. Each keyframe has a duration; for videos it
+  // trims/loops to fit. This is best-effort — if the compose API rejects video
+  // keyframes alongside images, the fallback ffmpeg path below should still
+  // surface a useful error.
   const composeBody = {
     tracks: [
       {
         id: 'video',
         type: 'video',
-        keyframes: imageUrls.map((url, idx) => ({
-          url,
+        keyframes: assets.map((a, idx) => ({
+          url: a.url,
           timestamp: idx * sceneDuration,
           duration: sceneDuration,
         })),
@@ -219,17 +236,15 @@ async function runFaceless(job) {
   try {
     composeRes = await falPost('fal-ai/ffmpeg-api/compose', composeBody);
   } catch (err) {
-    // Fall back: simpler ffmpeg endpoint with command-style invocation.
-    // We assemble a minimal scene-loop command. If this also fails, throw with a clear step name.
     try {
-      const inputs = [...imageUrls.map((u) => ({ url: u })), { url: audioUrl }];
+      const inputs = [...assets.map((a) => ({ url: a.url })), { url: audioUrl }];
       composeRes = await falPost('fal-ai/ffmpeg-api/ffmpeg', {
         inputs,
-        // best-effort scene loop: each image for sceneDuration seconds, then concat, overlay audio.
-        // The exact arg list varies between Fal versions; we keep it simple so the upstream surfaces a helpful error.
-        command: imageUrls
-          .map((_, i) => `-loop 1 -t ${sceneDuration.toFixed(2)} -i input${i}`)
-          .join(' ') + ` -i input${imageUrls.length} -filter_complex "concat=n=${imageUrls.length}:v=1:a=0[v]" -map "[v]" -map ${imageUrls.length}:a -shortest -s ${width}x${height} -r 30 output.mp4`,
+        command: assets
+          .map((a, i) => a.kind === 'image'
+            ? `-loop 1 -t ${sceneDuration.toFixed(2)} -i input${i}`
+            : `-t ${sceneDuration.toFixed(2)} -i input${i}`)
+          .join(' ') + ` -i input${assets.length} -filter_complex "concat=n=${assets.length}:v=1:a=0[v]" -map "[v]" -map ${assets.length}:a -shortest -s ${width}x${height} -r 30 output.mp4`,
       });
     } catch (err2) {
       throw new Error(`Fal compose failed (both compose and ffmpeg endpoints): ${err.message} | fallback: ${err2.message}`);
