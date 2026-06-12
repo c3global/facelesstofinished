@@ -60,15 +60,44 @@ export default function Studio() {
   // Script
   const [script, setScript] = useState("");
 
-  // Pick up a script handed off from /scripts via localStorage (one-shot)
+  // Banner shown after a Send-to-Studio handoff
+  const [handoffBanner, setHandoffBanner] = useState(null);
+  const handoffBannerTimer = useRef(null);
+
+  // Pick up a script handed off from /scripts via localStorage (one-shot).
+  // Payload is JSON { script, brollPrompts, sourceMode, topic, ts } as of iteration 5,
+  // with backward-compat for a plain-string payload from older versions.
   useEffect(() => {
     try {
-      const handoff = localStorage.getItem("f48_handoff_script");
-      if (handoff) {
-        setScript(handoff);
-        localStorage.removeItem("f48_handoff_script");
+      const raw = localStorage.getItem("f48_handoff_script");
+      if (!raw) return;
+      localStorage.removeItem("f48_handoff_script");
+      let payload;
+      try { payload = JSON.parse(raw); }
+      catch { payload = { script: raw, brollPrompts: [], sourceMode: null, topic: null }; }
+
+      if (payload.script) setScript(payload.script);
+      if (Array.isArray(payload.brollPrompts) && payload.brollPrompts.length) {
+        setBulkPrompts(payload.brollPrompts.join("\n"));
+        setSceneOverrides(payload.brollPrompts.map(() => ({})));
       }
+      // Default mode by source: shorts → Faceless (uses voiceover + B-roll natively),
+      // long → stay on Avatar (talking head) but the B-roll prompts are staged.
+      if (payload.sourceMode === "shorts") setMode(MODES.FACELESS);
+
+      const wordCount = (payload.script || "").trim().split(/\s+/).filter(Boolean).length;
+      setHandoffBanner({
+        words: wordCount,
+        prompts: payload.brollPrompts?.length || 0,
+        sourceMode: payload.sourceMode || null,
+        topic: payload.topic || null,
+      });
+      if (handoffBannerTimer.current) clearTimeout(handoffBannerTimer.current);
+      handoffBannerTimer.current = setTimeout(() => setHandoffBanner(null), 10000);
     } catch {}
+    return () => {
+      if (handoffBannerTimer.current) clearTimeout(handoffBannerTimer.current);
+    };
   }, []);
 
   // Auto-generated B-roll prompts state
@@ -317,6 +346,39 @@ export default function Studio() {
           Paste your script, pick your look in two clicks, and we&rsquo;ll render the final cut — captions, voice, footage and all.
         </p>
       </div>
+
+      {/* Handoff banner — shown briefly after Send-to-Studio */}
+      {handoffBanner && (
+        <div className="handoff-banner" data-testid="handoff-banner">
+          <div className="handoff-banner-icon"><Sparkles size={16} /></div>
+          <div className="handoff-banner-body">
+            <strong>Loaded from Script Engine</strong>
+            <span>
+              {handoffBanner.words.toLocaleString()}-word script
+              {handoffBanner.prompts > 0 && ` + ${handoffBanner.prompts} B-roll prompt${handoffBanner.prompts === 1 ? "" : "s"}`}
+              {handoffBanner.topic && ` — "${handoffBanner.topic}"`}
+              {handoffBanner.prompts > 0 && mode === MODES.AVATAR && (
+                <>
+                  {" · "}
+                  <button
+                    type="button"
+                    className="handoff-banner-cta"
+                    data-testid="handoff-switch-faceless"
+                    onClick={() => setMode(MODES.FACELESS)}
+                  >Switch to Faceless to use the B-roll prompts →</button>
+                </>
+              )}
+            </span>
+          </div>
+          <button
+            type="button"
+            className="handoff-banner-close"
+            data-testid="handoff-banner-close"
+            aria-label="Dismiss"
+            onClick={() => setHandoffBanner(null)}
+          >×</button>
+        </div>
+      )}
 
       {/* Mode toggle */}
       <div className="mode-toggle" role="tablist" data-testid="mode-toggle">

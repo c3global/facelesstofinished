@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Copy, Trash2, Sparkles, FileText, Smartphone, Repeat, Loader2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { apiClient, useAuth } from "../App";
-import { parseSections, LONG_SECTION_ORDER, SHORTS_SECTION_ORDER } from "../utils/parser";
+import { parseSections, LONG_SECTION_ORDER, SHORTS_SECTION_ORDER, extractNarration, extractBrollPrompts } from "../utils/parser";
 
 const MODES = { LONG: "long", SHORTS: "shorts" };
 const LENGTHS = [
@@ -218,7 +218,16 @@ export default function Scripts() {
 
   const useInStudio = () => {
     if (!output?.text) return;
-    try { localStorage.setItem("f48_handoff_script", output.text); } catch {}
+    const narration = extractNarration(output.text);
+    const brollPrompts = extractBrollPrompts(output.text);
+    const handoff = {
+      script: narration,
+      brollPrompts,
+      sourceMode: output.mode,  // 'long' | 'shorts'
+      topic: output.topic,
+      ts: Date.now(),
+    };
+    try { localStorage.setItem("f48_handoff_script", JSON.stringify(handoff)); } catch {}
     nav("/studio");
   };
 

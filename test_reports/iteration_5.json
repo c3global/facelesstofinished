@@ -1,0 +1,37 @@
+{
+  "summary": "Iteration 5 frontend smart-handoff test on PUBLIC preview URL. The handoff JSON payload IS being written and the Studio side IS reading it (banner shows correct word count + topic + 12 B-roll prompts, default mode=Avatar for long source, handoff-switch-faceless CTA visible). HOWEVER the PRIMARY GOAL of iteration 5 — stripping bracket beat markers like [HOOK — 0:00–0:30], [SECTION N: ...], [OUTRO + CTA — ...], [INTRO BRIDGE — ...] from the avatar's script — is NOT WORKING. The script textarea on /studio still contains all 7 standalone bracket beat headers, which means the avatar would read 'HOOK zero colon zero zero to zero colon three zero' aloud — the exact failure the user complained about. Backend health not retested (frontend-only per request).",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Studio handoff-banner CTA → mode switch", "issue": "After clicking data-testid=handoff-switch-faceless, mode-faceless did NOT receive is-active class (mode stayed Avatar). bulk-prompts textarea never rendered as a result. Could be a flake or a state-update race; needs main agent to retest after fixing bug #1 below.", "selector": "[data-testid='handoff-switch-faceless']", "priority": "HIGH"}
+    ],
+    "integration_issues": [
+      {"flow": "Send-to-Studio narration extraction (LONG-FORM)", "issue": "extractNarration() in /app/frontend/src/utils/parser.js fails to strip standalone bracket beat headers when the script-engine wraps them in markdown bold (e.g. '**[HOOK — 0:00–0:30]**'). The Claude long-form output uses bold-wrapped bracket headers, so the regex /^\\s*\\[[^\\]]*\\]\\s*$/gm never matches because the line starts with '*', not '['. The asterisks are stripped LATER by the bold-strip regex, but by then the bracket-strip pass has already run. Result: textarea contains 7 bracket-only lines: [HOOK — 0:00–0:30], [INTRO BRIDGE — 0:30–1:00], [SECTION 1: WHY YOUR CURRENT DIET MIGHT BE FAILING YOU — 1:00–2:30], [SECTION 2/3/4 — ...], [OUTRO + CTA — 6:30–7:00]. THIS IS THE EXACT BUG ITERATION 5 WAS SUPPOSED TO FIX.", "affected_selectors": ["[data-testid='script-textarea']"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": ["/app/test_reports/iteration_5.json"],
+  "action_items": [
+    "PRIMARY FIX (parser.js extractNarration): swap the order of operations OR tolerate bold-wrapping on bracket lines. Two easy fixes — (a) Move the bold/italic strip BEFORE the standalone-bracket strip so '**[HOOK ...]**' becomes '[HOOK ...]' first; (b) OR update the standalone-bracket regex to /^\\s*\\*{0,2}\\s*\\[[^\\]]*\\]\\s*\\*{0,2}\\s*$/gm. Verified empirically: the regex itself works correctly on a plain '[HOOK — 0:00–0:30]' line — the regex test produced clean output in-browser. The miss is the leading '**' on Claude's actual section body.",
+    "Update /app/frontend/src/utils/parser.test.cjs to include a fixture line '**[HOOK — 0:00–0:30]**\\n\\nContent.' so this regression can't sneak back in.",
+    "After the parser fix, retest handoff-switch-faceless click → mode-faceless is-active + bulk-prompts visible + scene-card-N rendered. If still broken, look into whether the banner re-render unmounts the button before the click registers."
+  ],
+  "critical_code_review_comments": [
+    "parser.js:81 — bold-strip step runs AFTER bracket-strip step, defeating the bracket-strip on bold-wrapped headers. Reverse the order.",
+    "parser.js — the regex /^\\s*\\[[^\\]]*\\]\\s*$/gm uses an unbounded [^\\]]* which can span newlines. Today the input lines are single-line so this is fine, but if Claude ever emits a multi-line bracket beat header, the regex will greedily eat content between brackets across paragraphs. Tighten with /^\\s*\\[[^\\]\\n]*\\]\\s*$/gm.",
+    "Studio.jsx — the handoff banner shows 'Switch to Faceless to use the B-roll prompts →' only when mode===AVATAR AND prompts>0. For shorts source, mode is auto-flipped to FACELESS in the SAME useEffect, so by render time mode===FACELESS and the CTA is correctly hidden. Behavior is correct — flagged for clarity only.",
+    "parser.cjs and parser.js are duplicate implementations kept in sync by hand. Consider exporting from .js only and letting the test runner use a tiny CJS shim, OR generate parser.cjs from parser.js via a build step. Duplicate-source bugs are inevitable otherwise.",
+    "Studio.jsx handoff useEffect — the 10s auto-dismiss timer is set inside the useEffect but its cleanup return is OUTSIDE the try/catch try block path; if the JSON parse throws, the cleanup still runs against a possibly-uninitialized handoffBannerTimer.current (which is fine because it's a ref initialized to null). Defensive but not a bug."
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "not retested (frontend-only iteration)",
+    "frontend": "~50% — handoff payload write + Studio read + banner UI + topic display + word count + B-roll prompt count + default mode-by-source + close-banner button all work. Narration cleanliness (the entire point of iter 5) FAILS — 7 bracket beat headers leak through. Switch-to-Faceless CTA mode flip also did not visibly take effect in test."
+  },
+  "test_credentials": "drcharitycampbell@gmail.com — passwordless DEV_BYPASS, all entitlements",
+  "seed_data_creation": "One real Claude long-form generation triggered during testing (topic: 'Animal based diet for black women over 40', length=short, mode=long). Visible in history; safe to keep.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "PRIMARY bug RCA confirmed: Claude long-form FULL NARRATION SCRIPT section body literally starts with '**[HOOK — 0:00–0:30]**' (bold-wrapped bracket header). parser.js applies bracket-strip BEFORE bold-strip, so the leading '**' makes the bracket regex miss. Fix is one-line reorder OR regex tweak. After fix: regenerate, click Send to Studio, verify zero forbidden substrings ('[HOOK','[SECTION','[OUTRO','[INTRO','[B-ROLL:','[ON-SCREEN:','### ','**') in script-textarea value. Also retest handoff-switch-faceless → mode-faceless is-active + bulk-prompts visible. Shorts-handoff path and localStorage-string backward-compat NOT yet exercised in this iteration — defer until bug #1 is fixed since it's blocking.",
+  "rca_of_the_issue": "extractNarration() steps execute in this order: (1) strip inline B-ROLL/ON-SCREEN directive cues, (2) strip standalone bracket-only lines /^\\s*\\[[^\\]]*\\]\\s*$/gm, (3) strip markdown bold **...**, (4) strip italic *...*, (5) collapse whitespace. Claude's long-form output emits section beat headers as '**[HOOK — 0:00–0:30]**' (asterisks BEFORE the opening bracket). Step 2's regex anchors to '^\\s*\\[' so a line starting with '*' is not matched. Step 3 strips the asterisks, but by then we're past step 2 and the bracket line survives the rest of the pipeline. Fix: swap step 2 and step 3, OR widen step 2's regex to ^\\s*\\*{0,2}\\s*\\[[^\\]]*\\]\\s*\\*{0,2}\\s*$. Empirically verified in-browser — the regex works on a plain bracket line but does not work on a **-wrapped bracket line."
+}
