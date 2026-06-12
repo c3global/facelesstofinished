@@ -89,12 +89,21 @@ back to it for entitlement verification.
 - ✅ All Claude calls use the Emergent Universal LLM key (`claude-sonnet-4-5-20250929`)
 - ✅ System prompts (`prompts.py`) ported verbatim from legacy so the section-header structure stays identical and the legacy parser keeps working
 
-## Iteration 4 — Async job pattern (2026-01-12)
-- ✅ Fixed Cloudflare 60s edge timeout for long-form script generation. `/api/scripts/long`, `/scripts/shorts`, `/scripts/repurpose` now follow the same async-job pattern as `/api/studio/render`:
-  - POST inserts a mongo record with `status="running"` and spawns the Claude call in `asyncio.create_task`
-  - Returns the queued record in <1s (no edge-timeout exposure)
-  - Frontend polls `GET /api/scripts/job/{id}` every 2.5s with an elapsed-seconds counter UI
-- ✅ Tested end-to-end on the PUBLIC preview URL — 18/18 backend, 100% frontend per `/app/test_reports/iteration_4.json`
+## Iteration 5/5b — Smart Send-to-Studio handoff (2026-01-12)
+- ✅ Fixed handoff bug where the entire script-engine output (including `### TOPIC ANGLES`, `### HOOK VARIATIONS`, and bracket beat markers like `**[HOOK — 0:00–0:30]**`) was being copied into the avatar's script box. Avatar would have read out section headers aloud.
+- ✅ New `extractNarration(rawScript)` helper in `/app/frontend/src/utils/parser.js`:
+  - Prefers the `FULL NARRATION SCRIPT` (long) or `SHORT-FORM SCRIPT` (shorts) section
+  - Strips inline `[B-ROLL: ...]` and `[ON-SCREEN: ...]` directive cues
+  - Strips markdown bold/italic markers (CRITICAL: must run BEFORE bracket-strip because Claude wraps beat headers in `**...**`)
+  - Strips standalone bracket beat headers like `[HOOK — 0:00–0:30]`, `[SECTION 1: ...]`, `[OUTRO + CTA — ...]`
+  - Collapses whitespace into clean paragraphs
+- ✅ New `extractBrollPrompts(rawScript)` helper pulls bulleted prompts from the consolidated `B-ROLL SHOT LIST` section, strips markdown/bullet formatting, caps at 12.
+- ✅ Handoff payload is now JSON `{ script, brollPrompts, sourceMode, topic, ts }` (was a plain string). Backward-compat: Studio's handoff useEffect still reads a plain string from older versions.
+- ✅ Smart mode default on handoff: Shorts source → auto-switch to Faceless mode (uses voiceover + B-roll natively); Long source → stay on Avatar but stage the B-roll prompts so flipping to Faceless preserves them.
+- ✅ Transient handoff banner on Studio shows word count + B-roll prompt count + topic + a one-click "Switch to Faceless to use the B-roll prompts" CTA when in Avatar mode with prompts staged. Auto-dismisses in 10s.
+- ✅ Unit test at `/app/frontend/src/utils/parser.test.cjs` covers bold-wrapped bracket beat headers as a regression guard. Verified: 100% frontend pass via testing agent on the public preview URL (`/app/test_reports/iteration_6.json`), with a fresh real-Claude long-form generation producing 5,694 chars of pristine narration and 12 B-roll prompts.
+
+**Deferred from this iteration (Avatar + B-roll cutaways composite mode):** A true "Avatar + B-roll cutaways" render mode (HeyGen avatar talking head intercut with stock B-roll) needs a new backend render branch and a UI toggle in Avatar mode. Decision: defer until the real HeyGen/fal.ai pipelines are wired (DRY_RUN_RENDERS=false) so the UI isn't building against simulated output. The B-roll prompts ARE staged on the handoff so the user can manually flip to Faceless mode in the meantime.
 
 ## Prioritized backlog
 
