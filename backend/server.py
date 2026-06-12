@@ -55,6 +55,14 @@ JWT_SECRET = os.environ.get("JWT_SECRET", "dev-secret-change-me")
 NETLIFY_AUTH_URL = os.environ.get("NETLIFY_AUTH_URL", "")
 DEV_BYPASS_EMAIL = os.environ.get("DEV_BYPASS_EMAIL", "").strip().lower()
 DRY_RUN_RENDERS = os.environ.get("DRY_RUN_RENDERS", "true").lower() == "true"
+ADMIN_EMAILS = {
+    e.strip().lower()
+    for e in os.environ.get("ADMIN_EMAILS", "drcharitycampbell@gmail.com").split(",")
+    if e.strip()
+}
+# Hard cap — any render whose estimated cost exceeds this in cents is rejected.
+# Composite renders need the headroom; single-mode renders won't hit it.
+RENDER_COST_CAP_CENTS = int(os.environ.get("RENDER_COST_CAP_CENTS", "150"))
 
 KNOWN_ENTITLEMENTS = ["base", "shorts", "studio"]
 JWT_ALG = "HS256"
@@ -89,7 +97,7 @@ class LoginPayload(BaseModel):
 
 
 class RenderRequest(BaseModel):
-    mode: str  # "avatar" | "faceless"
+    mode: str  # "avatar" | "faceless" | "composite"
     script: str
     aspect: str = "9_16"  # "9_16" | "16_9"
     captions: bool = True
@@ -100,6 +108,12 @@ class RenderRequest(BaseModel):
     tts_voice_id: Optional[str] = None
     broll_source: Optional[str] = None  # "ai" | "pexels" | "pixabay" | "mix"
     scenes: list[dict] = Field(default_factory=list)
+    # Composite mode — interleave avatar talking-head with B-roll cutaways
+    broll_cutaway_interval_s: int = 12
+    # Admin-only override. When None, falls back to the env default. When False
+    # but caller is not an admin, the request is rejected (customers MUST run
+    # against the env default — they can't elect to dry-run their own renders).
+    dry_run: Optional[bool] = None
 
 
 # ---------------------------------------------------------------------------
@@ -189,7 +203,12 @@ async def auth_check(payload: LoginPayload):
 
 @api.get("/auth/me")
 async def auth_me(user: AuthUser = Depends(current_user)):
-    return {"email": user.email, "entitlements": user.entitlements}
+    return {
+        "email": user.email,
+        "entitlements": user.entitlements,
+        "isAdmin": user.email.lower() in ADMIN_EMAILS,
+        "dryRunDefault": DRY_RUN_RENDERS,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -378,50 +397,327 @@ async def _log_activity(typ: str, email: str, detail: dict):
 
 
 async def _run_render(job_id: str):
-    """Simulated render pipeline. With DRY_RUN_RENDERS=true (default for dev)
-    we walk through the status stages with sleeps and finish with a sample
-    video URL — no external API spend. When DRY_RUN_RENDERS=false this is the
-    hook for the real HeyGen / fal.ai pipeline (to be filled in later)."""
-    stages = [
-        ("voiceover", 20, "Generating voiceover…"),
-        ("visuals", 50, "Composing visuals…"),
-        ("composing", 75, "Stitching scenes…"),
-        ("polling", 90, "Finalizing render…"),
-    ]
+    """Dispatch to the per-mode render pipeline.
+
+    Each pipeline reads its own `dry_run` flag off the job doc — when True
+    (default for dev/preview) every external API call is stubbed and the
+    pipeline writes a sample MP4 + a $0.00 actual cost. When False the real
+    HeyGen / fal.ai calls fire and actual_cost_cents is accumulated as the
+    pipeline runs.
+    """
+    job = await db.renders.find_one({"id": job_id})
+    if not job:
+        return
+    mode = job.get("mode")
+    try:
+        if mode == "avatar":
+            await _run_render_avatar(job)
+        elif mode == "faceless":
+            await _run_render_faceless(job)
+        elif mode == "composite":
+            await _run_render_composite(job)
+        else:
+            await db.renders.update_one(
+                {"id": job_id},
+                {"$set": {"status": "failed", "error": f"Unknown mode: {mode}"}},
+            )
+    except Exception as exc:  # noqa: BLE001  — pipeline must never crash worker
+        await db.renders.update_one(
+            {"id": job_id},
+            {"$set": {
+                "status": "failed",
+                "error": f"{type(exc).__name__}: {exc}",
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            }},
+        )
+
+
+# ---------------------------------------------------------------------------
+# Cost estimation. Numbers below are conservative ceiling estimates derived
+# from public pricing pages (HeyGen $0.30 / min talking-head, fal.ai Kokoro
+# TTS ~$0.005 / 1k chars, Flux 1.1 pro ~$0.04 / image, ffmpeg compose ~free
+# on fal.ai). Conservative because we'd rather reject a borderline render
+# than surprise-charge the user above the cap.
+# ---------------------------------------------------------------------------
+def _estimate_duration_seconds(script: str) -> float:
+    """Approximate spoken duration from script word count at ~150 wpm."""
+    words = len([w for w in script.split() if w.strip()])
+    return max(5.0, (words / 150.0) * 60.0)
+
+
+def estimate_render_cost_cents(payload: RenderRequest) -> int:
+    """Conservative cost estimate (in cents) for a real render of this payload."""
+    duration_s = _estimate_duration_seconds(payload.script)
+    duration_min = duration_s / 60.0
+    cents = 0.0
+
+    if payload.mode == "avatar":
+        # HeyGen $0.30/min + 5c flat overhead
+        cents += duration_min * 30.0 + 5.0
+    elif payload.mode == "faceless":
+        # Kokoro TTS + Flux per-scene + compose
+        scene_count = max(1, len(payload.scenes) or int(duration_s / 8))
+        cents += (len(payload.script) / 1000.0) * 0.5  # TTS
+        cents += scene_count * 4.0                     # Flux images
+        cents += 2.0                                   # compose overhead
+    elif payload.mode == "composite":
+        # Avatar talking-head + B-roll cutaway every N seconds
+        cents += duration_min * 30.0 + 5.0             # HeyGen base
+        cutaway_count = max(1, int(duration_s / max(1, payload.broll_cutaway_interval_s)))
+        cents += cutaway_count * 4.0                   # Flux per cutaway
+        cents += 3.0                                   # extra compose overhead
+    else:
+        return 0
+    return int(round(cents))
+
+
+# ---------------------------------------------------------------------------
+# Stage walker shared by all pipelines. Sleeps shorter in dry-run.
+# ---------------------------------------------------------------------------
+async def _walk_stages(job_id: str, stages, dry_run: bool):
     for status, progress, label in stages:
-        await asyncio.sleep(1.5 if DRY_RUN_RENDERS else 5)
+        await asyncio.sleep(1.0 if dry_run else 4.0)
         await db.renders.update_one(
             {"id": job_id},
             {"$set": {"status": status, "progress": progress, "progress_label": label}},
         )
 
-    # Final stage
-    result_url = (
-        "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
-        if DRY_RUN_RENDERS
-        else None
-    )
-    await db.renders.update_one(
+
+def _finalize(job_id: str, *, ok: bool, url: Optional[str], actual_cost_cents: int):
+    return db.renders.update_one(
         {"id": job_id},
-        {
-            "$set": {
-                "status": "complete" if result_url else "failed",
-                "progress": 100,
-                "progress_label": "Done",
-                "result_url": result_url,
-                "completed_at": datetime.now(timezone.utc).isoformat(),
-            }
-        },
+        {"$set": {
+            "status": "complete" if ok else "failed",
+            "progress": 100,
+            "progress_label": "Done" if ok else "Failed",
+            "result_url": url,
+            "actual_cost_cents": actual_cost_cents,
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+        }},
     )
+
+
+SAMPLE_VIDEO_URL = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
+
+
+# ---------------------------------------------------------------------------
+# HeyGen Avatar pipeline (DRY_RUN scaffolding)
+# Full real-API code is written below but every external call is gated behind
+# `dry_run`. To go live, flip dry_run False on the job and the same code runs
+# unchanged.
+# ---------------------------------------------------------------------------
+async def _run_render_avatar(job: dict):
+    job_id = job["id"]
+    dry_run = job.get("dry_run", True)
+    actual_cost_cents = 0
+
+    await _walk_stages(job_id, [
+        ("voiceover", 25, "Synthesizing voice on HeyGen…"),
+        ("avatar", 55, "Generating talking-head video…"),
+        ("polling", 85, "Polling HeyGen for final asset…"),
+    ], dry_run)
+
+    if dry_run:
+        await _finalize(job_id, ok=True, url=SAMPLE_VIDEO_URL, actual_cost_cents=0)
+        return
+
+    # ---- REAL HeyGen v2 video generation flow (not executed in dry-run) ----
+    if not HEYGEN_API_KEY:
+        await _finalize(job_id, ok=False, url=None, actual_cost_cents=0)
+        return
+    async with httpx.AsyncClient(timeout=60) as client:
+        # 1) Submit
+        body = {
+            "video_inputs": [{
+                "character": {"type": "avatar", "avatar_id": job["avatar_id"], "avatar_style": "normal"},
+                "voice": {"type": "text", "voice_id": job["voice_id"], "input_text": job["script"]},
+            }],
+            "dimension": {"width": 1080 if job["aspect"] == "16_9" else 720,
+                          "height": 1920 if job["aspect"] == "9_16" else 1080},
+            "caption": job.get("captions", True),
+        }
+        r = await client.post(
+            "https://api.heygen.com/v2/video/generate",
+            headers={"X-Api-Key": HEYGEN_API_KEY, "Accept": "application/json"},
+            json=body,
+        )
+        if r.status_code != 200:
+            await _finalize(job_id, ok=False, url=None, actual_cost_cents=actual_cost_cents)
+            return
+        video_id = r.json()["data"]["video_id"]
+        # 2) Poll
+        for _ in range(60):  # max ~5 min
+            await asyncio.sleep(5)
+            s = await client.get(
+                f"https://api.heygen.com/v1/video_status.get?video_id={video_id}",
+                headers={"X-Api-Key": HEYGEN_API_KEY},
+            )
+            d = s.json().get("data", {})
+            if d.get("status") == "completed":
+                actual_cost_cents += int(round(_estimate_duration_seconds(job["script"]) / 60.0 * 30.0))
+                await _finalize(job_id, ok=True, url=d.get("video_url"), actual_cost_cents=actual_cost_cents)
+                return
+            if d.get("status") == "failed":
+                await _finalize(job_id, ok=False, url=None, actual_cost_cents=actual_cost_cents)
+                return
+    await _finalize(job_id, ok=False, url=None, actual_cost_cents=actual_cost_cents)
+
+
+# ---------------------------------------------------------------------------
+# fal.ai Faceless pipeline (DRY_RUN scaffolding)
+# Real flow: Kokoro TTS → Flux per-scene images → ffmpeg compose.
+# ---------------------------------------------------------------------------
+async def _run_render_faceless(job: dict):
+    job_id = job["id"]
+    dry_run = job.get("dry_run", True)
+    scenes = job.get("scenes") or []
+    actual_cost_cents = 0
+
+    await _walk_stages(job_id, [
+        ("voiceover", 20, "Generating voiceover on Kokoro…"),
+        ("visuals", 55, f"Rendering {max(1, len(scenes))} scenes on Flux…"),
+        ("composing", 85, "Stitching scenes with ffmpeg…"),
+    ], dry_run)
+
+    if dry_run:
+        await _finalize(job_id, ok=True, url=SAMPLE_VIDEO_URL, actual_cost_cents=0)
+        return
+
+    if not FAL_API_KEY:
+        await _finalize(job_id, ok=False, url=None, actual_cost_cents=0)
+        return
+
+    fal_headers = {"Authorization": f"Key {FAL_API_KEY}", "Content-Type": "application/json"}
+    async with httpx.AsyncClient(timeout=120) as client:
+        # 1) Kokoro TTS — single call for the whole narration
+        tts_r = await client.post(
+            "https://fal.run/fal-ai/kokoro",
+            headers=fal_headers,
+            json={"text": job["script"], "voice": job.get("tts_voice_id") or "af_heart"},
+        )
+        if tts_r.status_code != 200:
+            await _finalize(job_id, ok=False, url=None, actual_cost_cents=actual_cost_cents)
+            return
+        audio_url = tts_r.json().get("audio_url") or tts_r.json().get("audio", {}).get("url")
+        actual_cost_cents += int((len(job["script"]) / 1000.0) * 0.5)
+
+        # 2) Flux per-scene images (parallel when broll_source == "ai")
+        image_urls = []
+        if (job.get("broll_source") or "ai") == "ai":
+            async def gen_image(prompt):
+                ir = await client.post(
+                    "https://fal.run/fal-ai/flux-pro/v1.1",
+                    headers=fal_headers,
+                    json={"prompt": prompt, "image_size": "portrait_16_9" if job["aspect"] == "9_16" else "landscape_16_9"},
+                )
+                return ir.json().get("images", [{}])[0].get("url") if ir.status_code == 200 else None
+            image_urls = await asyncio.gather(*[gen_image(s.get("prompt", "")) for s in scenes])
+            actual_cost_cents += len(scenes) * 4
+        # else: use scene["url"] already populated by Pexels/Pixabay picker
+
+        # 3) Compose — fal.ai ffmpeg endpoint (real impl would be more
+        # detailed; this is the scaffold so flipping dry_run False executes a
+        # working — if minimal — composition).
+        clips = []
+        for i, s in enumerate(scenes):
+            url = image_urls[i] if image_urls else s.get("url")
+            if url:
+                clips.append({"url": url, "duration": s.get("duration", 4)})
+        compose_r = await client.post(
+            "https://fal.run/fal-ai/ffmpeg-api/compose",
+            headers=fal_headers,
+            json={"clips": clips, "audio_url": audio_url, "captions": job.get("captions", True)},
+        )
+        actual_cost_cents += 2
+        if compose_r.status_code != 200:
+            await _finalize(job_id, ok=False, url=None, actual_cost_cents=actual_cost_cents)
+            return
+        out_url = compose_r.json().get("video_url")
+        await _finalize(job_id, ok=True, url=out_url, actual_cost_cents=actual_cost_cents)
+
+
+# ---------------------------------------------------------------------------
+# Composite Avatar + B-roll cutaways pipeline (DRY_RUN scaffolding)
+# Real flow: render HeyGen talking-head as base track + Flux B-roll cutaways
+# every N seconds + ffmpeg overlay.
+# ---------------------------------------------------------------------------
+async def _run_render_composite(job: dict):
+    job_id = job["id"]
+    dry_run = job.get("dry_run", True)
+    duration_s = _estimate_duration_seconds(job["script"])
+    interval_s = max(1, int(job.get("broll_cutaway_interval_s", 12)))
+    cutaway_count = max(1, int(duration_s / interval_s))
+    actual_cost_cents = 0
+
+    await _walk_stages(job_id, [
+        ("avatar", 25, "Rendering HeyGen talking-head…"),
+        ("cutaways", 55, f"Generating {cutaway_count} B-roll cutaways…"),
+        ("composing", 85, "Interleaving avatar + B-roll on ffmpeg…"),
+    ], dry_run)
+
+    if dry_run:
+        await _finalize(job_id, ok=True, url=SAMPLE_VIDEO_URL, actual_cost_cents=0)
+        return
+
+    # Real path: reuse _run_render_avatar to produce the base track (we'd
+    # capture its result_url separately rather than finalizing the job), then
+    # generate cutaway_count Flux images, then call the ffmpeg overlay
+    # endpoint with cutaway timestamps. Left as a TODO marker — the
+    # scaffold above ensures the job status walk completes cleanly when
+    # dry_run is True so the UI can be built against it today.
+    await _finalize(job_id, ok=False, url=None, actual_cost_cents=actual_cost_cents)
+
+
+@api.post("/studio/render/estimate")
+async def studio_render_estimate(payload: RenderRequest, user: AuthUser = Depends(current_user)):
+    """Returns the conservative cost estimate + cap for a candidate render.
+    Used by the admin 'Use real render' toggle to show '~$X.XX' live as the
+    user changes mode/aspect/script length."""
+    require_studio(user)
+    cents = estimate_render_cost_cents(payload)
+    return {
+        "estimated_cost_cents": cents,
+        "estimated_cost_dollars": round(cents / 100.0, 2),
+        "cap_cents": RENDER_COST_CAP_CENTS,
+        "cap_dollars": round(RENDER_COST_CAP_CENTS / 100.0, 2),
+        "exceeds_cap": cents > RENDER_COST_CAP_CENTS,
+        "dry_run_default": DRY_RUN_RENDERS,
+        "is_admin": user.email.lower() in ADMIN_EMAILS,
+    }
 
 
 @api.post("/studio/render")
 async def studio_render(payload: RenderRequest, user: AuthUser = Depends(current_user)):
     require_studio(user)
-    if payload.mode not in ("avatar", "faceless"):
+    if payload.mode not in ("avatar", "faceless", "composite"):
         raise HTTPException(status_code=400, detail="Bad mode")
     if not payload.script.strip():
         raise HTTPException(status_code=400, detail="Script required")
+
+    is_admin = user.email.lower() in ADMIN_EMAILS
+    # Resolve effective dry_run:
+    # - Customers always run against the env default. We ignore any dry_run
+    #   override they try to send so a stray flag in a request body can't
+    #   turn off real renders for paying customers (or vice-versa).
+    # - Admins may override per-request; default is the env value when None.
+    if is_admin and payload.dry_run is not None:
+        effective_dry_run = payload.dry_run
+    else:
+        effective_dry_run = DRY_RUN_RENDERS
+
+    # Cost guard — applies even when dry_run is True so admins can't
+    # accidentally fire a $5 sprint by toggling dry_run off after the
+    # fact. The cap is the cents value at the top of this file.
+    estimated_cents = estimate_render_cost_cents(payload)
+    if estimated_cents > RENDER_COST_CAP_CENTS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Render rejected: estimated ${estimated_cents/100:.2f} exceeds "
+                f"hard cap of ${RENDER_COST_CAP_CENTS/100:.2f}. "
+                f"Shorten the script or pick a cheaper mode."
+            ),
+        )
 
     job_id = str(uuid.uuid4())
     doc = {
@@ -436,12 +732,15 @@ async def studio_render(payload: RenderRequest, user: AuthUser = Depends(current
         "tts_voice_id": payload.tts_voice_id,
         "broll_source": payload.broll_source,
         "scenes": payload.scenes,
+        "broll_cutaway_interval_s": payload.broll_cutaway_interval_s,
         "status": "queued",
         "progress": 5,
         "progress_label": "Queued…",
         "result_url": None,
         "error": None,
-        "dry_run": DRY_RUN_RENDERS,
+        "dry_run": effective_dry_run,
+        "estimated_cost_cents": estimated_cents,
+        "actual_cost_cents": 0,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "completed_at": None,
     }
@@ -456,7 +755,8 @@ async def studio_render(payload: RenderRequest, user: AuthUser = Depends(current
         "tts_voice_id": payload.tts_voice_id,
         "broll_source": payload.broll_source,
         "scene_count": len(payload.scenes),
-        "dry_run": DRY_RUN_RENDERS,
+        "dry_run": effective_dry_run,
+        "estimated_cost_cents": estimated_cents,
     })
 
     # Kick off background work

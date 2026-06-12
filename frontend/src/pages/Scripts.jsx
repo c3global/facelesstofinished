@@ -100,6 +100,7 @@ export default function Scripts() {
   const [savedAngles, setSavedAngles] = useState([]);
   const [showSaved, setShowSaved] = useState(false);
   const [toast, setToast] = useState("");
+  const [promotingIndex, setPromotingIndex] = useState(null);
 
   const pollRef = useRef(null);
   const elapsedRef = useRef(null);
@@ -381,6 +382,62 @@ export default function Scripts() {
     setMode(MODES.LONG);
     setShowSaved(false);
     kickoffGeneration(saved.angle, saved.topic);
+  };
+
+  // ---- Promote one Sprint variant to a full single-short generation ----
+  // Reuses the existing /scripts/shorts pipeline with sprint:false and a
+  // synthesized chosen_angle pulled out of the variant. No new API cost
+  // pattern — same per-short token spend as a normal single-Short generation.
+  const promoteVariant = async (variant) => {
+    if (!output || output.mode !== "sprint") return;
+    setErr("");
+    setPromotingIndex(variant.index);
+    const variantPlatform = output.platform || platform;
+    const variantTopic = output.topic;
+    const chosenAngle = {
+      name: variant.name,
+      framing: variant.angle || `Sprint variant ${variant.index}`,
+      category: variant.category || "curiosity",
+    };
+    try {
+      const r = await apiClient.post("/scripts/shorts", {
+        topic: variantTopic,
+        platform: variantPlatform,
+        chosen_angle: chosenAngle,
+        sprint: false,
+      });
+      // Switch the page into the GENERATING view so the progress bar shows.
+      setPickedAngle(chosenAngle);
+      setMode(MODES.SHORTS);
+      setPlatform(variantPlatform);
+      setSprint(false);
+      setMultiPlatform(false);
+      setMultiJobs([]);
+      setOutput(null);
+      setStep(STEPS.GENERATING);
+      pollJob(r.data.id, (final) => {
+        setPromotingIndex(null);
+        if (final.status === "complete") {
+          setOutput(final);
+          setStep(STEPS.RESULT);
+          loadHistory();
+          setTimeout(
+            () =>
+              document.getElementById("scripts-output")?.scrollIntoView({
+                behavior: "smooth",
+                block: "start",
+              }),
+            100
+          );
+        } else {
+          setErr(final.error || "Promotion failed. Try again.");
+          setStep(STEPS.RESULT);
+        }
+      });
+    } catch (e) {
+      setPromotingIndex(null);
+      setErr(e?.response?.data?.detail || "Could not promote variant.");
+    }
   };
 
   // ---- Cut into a Short ----
@@ -931,6 +988,8 @@ export default function Scripts() {
             <SprintResult
               variants={sprintVariants}
               platform={output.platform || platform}
+              onPromote={promoteVariant}
+              promotingIndex={promotingIndex}
             />
           ) : output.mode === "shorts" ? (
             <div className="shorts-layout" data-testid="shorts-layout">

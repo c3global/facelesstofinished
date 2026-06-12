@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { UserCircle2, Mic, Ratio, Captions, Film, ChevronDown, Play, Trash2, Sparkles, Wand2, Loader2 } from "lucide-react";
-import { apiClient } from "../App";
+import { apiClient, useAuth } from "../App";
 import {
   AvatarPicker,
   VoicePicker,
@@ -9,6 +9,7 @@ import {
   CaptionsPicker,
   StockPicker,
 } from "../components/Pickers";
+import AdminRenderControl, { ConfirmRealRenderModal } from "../components/AdminRenderControl";
 
 const MODES = { AVATAR: "avatar", FACELESS: "faceless" };
 const MAX_SCENES = 12;
@@ -131,6 +132,12 @@ export default function Studio() {
   const [renderErr, setRenderErr] = useState("");
   const pollRef = useRef(null);
 
+  // Admin-only state — never persisted: defaults OFF every page load.
+  const { user } = useAuth();
+  const isAdmin = !!user?.isAdmin;
+  const [useReal, setUseReal] = useState(false);
+  const [confirmReal, setConfirmReal] = useState(null);  // {dollars} when open
+
   // Modal state
   const [modal, setModal] = useState(null);
   const [stockModal, setStockModal] = useState({ open: false, idx: -1 });
@@ -192,31 +199,60 @@ export default function Studio() {
     return true;
   }, [script, mode, avatar, voice, ttsVoice, scenes]);
 
+  // Build a payload from the current form state. Reused by the live cost
+  // estimate request and the actual /studio/render request below.
+  const buildPayload = () => ({
+    mode,
+    script,
+    aspect,
+    captions,
+    avatar_id: mode === MODES.AVATAR ? avatar?.id : null,
+    voice_id: mode === MODES.AVATAR ? voice?.id : null,
+    tts_voice_id: mode === MODES.FACELESS ? ttsVoice?.id : null,
+    broll_source: mode === MODES.FACELESS ? brollSource : null,
+    scenes: mode === MODES.FACELESS ? scenes.map((s) => ({
+      source: s.source,
+      prompt: s.prompt,
+      video_url: s.pick?.video_url || null,
+      thumb: s.pick?.thumb || null,
+    })) : [],
+  });
+
   // ---- Generate ----
-  const generate = async () => {
+  // Admin + useReal flow: fetch a fresh estimate, open the confirm modal,
+  // then fire the render with `dry_run: false` after the modal's 1s-delayed
+  // confirm button is clicked. Customers (and admins with useReal=false)
+  // simply fire the render — the backend handles the rest with the env
+  // default dry_run.
+  const fireRender = async (dryRunOverride) => {
     setRenderErr("");
     try {
-      const body = {
-        mode,
-        script,
-        aspect,
-        captions,
-        avatar_id: mode === MODES.AVATAR ? avatar?.id : null,
-        voice_id: mode === MODES.AVATAR ? voice?.id : null,
-        tts_voice_id: mode === MODES.FACELESS ? ttsVoice?.id : null,
-        broll_source: mode === MODES.FACELESS ? brollSource : null,
-        scenes: mode === MODES.FACELESS ? scenes.map((s) => ({
-          source: s.source,
-          prompt: s.prompt,
-          video_url: s.pick?.video_url || null,
-          thumb: s.pick?.thumb || null,
-        })) : [],
-      };
+      const body = buildPayload();
+      if (dryRunOverride !== undefined) body.dry_run = dryRunOverride;
       const r = await apiClient.post("/studio/render", body);
       setRender(r.data);
       pollStatus(r.data.id);
     } catch (e) {
       setRenderErr(e?.response?.data?.detail || "Could not start render. Try again.");
+    }
+  };
+
+  const generate = async () => {
+    if (!isAdmin || !useReal) {
+      // Customer path — backend handles dry_run from env default.
+      fireRender(undefined);
+      return;
+    }
+    // Admin "Use real render" path — re-fetch estimate then open confirm modal.
+    try {
+      const estR = await apiClient.post("/studio/render/estimate", buildPayload());
+      if (estR.data.exceeds_cap) {
+        setRenderErr(`Estimated $${estR.data.estimated_cost_dollars.toFixed(2)} exceeds the $${estR.data.cap_dollars.toFixed(2)} hard cap.`);
+        return;
+      }
+      setConfirmReal({ dollars: estR.data.estimated_cost_dollars.toFixed(2) });
+    } catch (e) {
+      setRenderErr(e?.response?.data?.detail || "Could not estimate cost.");
     }
   };
 
@@ -557,6 +593,15 @@ export default function Studio() {
         </div>
       )}
 
+      {/* Admin-only: dry-run override + live cost estimate */}
+      {isAdmin && (
+        <AdminRenderControl
+          payload={buildPayload()}
+          useReal={useReal}
+          setUseReal={setUseReal}
+        />
+      )}
+
       {/* Generate */}
       <div className="cta-block">
         <button
@@ -565,7 +610,7 @@ export default function Studio() {
           disabled={!canGenerate || (render && render.status !== "complete" && render.status !== "failed")}
           onClick={generate}
         >
-          Render your video
+          {isAdmin && useReal ? "Render (real)" : "Render your video"}
         </button>
         {!canGenerate && (
           <p className="cta-hint" data-testid="cta-hint">
@@ -669,6 +714,18 @@ export default function Studio() {
           if (stockModal.idx >= 0) setScenePick(stockModal.idx, r);
         }}
       />
+
+      {/* Admin: confirm-real-render modal */}
+      {confirmReal && (
+        <ConfirmRealRenderModal
+          estimateDollars={confirmReal.dollars}
+          onCancel={() => setConfirmReal(null)}
+          onConfirm={() => {
+            setConfirmReal(null);
+            fireRender(false);
+          }}
+        />
+      )}
     </main>
   );
 }
