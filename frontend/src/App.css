@@ -47,6 +47,31 @@
   letter-spacing: 0.16em;
   text-transform: uppercase;
 }
+
+/* ---------- Site nav ---------- */
+.site-nav {
+  display: inline-flex; align-items: center; gap: 2px;
+  margin-left: 20px;
+  padding-left: 20px;
+  border-left: 1px solid var(--border-soft);
+}
+.nav-link {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 12px;
+  border-radius: 8px;
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 13px;
+  text-decoration: none;
+  transition: color .15s, background .15s;
+}
+.nav-link:hover { color: var(--text); background: var(--surface-hover); }
+.nav-link.is-active { color: var(--text); background: var(--surface-hover); }
+.nav-link.is-active svg { color: var(--accent); }
+
+/* ---------- Spin animation ---------- */
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+.spin { animation: spin 1s linear infinite; }
 .header-meta { display: inline-flex; align-items: center; gap: 10px; }
 .header-email {
   font-size: 13px;
@@ -941,4 +966,121 @@
   .modal-body { padding: 16px; }
   .site-header { padding: 12px 16px; }
   .chip-label { max-width: 140px; }
+  .site-nav { margin-left: 12px; padding-left: 12px; }
 }
+
+/* ---------- Generate-prompts button (Studio) ---------- */
+.scene-section-actions {
+  display: inline-flex; align-items: center; gap: 14px;
+}
+.generate-prompts-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--warning);
+  background: var(--warning-soft);
+  border: 1px solid var(--warning-soft);
+  border-radius: 999px;
+  transition: filter .15s, transform .08s;
+}
+.generate-prompts-btn:hover:not(:disabled) {
+  filter: brightness(1.15);
+  border-color: var(--warning);
+}
+.generate-prompts-btn:active:not(:disabled) { transform: translateY(1px); }
+
+/* ---------- Scripts page ---------- */
+.settings-grid {
+  display: flex; flex-direction: column; gap: 10px;
+}
+.length-grid {
+  display: grid; gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+.length-card {
+  display: flex; flex-direction: column; gap: 4px;
+  text-align: left;
+  padding: 14px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  transition: border-color .15s, background .15s;
+}
+.length-card:hover { border-color: var(--border); background: var(--surface-hover); }
+.length-card.is-selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+.length-name {
+  font-weight: 600; font-size: 14px;
+  color: var(--text);
+}
+.length-desc {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* Scripts output */
+.scripts-output {
+  display: flex; flex-direction: column; gap: 14px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-soft);
+}
+.scripts-output-head {
+  display: flex; align-items: flex-end; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap;
+}
+.scripts-output-title {
+  font-weight: 700; font-size: 22px;
+  letter-spacing: -0.015em;
+  margin: 4px 0 0;
+  color: var(--text);
+}
+.scripts-output-actions {
+  display: inline-flex; gap: 8px;
+}
+
+.section-card {
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.section-card-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--surface-soft);
+}
+.section-card-title {
+  font-weight: 600; font-size: 14px;
+  letter-spacing: 0.04em;
+  margin: 0;
+  color: var(--text);
+}
+.section-card-body {
+  margin: 0;
+  padding: 18px 20px;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 520px;
+  overflow-y: auto;
+}
+.copy-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  transition: color .15s, border-color .15s, background .15s;
+}
+.copy-btn:hover { color: var(--text); border-color: var(--border); background: var(--surface); }

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, createContext, useContext } fr
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import axios from "axios";
 import Studio from "./pages/Studio";
+import Scripts from "./pages/Scripts";
 import Login from "./pages/Login";
 import Header from "./components/Header";
 import "./App.css";
@@ -11,6 +12,14 @@ const TOKEN_KEY = "f48_studio_token";
 const THEME_KEY = "f48_studio_theme";
 
 axios.defaults.timeout = 30000;
+
+// Script generation endpoints can take 60-120s for long-form Claude calls
+export const longApiClient = axios.create({ baseURL: API, timeout: 180000 });
+longApiClient.interceptors.request.use((cfg) => {
+  const t = localStorage.getItem(TOKEN_KEY);
+  if (t) cfg.headers.Authorization = `Bearer ${t}`;
+  return cfg;
+});
 
 const AuthCtx = createContext(null);
 const ThemeCtx = createContext(null);
@@ -89,6 +98,13 @@ function AuthProvider({ children }) {
   );
 }
 
+function RequireAuth({ children }) {
+  const { user, loading } = useAuth();
+  if (loading) return <div className="page-loading" data-testid="page-loading">Loading…</div>;
+  if (!user) return <Navigate to="/login" replace />;
+  return children;
+}
+
 function RequireStudio({ children }) {
   const { user, loading } = useAuth();
   if (loading) return <div className="page-loading" data-testid="page-loading">Loading…</div>;
@@ -107,8 +123,9 @@ export default function App() {
           <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/studio" element={<RequireStudio><Studio /></RequireStudio>} />
-            <Route path="/" element={<Navigate to="/studio" replace />} />
-            <Route path="*" element={<Navigate to="/studio" replace />} />
+            <Route path="/scripts" element={<RequireAuth><Scripts /></RequireAuth>} />
+            <Route path="/" element={<Navigate to="/scripts" replace />} />
+            <Route path="*" element={<Navigate to="/scripts" replace />} />
           </Routes>
         </BrowserRouter>
       </AuthProvider>

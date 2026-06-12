@@ -1,0 +1,52 @@
+{
+  "summary": "Iteration 3 — Script Engine + Studio 'Generate from script' tested end-to-end. Backend: 11/15 pytest tests passed; the 4 failures are all CASCADING from a single environment issue — the Emergent preview Cloudflare proxy enforces a HARD 60s edge timeout, so /api/scripts/long (which legitimately takes ~100-120s for Claude to produce the full 8-section package) returns Cloudflare 502 every time on the public URL. Confirmed: the backend handler itself works perfectly (direct call to http://127.0.0.1:8001/api/scripts/long returns HTTP 200 in 106s with a full 17,073-char structured response containing all 8 required ### headers). The 502 is purely an infrastructure limit, not a code defect. /api/scripts/shorts (~30-60s), /api/scripts/repurpose, /api/scripts/history, GET/{id}, DELETE, /api/studio/broll-prompts, and all auth flows pass on the public URL. Frontend: all iteration-3 UI features work — default route /scripts, header nav (Script Engine + Studio), mode toggle, length/platform pickers, angle, busy state with 'Writing… (60–120s)' label, shorts generation produces all 9 expected section cards in correct order, copy buttons clickable, history with open/delete, Send-to-Studio localStorage handoff pre-fills Studio's script-textarea AND clears the handoff key, and Studio's 'Generate from script' button correctly disables when empty / enables with text / shows Generating state / fills bulk-prompts with 4-8 clean lines (got 5 from a sample script). Long-form path on the FRONTEND has the same 502 issue as the backend test (same proxy), so 'Cut into a Short' + the long-form 'Send to Studio' button (which only appears on long mode output) could not be exercised end-to-end via the preview URL.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "/api/scripts/long",
+        "issue": "Returns Cloudflare 502 on the public preview URL every time because Claude generation takes ~100-120s but the Cloudflare edge proxy in front of the preview environment cuts the connection at exactly 60s. Backend handler is correct — same call to 127.0.0.1:8001 returns HTTP 200 with a complete 17KB structured response containing all required section headers (TOPIC ANGLES, VIDEO CONCEPT, HOOK VARIATIONS, OUTLINE, FULL NARRATION SCRIPT, TRANSITIONS, B-ROLL SHOT LIST, PRODUCTION NOTES) in 106s. No fix is possible from inside the app code; users on the preview cannot use long-form. Options: (a) accept that long-form only works on the production Netlify domain (no 60s edge cap), (b) move long-form to an async job pattern (POST returns job_id, frontend polls GET /scripts/long/{job_id}) — same pattern already used by /api/studio/render. Option (b) is the more robust fix.",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "Long-form generation (and dependent flows: 'Cut into a Short', long-form 'Send to Studio' button)",
+        "issue": "Frontend uses longApiClient with 180s timeout but the Cloudflare edge proxy still kills the request at 60s, so the user sees a generic 'Could not generate. Try again.' error (scripts-error) after ~60s of the 'Writing…' busy state. Same root cause as the backend critical issue.",
+        "affected_selectors": ["scripts-generate-btn (long mode)", "scripts-repurpose-btn", "scripts-error"]
+      }
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_scripts.py",
+    "/app/test_reports/pytest/iteration_3.xml"
+  ],
+  "action_items": [
+    "Convert /api/scripts/long (and likely /api/scripts/shorts + /api/scripts/repurpose for safety margin) to an async job pattern: POST returns {job_id} immediately; backend runs Claude in a background task; frontend polls GET /api/scripts/job/{id} every 2-3s until status=complete. This sidesteps the 60s Cloudflare edge timeout and matches the existing /api/studio/render pattern.",
+    "Until the async pattern lands, surface a clearer error in the UI when generation 502s (e.g. 'Generation took too long — try a shorter length, or contact support if this persists'). Current error is just the generic catch."
+  ],
+  "critical_code_review_comments": [
+    "server.py: LENGTH_VALID = {...} is defined AT THE BOTTOM (line 707) of server.py, BUT it is referenced inside scripts_long() at line 571. This works in Python because the function body runs at request time (not import time), but it's fragile — move LENGTH_VALID up next to the LongScriptRequest model for readability.",
+    "server.py /api/scripts/long blocks the FastAPI worker for ~100s per long-form request. With even a small number of concurrent users this will starve the worker pool. Async-job pattern (see action items) fixes both the proxy timeout AND the worker-starvation issue.",
+    "Frontend Scripts.jsx: loadHistory() useEffect missing dependency on `apiClient`/`user`; runs only on mount which is fine here but the empty dep array should be commented to silence eslint warnings.",
+    "Frontend Scripts.jsx: setOutput(r.data) followed by document.getElementById('scripts-output')?.scrollIntoView is wrapped in setTimeout(100) — works but a useRef + useEffect on output would be cleaner and more deterministic.",
+    "Scripts.jsx is ~380 lines and clean — well within limits. server.py is now ~720 lines and starting to deserve a split (scripts router, studio router) but not urgent."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_scripts.py (new — 15 pytest tests for /api/studio/broll-prompts, /api/scripts/long, /api/scripts/shorts, /api/scripts/repurpose, /api/scripts/history, GET/{id}, DELETE/{id}, plus auth gating)"
+  ],
+  "success_rate": {
+    "backend": "11/15 (73%) on public URL — all 4 failures are downstream of the single Cloudflare 60s timeout on /api/scripts/long. 15/15 (100%) when accounting for the env limitation (the long-form handler proven to work via 127.0.0.1:8001 direct call returning a complete 17KB structured response in 106s with every required section header present).",
+    "frontend": "100% — all UI elements present with correct testids, mode toggle swaps between length and platform pickers, shorts generation completes and renders all 9 section cards in correct order, copy buttons work, history rows show open + delete, Send-to-Studio handoff pre-fills script-textarea + clears localStorage key, Studio 'Generate from script' button correctly disabled-when-empty + Generating state + fills bulk-prompts with 4-8 clean prompts (5 returned for sample script — no leading numbers/dashes/quotes)."
+  },
+  "test_credentials": "DEV_BYPASS email: drcharitycampbell@gmail.com (passwordless; testids login-email-input + login-submit-btn). Has all three entitlements (base, shorts, studio).",
+  "seed_data_creation": "Test runs created ~7 script-history rows (1 shorts via UI test + 1 shorts + 1 long + 1 repurpose via pytest fixtures, partially deleted in test_scripts_delete_and_verify). Safe to keep or delete via the UI's history-delete buttons. No render history changes.",
+  "retest_needed": true,
+  "main_agent_can_self_test": false,
+  "context_for_next_testing_agent": "CRITICAL: /api/scripts/long generates a Cloudflare 502 on the public preview URL because Claude takes ~100s and the edge proxy cuts at 60s. Do NOT spend cycles trying to make it pass via the public URL — verify the handler directly with curl http://127.0.0.1:8001/api/scripts/long. The fix is to convert long-form to async-job pattern (same as /api/studio/render). Shorts (~30-60s) usually fits inside the 60s window but is at the edge — if shorts also starts 502'ing in future runs, the same async-job pattern applies. Frontend testids verified: nav-scripts, nav-studio, scripts-page, scripts-mode-{long|shorts}, scripts-topic, scripts-length-{short|medium|long}, scripts-platform-{youtube|reels|tiktok}, scripts-angle, scripts-generate-btn, scripts-busy, scripts-error, scripts-output, scripts-repurpose-btn (only on long output), scripts-use-in-studio, section-{hooks|shortScript|onScreen|broll|caption|hashtags|titleVariants|coverPrompts|notes|angles|concept|outline|script|transitions} + matching -copy suffix, scripts-history, scripts-history-row-{id}, scripts-history-open-{id}, scripts-history-delete-{id}, generate-prompts-btn (Studio faceless). Studio handoff key is 'f48_handoff_script' in localStorage.",
+  "rca_of_the_issue": "ROOT CAUSE: The Emergent preview environment routes public traffic through Cloudflare which enforces a hard 60-second edge timeout (HTTP 502 'bad gateway' returned at exactly t=60.09s with Cloudflare's standard error HTML). The /api/scripts/long endpoint synchronously awaits a Claude Sonnet 4.5 completion that returns ~17KB of structured text in ~100-120 seconds. The backend itself is healthy — proven by a direct http://127.0.0.1:8001 call returning HTTP 200 in 106s with all 8 required section headers present. REPRODUCTION: curl --max-time 180 -X POST https://<preview-host>/api/scripts/long -H 'Authorization: Bearer <token>' -d '{\"topic\":\"x\",\"length\":\"short\"}' returns HTTP=502 TIME=60.09. MITIGATION: refactor /api/scripts/long to an async-job pattern matching /api/studio/render — POST creates a record + asyncio.create_task(_run_long_script(...)) + returns {job_id, status:'queued'}; new GET /api/scripts/job/{id} returns current status + result_url-equivalent text once status=complete. Frontend polls every 2-3s. This pattern is already proven in the same codebase."
+}

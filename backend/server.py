@@ -29,6 +29,12 @@ from fastapi.responses import JSONResponse
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field
 
+from prompts import (
+    build_long_system_prompt,
+    build_shorts_system_prompt,
+    BROLL_PROMPTS_SYSTEM,
+)
+
 # ---------------------------------------------------------------------------
 # Setup
 # ---------------------------------------------------------------------------
@@ -488,6 +494,217 @@ async def studio_render_delete(job_id: str, user: AuthUser = Depends(current_use
     await db.renders.delete_one({"id": job_id, "user_email": user.email})
     await _log_activity("studio_render_deleted", user.email, {"job_id": job_id})
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Script Engine — Claude via Emergent Universal LLM Key
+# ---------------------------------------------------------------------------
+CLAUDE_MODEL = "claude-sonnet-4-5-20250929"
+
+
+async def _claude_complete(system_prompt: str, user_message: str, session_id: str | None = None) -> str:
+    """Single-shot Claude completion using the Emergent universal LLM key."""
+    if not EMERGENT_LLM_KEY:
+        raise HTTPException(status_code=500, detail="LLM key missing")
+    from emergentintegrations.llm.chat import LlmChat, UserMessage  # lazy import
+    chat = (
+        LlmChat(
+            api_key=EMERGENT_LLM_KEY,
+            session_id=session_id or str(uuid.uuid4()),
+            system_message=system_prompt,
+        )
+        .with_model("anthropic", CLAUDE_MODEL)
+    )
+    try:
+        return await chat.send_message(UserMessage(text=user_message))
+    except Exception as e:  # noqa: BLE001 — surface a clean 502 to the client
+        raise HTTPException(status_code=502, detail=f"LLM error: {e}")
+
+
+# --- Studio helper: generate B-roll prompts from a script -------------------
+
+class BrollPromptsRequest(BaseModel):
+    script: str
+
+
+@api.post("/studio/broll-prompts")
+async def studio_broll_prompts(payload: BrollPromptsRequest, user: AuthUser = Depends(current_user)):
+    require_studio(user)
+    if not payload.script.strip():
+        raise HTTPException(status_code=400, detail="Script required")
+
+    text = await _claude_complete(
+        BROLL_PROMPTS_SYSTEM,
+        f"Script:\n\n{payload.script.strip()}",
+    )
+    # Parse: one per line, drop blanks, strip bullets/quotes/numbering
+    out = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        # Strip leading "1.", "-", "*", numerals, and surrounding quotes
+        line = line.lstrip("0123456789. -*•").strip().strip('"\u201c\u201d').strip()
+        if line:
+            out.append(line)
+    return {"prompts": out[:12]}
+
+
+# --- Script Engine: long-form -----------------------------------------------
+
+class LongScriptRequest(BaseModel):
+    topic: str
+    length: str = "medium"  # "short" | "medium" | "long"
+    angle: Optional[str] = None
+
+
+def _require_entitlement(user: AuthUser, ent: str) -> None:
+    if ent not in user.entitlements:
+        raise HTTPException(status_code=403, detail=f"{ent} entitlement required")
+
+
+@api.post("/scripts/long")
+async def scripts_long(payload: LongScriptRequest, user: AuthUser = Depends(current_user)):
+    _require_entitlement(user, "base")
+    if not payload.topic.strip():
+        raise HTTPException(status_code=400, detail="Topic required")
+    if payload.length not in LENGTH_VALID:
+        raise HTTPException(status_code=400, detail="Invalid length")
+
+    system = build_long_system_prompt(payload.length)
+    user_msg = f"Generate a complete faceless YouTube long-form script package for this topic: {payload.topic.strip()}"
+    if payload.angle:
+        user_msg += f"\n\nANGLE BIAS: {payload.angle}. Commit fully to this angle."
+
+    text = await _claude_complete(system, user_msg)
+
+    # Persist for history
+    rec = {
+        "id": str(uuid.uuid4()),
+        "user_email": user.email,
+        "mode": "long",
+        "topic": payload.topic,
+        "length": payload.length,
+        "angle": payload.angle,
+        "text": text,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.scripts.insert_one(rec)
+    rec.pop("_id", None)
+    return rec
+
+
+# --- Script Engine: shorts --------------------------------------------------
+
+class ShortsRequest(BaseModel):
+    topic: str
+    platform: str = "youtube"   # "youtube" | "reels" | "tiktok"
+    angle: Optional[str] = None
+
+
+@api.post("/scripts/shorts")
+async def scripts_shorts(payload: ShortsRequest, user: AuthUser = Depends(current_user)):
+    _require_entitlement(user, "shorts")
+    if not payload.topic.strip():
+        raise HTTPException(status_code=400, detail="Topic required")
+    if payload.platform not in ("youtube", "reels", "tiktok"):
+        raise HTTPException(status_code=400, detail="Invalid platform")
+
+    system = build_shorts_system_prompt(payload.platform)
+    user_msg = f"Generate a complete faceless short-form video package for this topic: {payload.topic.strip()}"
+    if payload.angle:
+        user_msg += f"\n\nHOOK ANGLE BIAS FOR THIS SHORT: {payload.angle}. Commit fully to this one — don't hedge."
+
+    text = await _claude_complete(system, user_msg)
+
+    rec = {
+        "id": str(uuid.uuid4()),
+        "user_email": user.email,
+        "mode": "shorts",
+        "topic": payload.topic,
+        "platform": payload.platform,
+        "angle": payload.angle,
+        "text": text,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.scripts.insert_one(rec)
+    rec.pop("_id", None)
+    return rec
+
+
+# --- Script Engine: repurpose (long → short) --------------------------------
+
+class RepurposeRequest(BaseModel):
+    source_script: str
+    platform: str = "youtube"
+    angle: Optional[str] = None
+
+
+@api.post("/scripts/repurpose")
+async def scripts_repurpose(payload: RepurposeRequest, user: AuthUser = Depends(current_user)):
+    _require_entitlement(user, "shorts")
+    if not payload.source_script.strip():
+        raise HTTPException(status_code=400, detail="Source script required")
+    if payload.platform not in ("youtube", "reels", "tiktok"):
+        raise HTTPException(status_code=400, detail="Invalid platform")
+
+    base = build_shorts_system_prompt(payload.platform)
+    system = base + "\n\nADDITIONAL CONTEXT: You will be given a long-form script. Derive ONE short from it — don't summarize the whole thing."
+    angle_clause = f' biased toward the angle: "{payload.angle}"' if payload.angle else ""
+    user_msg = (
+        f"Here is the long-form script (sections separated by ### headers):\n\n"
+        f"{payload.source_script}\n\n"
+        f"Derive ONE faceless short from this source{angle_clause}. Pick a single idea or beat from the source that "
+        f"fits and turn it into a complete short package using the exact output structure defined in your system instructions."
+    )
+
+    text = await _claude_complete(system, user_msg)
+
+    rec = {
+        "id": str(uuid.uuid4()),
+        "user_email": user.email,
+        "mode": "shorts",
+        "topic": "(repurposed)",
+        "platform": payload.platform,
+        "angle": payload.angle,
+        "text": text,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.scripts.insert_one(rec)
+    rec.pop("_id", None)
+    return rec
+
+
+# --- Script Engine: history -------------------------------------------------
+
+@api.get("/scripts/history")
+async def scripts_history(user: AuthUser = Depends(current_user)):
+    cursor = db.scripts.find({"user_email": user.email}).sort("created_at", -1).limit(30)
+    items = []
+    async for doc in cursor:
+        doc.pop("_id", None)
+        items.append(doc)
+    return {"items": items}
+
+
+@api.get("/scripts/{script_id}")
+async def scripts_get(script_id: str, user: AuthUser = Depends(current_user)):
+    doc = await db.scripts.find_one({"id": script_id, "user_email": user.email})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Not found")
+    doc.pop("_id", None)
+    return doc
+
+
+@api.delete("/scripts/{script_id}")
+async def scripts_delete(script_id: str, user: AuthUser = Depends(current_user)):
+    r = await db.scripts.delete_one({"id": script_id, "user_email": user.email})
+    if r.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Not found")
+    return {"ok": True}
+
+
+LENGTH_VALID = {"short", "medium", "long"}
 
 
 # ---------------------------------------------------------------------------

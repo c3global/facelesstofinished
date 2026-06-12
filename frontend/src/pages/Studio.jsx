@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { UserCircle2, Mic, Ratio, Captions, Film, ChevronDown, Play, Trash2, Sparkles } from "lucide-react";
+import { UserCircle2, Mic, Ratio, Captions, Film, ChevronDown, Play, Trash2, Sparkles, Wand2, Loader2 } from "lucide-react";
 import { apiClient } from "../App";
 import {
   AvatarPicker,
@@ -59,6 +59,21 @@ export default function Studio() {
 
   // Script
   const [script, setScript] = useState("");
+
+  // Pick up a script handed off from /scripts via localStorage (one-shot)
+  useEffect(() => {
+    try {
+      const handoff = localStorage.getItem("f48_handoff_script");
+      if (handoff) {
+        setScript(handoff);
+        localStorage.removeItem("f48_handoff_script");
+      }
+    } catch {}
+  }, []);
+
+  // Auto-generated B-roll prompts state
+  const [generatingPrompts, setGeneratingPrompts] = useState(false);
+  const [promptsErr, setPromptsErr] = useState("");
 
   // Settings
   const [aspect, setAspect] = useState("9_16");
@@ -203,6 +218,23 @@ export default function Studio() {
     }
   };
 
+  // ---- Generate B-roll prompts from script via Claude ----
+  const generatePromptsFromScript = async () => {
+    if (!script.trim()) return;
+    setPromptsErr("");
+    setGeneratingPrompts(true);
+    try {
+      const r = await apiClient.post("/studio/broll-prompts", { script });
+      const lines = (r.data.prompts || []).slice(0, 12);
+      setBulkPrompts(lines.join("\n"));
+      setSceneOverrides(lines.map(() => ({})));
+    } catch (e) {
+      setPromptsErr(e?.response?.data?.detail || "Could not generate prompts. Try again.");
+    } finally {
+      setGeneratingPrompts(false);
+    }
+  };
+
   // ---- Scene source override ----
   const setSceneSource = (idx, src) => {
     setSceneOverrides((prev) => {
@@ -341,10 +373,24 @@ export default function Studio() {
         <div className="scene-section" data-testid="scene-section">
           <div className="scene-section-head">
             <span className="scene-section-title">B-Roll prompts</span>
-            <span className="scene-section-count" data-testid="scene-count">
-              <strong>{sceneLines.length}</strong> {sceneLines.length === 1 ? "scene" : "scenes"} · up to {MAX_SCENES}
-            </span>
+            <div className="scene-section-actions">
+              <button
+                type="button"
+                className="generate-prompts-btn"
+                data-testid="generate-prompts-btn"
+                disabled={!script.trim() || generatingPrompts}
+                onClick={generatePromptsFromScript}
+                title={!script.trim() ? "Paste a script above first" : ""}
+              >
+                {generatingPrompts ? <Loader2 size={12} className="spin" /> : <Wand2 size={12} />}
+                {generatingPrompts ? "Generating…" : "Generate from script"}
+              </button>
+              <span className="scene-section-count" data-testid="scene-count">
+                <strong>{sceneLines.length}</strong> {sceneLines.length === 1 ? "scene" : "scenes"} · up to {MAX_SCENES}
+              </span>
+            </div>
           </div>
+          {promptsErr && <p className="cta-error" data-testid="prompts-err">{promptsErr}</p>}
           <textarea
             className="bulk-prompts"
             data-testid="bulk-prompts"
