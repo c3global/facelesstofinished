@@ -1,0 +1,40 @@
+{
+  "summary": "First test run for F2F48 Studio rebuild (Phase 1: Studio + Auth/Entitlements). Comprehensive backend (15 pytest cases) and frontend (Playwright E2E) testing executed. Found and fixed 1 backend bug (tz-aware vs tz-naive datetime comparison in Mongo cache). All other features — auth (DEV_BYPASS path + 401 paths), HeyGen avatars/voices, Kokoro TTS, Pexels/Pixabay stock search, render lifecycle (queued → voiceover → visuals → composing → polling → complete with sample MP4), history listing, delete-in-progress 409, delete-completed 200, and all 16 frontend interaction cases (login redirect, mode toggle, chip modals, captions auto-flip + sticky override, scene auto-creation, storyboard, stock picker, render+poll, history+delete, logout) all pass.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Bug fix already applied by testing agent: /app/backend/server.py _cached() now normalizes naive Mongo datetimes to UTC-aware before comparing. Please review and keep.",
+    "Consider: avatar grid is huge (1281 entries from HeyGen). Pagination/virtualization recommended for perf, but not a blocker."
+  ],
+  "critical_code_review_comments": [
+    "FIXED: _cached() in /app/backend/server.py compared tz-aware now to tz-naive Mongo datetime → 500 errors on 2nd+ call to /api/studio/avatars and /voices. Patched to coerce naive→UTC-aware.",
+    "Frontend renders 1281 avatar cards directly in a grid with no virtualization — works but may lag on slower devices. Future enhancement.",
+    "Login.jsx imports useNavigate but the import is unused in some branches — minor lint nit; no runtime impact.",
+    "RenderRequest.scenes is a list[dict] without nested Pydantic model — works but loses schema validation for scene shape. Acceptable for Phase 1."
+  ],
+  "updated_files": [
+    "/app/backend/server.py (fixed _cached datetime comparison)",
+    "/app/backend/tests/backend_test.py (new — 15 pytest cases)"
+  ],
+  "success_rate": {
+    "backend": "100% (15/15)",
+    "frontend": "100% (16/16 scenarios)"
+  },
+  "test_credentials": "DEV_BYPASS email: drcharitycampbell@gmail.com (no password). Token stored in localStorage as f48_studio_token.",
+  "seed_data_creation": "None required. Test creates and deletes its own render jobs.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend test file at /app/backend/tests/backend_test.py is fully reusable. The HeyGen avatars list is cached 24h in db.cache; first call may be slow (~10s) due to upstream API, subsequent calls hit cache. Render pipeline is DRY_RUN (sample BigBuckBunny.mp4) and completes in ~6-8s — wait ~10s when polling. The fix in _cached() must be preserved or the avatars/voices endpoints will 500 on cache hits.",
+  "rca_of_the_issue": "Bug: GET /api/studio/avatars and /api/studio/voices returned 500 on the 2nd+ call. RCA: _cached() in server.py compared datetime.now(timezone.utc) (tz-aware) to doc['expires_at'] returned by motor (tz-naive — pymongo returns naive datetimes by default). On first call, no cache doc exists so the comparison is skipped. On subsequent calls, the comparison raises TypeError: can't compare offset-naive and offset-aware datetimes → 500. Reproduction: hit GET /api/studio/avatars twice with valid bearer token. Mitigation applied: normalize naive datetimes from Mongo to UTC-aware before comparison. Alternative long-term fix: configure motor with tz_aware=True at client construction."
+}

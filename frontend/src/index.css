@@ -1,0 +1,65 @@
+/* F2F48 Studio — Luxury Creator Tool dark theme */
+:root {
+  --bg: #0A0B10;
+  --bg-2: #0E1018;
+  --surface: #141622;
+  --surface-2: #1E2135;
+  --border: #2A2D43;
+  --border-strong: #3A3E5C;
+  --accent: #E87A5D;
+  --accent-hover: #F0947D;
+  --accent-soft: rgba(232, 122, 93, 0.16);
+  --text: #FFFFFF;
+  --muted: #9BA1B6;
+  --success: #22C55E;
+  --warning: #F59E0B;
+  --danger: #EF4444;
+
+  --font-heading: "Cabinet Grotesk", "ui-sans-serif", system-ui, sans-serif;
+  --font-body: "Satoshi", "ui-sans-serif", system-ui, sans-serif;
+
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 18px;
+  --radius-xl: 24px;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; margin: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-weight: 400;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  line-height: 1.55;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(900px 600px at 8% -10%, rgba(232,122,93,0.10), transparent 60%),
+    radial-gradient(800px 500px at 100% 15%, rgba(80,60,160,0.08), transparent 70%);
+}
+
+button, input, textarea { font-family: inherit; color: inherit; }
+button { cursor: pointer; border: none; background: none; }
+button:disabled { cursor: not-allowed; opacity: 0.55; }
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { color: var(--accent-hover); }
+
+::selection { background: var(--accent); color: #fff; }
+
+/* ---------- Scrollbar ---------- */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
