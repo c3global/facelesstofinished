@@ -85,7 +85,27 @@ body {
   line-height: 1.6;
   letter-spacing: 0;
   transition: background-color .25s ease, color .25s ease;
+  position: relative;
+  overflow-x: hidden;
 }
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(700px 480px at 12% 8%, rgba(201, 149, 108, 0.07), transparent 70%),
+    radial-gradient(800px 520px at 92% 14%, rgba(196, 26, 24, 0.06), transparent 70%),
+    radial-gradient(900px 600px at 75% 95%, rgba(127, 119, 221, 0.05), transparent 70%);
+}
+[data-theme="light"] body::before {
+  background:
+    radial-gradient(700px 480px at 12% 8%, rgba(168, 118, 69, 0.05), transparent 70%),
+    radial-gradient(900px 600px at 92% 14%, rgba(94, 85, 194, 0.04), transparent 70%);
+}
+#root { position: relative; z-index: 1; }
 
 button, input, textarea, select {
   font-family: inherit;
