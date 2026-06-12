@@ -13,14 +13,6 @@ const THEME_KEY = "f48_studio_theme";
 
 axios.defaults.timeout = 30000;
 
-// Script generation endpoints can take 60-120s for long-form Claude calls
-export const longApiClient = axios.create({ baseURL: API, timeout: 180000 });
-longApiClient.interceptors.request.use((cfg) => {
-  const t = localStorage.getItem(TOKEN_KEY);
-  if (t) cfg.headers.Authorization = `Bearer ${t}`;
-  return cfg;
-});
-
 const AuthCtx = createContext(null);
 const ThemeCtx = createContext(null);
 

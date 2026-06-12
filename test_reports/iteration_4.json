@@ -1,0 +1,37 @@
+{
+  "summary": "Iteration 4 — async-job refactor for /api/scripts/{long,shorts,repurpose} VERIFIED end-to-end on the PUBLIC preview URL. Backend: 18/18 pytest tests passed (test_scripts.py rewritten to expect the new async-job shape: POST returns {id,status:'running'} in <1s, then poll GET /api/scripts/job/{id} every 3s until terminal). Three real Claude generations completed via polling on the public preview URL — long-form (with all 8 ### section headers), shorts (all 9 sections), repurpose (mode='shorts' platform='reels', SHORT-FORM SCRIPT present). The Cloudflare 60s edge timeout that killed iteration 3's /api/scripts/long is gone — confirmed because every POST returned in <1s and every poll request individually completed in <30s, so no single request crossed the edge timeout. Negative paths verified: invalid length/platform/empty topic → 400; unauthenticated POST → 401; GET /api/scripts/job/{nonexistent} → 404; GET /api/scripts/job/{id} without auth → 401 (ownership check via user_email in mongo query — see server.py:714). History returns in descending created_at order, GET by id and DELETE work, DELETE missing → 404, DELETE then GET → 404. /api/studio/broll-prompts unchanged: returns 5 cleanly-formatted prompts for a sample script. Frontend: full e2e UI test passed on the public preview URL — long-form generation, button shows 'Writing… 3s' (and increments), output appeared with all 8 long-mode section cards, no scripts-error appeared during the long-poll window (previously this 502'd at 60s and surfaced 'Could not generate'). 'Cut into a Short' label flipped to 'Cutting into a Short…' during the repurpose job and result switched to all 9 shorts section cards. Send-to-Studio handoff from a history-loaded long script pre-filled script-textarea (15,967 chars) AND cleared the f48_handoff_script localStorage key. Studio's 'Generate from script' button still works — filled bulk-prompts with 12 clean B-roll prompts in faceless mode. NO REGRESSIONS, NO NEW BUGS.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_scripts.py",
+    "/app/test_reports/pytest/iteration_4.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py:750 has dead variable `LENGTH_VALID_DEPRECATED = None` that should be removed; LENGTH_VALID was moved up near the engine block which is the right fix, but the comment-style placeholder left behind is noise.",
+    "server.py: _run_script_job() uses asyncio.create_task() without keeping a reference. If the FastAPI worker is recycled/restarted while a long job is in-flight, the task is silently dropped and the script row will stay status='running' forever. Consider (a) tracking tasks in a module-level set and awaiting on shutdown, OR (b) a startup task that re-queries running scripts older than ~10min and marks them failed. Not blocking, but a real edge case for production.",
+    "server.py:558 doc comment is now accurate but the dead comment block at server.py:750 (LENGTH_VALID_DEPRECATED) is misleading — drop it.",
+    "Frontend Scripts.jsx: pollJob() interval is 2.5s — fine, but on a slow Claude job (~100s) that's ~40 polling requests per generation. Consider exponential-ish backoff (poll every 2s for first 20s, then 4s after) to halve request volume. Not blocking.",
+    "Frontend Scripts.jsx: when the user navigates away from /scripts mid-generation, the useEffect cleanup correctly clears pollRef, but the backend job keeps running and the result is silently orphaned (will show up in history on return). That's actually fine behavior — just worth noting in product docs."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_scripts.py (rewritten for async-job pattern — 18 tests, all passing on public preview URL)"
+  ],
+  "success_rate": {
+    "backend": "18/18 (100%) on PUBLIC preview URL — including the previously-impossible /api/scripts/long which now returns in <1s + completes via polling",
+    "frontend": "100% — long-form generation, busy elapsed counter, all 8 long section cards, Cut-into-a-Short repurpose with label flip, all 9 shorts section cards, Send-to-Studio handoff + textarea pre-fill, localStorage handoff key cleared, Studio Generate-from-script fills bulk-prompts (12 clean prompts)"
+  },
+  "test_credentials": "DEV_BYPASS email: drcharitycampbell@gmail.com (passwordless, full base+shorts+studio entitlements)",
+  "seed_data_creation": "Three real Claude generations executed against the public preview URL during testing: 1 long-form (short length, niche topic), 1 shorts (youtube platform), 1 repurpose (reels platform). The repurpose row was deleted by test_scripts_delete_and_verify. ~10 history rows remain from this iteration + iteration 3 carryover. Frontend test also triggered 1 long-form + 1 repurpose generation (visible in history at end of run). Safe to keep — none of this affects production data since DRY_RUN_RENDERS=true and no renders were started.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iteration 4's async-job refactor for /api/scripts/* is fully verified on the PUBLIC preview URL. The test file at /app/backend/tests/test_scripts.py now uses the correct async-job pattern (POST returns running, _poll_job() polls /api/scripts/job/{id} every 3s up to 180s). DO NOT revert to expecting `text` on the initial POST. Testids unchanged from iteration 3 — see iteration_3.json context_for_next_testing_agent for the full list. The only code-quality nits worth raising in future iterations are: (1) remove server.py:750 LENGTH_VALID_DEPRECATED dead line, (2) consider a startup-time recovery job for orphaned status='running' records (server crash mid-job).",
+  "rca_of_the_issue": "Iteration 3's Cloudflare 60s edge timeout on /api/scripts/long is RESOLVED. Mechanism: POST /api/scripts/long now inserts a mongo record with status='running' and spawns _run_script_job() via asyncio.create_task(), returning the record in <1s. The frontend polls GET /api/scripts/job/{id} every 2.5s; each individual poll completes in <30s. Because no single HTTP request crosses the ~60s Cloudflare edge limit, the proxy never times out. Verified empirically: long-form POST completed in <1s, polling completed the full 17K-char generation in ~120s, all 8 ### section headers present in the final `text` field. Identical pattern now used for /api/scripts/shorts and /api/scripts/repurpose for safety margin and consistency."
+}

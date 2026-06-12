@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Copy, Trash2, Sparkles, FileText, Smartphone, Repeat, Loader2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { apiClient, longApiClient, useAuth } from "../App";
+import { apiClient, useAuth } from "../App";
 import { parseSections, LONG_SECTION_ORDER, SHORTS_SECTION_ORDER } from "../utils/parser";
 
 const MODES = { LONG: "long", SHORTS: "shorts" };
@@ -87,6 +87,14 @@ export default function Scripts() {
   const [output, setOutput] = useState(null); // { text, mode, ... }
   const [history, setHistory] = useState([]);
   const [repurposeBusy, setRepurposeBusy] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
+  const pollRef = useRef(null);
+  const elapsedRef = useRef(null);
+
+  useEffect(() => () => {
+    if (pollRef.current) clearInterval(pollRef.current);
+    if (elapsedRef.current) clearInterval(elapsedRef.current);
+  }, []);
 
   const sections = useMemo(() => (output?.text ? parseSections(output.text) : {}), [output]);
   const orderedKeys = output?.mode === "shorts" ? SHORTS_SECTION_ORDER : LONG_SECTION_ORDER;
@@ -103,6 +111,31 @@ export default function Scripts() {
     } catch {}
   };
 
+  // Poll a queued/running script job until it completes or fails.
+  const pollJob = (scriptId, onDone) => {
+    if (pollRef.current) clearInterval(pollRef.current);
+    if (elapsedRef.current) clearInterval(elapsedRef.current);
+    const startedAt = Date.now();
+    setElapsed(0);
+    elapsedRef.current = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - startedAt) / 1000));
+    }, 1000);
+    pollRef.current = setInterval(async () => {
+      try {
+        const r = await apiClient.get(`/scripts/job/${scriptId}`);
+        if (r.data.status === "complete" || r.data.status === "failed") {
+          clearInterval(pollRef.current); pollRef.current = null;
+          clearInterval(elapsedRef.current); elapsedRef.current = null;
+          onDone(r.data);
+        }
+      } catch (e) {
+        clearInterval(pollRef.current); pollRef.current = null;
+        clearInterval(elapsedRef.current); elapsedRef.current = null;
+        onDone({ status: "failed", error: e?.response?.data?.detail || "Network error" });
+      }
+    }, 2500);
+  };
+
   const generate = async () => {
     setErr("");
     if (!topic.trim()) { setErr("Add a topic first."); return; }
@@ -116,17 +149,23 @@ export default function Scripts() {
       const body = mode === MODES.LONG
         ? { topic, length, angle: angle || null }
         : { topic, platform, angle: angle || null };
-      const r = await longApiClient.post(url, body);
-      setOutput(r.data);
-      loadHistory();
-      // Scroll to results
-      setTimeout(() => {
-        document.getElementById("scripts-output")?.scrollIntoView({ behavior: "smooth", block: "start" });
-      }, 100);
+      const r = await apiClient.post(url, body);
+      // Server returns the queued record immediately
+      pollJob(r.data.id, (final) => {
+        setBusy(false);
+        if (final.status === "complete") {
+          setOutput(final);
+          loadHistory();
+          setTimeout(() => {
+            document.getElementById("scripts-output")?.scrollIntoView({ behavior: "smooth", block: "start" });
+          }, 100);
+        } else {
+          setErr(final.error || "Generation failed. Try again.");
+        }
+      });
     } catch (e) {
-      setErr(e?.response?.data?.detail || "Could not generate. Try again.");
-    } finally {
       setBusy(false);
+      setErr(e?.response?.data?.detail || "Could not start generation. Try again.");
     }
   };
 
@@ -136,20 +175,26 @@ export default function Scripts() {
     setRepurposeBusy(true);
     setErr("");
     try {
-      const r = await longApiClient.post("/scripts/repurpose", {
+      const r = await apiClient.post("/scripts/repurpose", {
         source_script: output.text,
         platform,
         angle: angle || null,
       });
-      setOutput(r.data);
-      loadHistory();
-      setTimeout(() => {
-        document.getElementById("scripts-output")?.scrollIntoView({ behavior: "smooth", block: "start" });
-      }, 100);
+      pollJob(r.data.id, (final) => {
+        setRepurposeBusy(false);
+        if (final.status === "complete") {
+          setOutput(final);
+          loadHistory();
+          setTimeout(() => {
+            document.getElementById("scripts-output")?.scrollIntoView({ behavior: "smooth", block: "start" });
+          }, 100);
+        } else {
+          setErr(final.error || "Could not repurpose. Try again.");
+        }
+      });
     } catch (e) {
-      setErr(e?.response?.data?.detail || "Could not repurpose. Try again.");
-    } finally {
       setRepurposeBusy(false);
+      setErr(e?.response?.data?.detail || "Could not repurpose. Try again.");
     }
   };
 
@@ -283,7 +328,7 @@ export default function Scripts() {
           disabled={busy || !topic.trim() || (mode === MODES.LONG && !canLong) || (mode === MODES.SHORTS && !canShorts)}
           onClick={generate}
         >
-          {busy ? "Writing… (60–120s)" : "Generate script"}
+          {busy ? `Writing… ${elapsed}s` : "Generate script"}
         </button>
         {!canLong && mode === MODES.LONG && (
           <p className="cta-hint">Long-form requires the base entitlement.</p>
@@ -294,7 +339,7 @@ export default function Scripts() {
         {err && <p className="cta-error" data-testid="scripts-error">{err}</p>}
         {busy && (
           <p className="cta-hint" data-testid="scripts-busy">
-            <Loader2 size={12} className="spin" /> Claude is thinking. Long-form scripts take 60–120 seconds.
+            <Loader2 size={12} className="spin" /> Claude is thinking. Long-form usually finishes in 60–120s.
           </p>
         )}
       </div>

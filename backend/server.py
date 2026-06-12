@@ -550,17 +550,80 @@ async def studio_broll_prompts(payload: BrollPromptsRequest, user: AuthUser = De
     return {"prompts": out[:12]}
 
 
+# --- Script Engine: async job pattern ---------------------------------------
+# Cloudflare-class edge proxies enforce ~60s request timeouts and Claude long-form
+# generations take 90-120s, so the POST returns a queued record immediately and a
+# background task fills `text` / `status` once Claude responds. The frontend polls
+# GET /api/scripts/job/{id} every couple seconds. Mirrors the /api/studio/render
+# pattern that's been in production since iteration 1.
+
+LENGTH_VALID = {"short", "medium", "long"}
+
+
+def _require_entitlement(user: AuthUser, ent: str) -> None:
+    if ent not in user.entitlements:
+        raise HTTPException(status_code=403, detail=f"{ent} entitlement required")
+
+
+async def _run_script_job(script_id: str, system_prompt: str, user_message: str):
+    """Background worker — runs Claude, writes result back onto the script record."""
+    try:
+        text = await _claude_complete(system_prompt, user_message, session_id=script_id)
+        await db.scripts.update_one(
+            {"id": script_id},
+            {"$set": {
+                "status": "complete",
+                "text": text,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            }},
+        )
+    except HTTPException as e:
+        await db.scripts.update_one(
+            {"id": script_id},
+            {"$set": {
+                "status": "failed",
+                "error": e.detail,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            }},
+        )
+    except Exception as e:  # noqa: BLE001
+        await db.scripts.update_one(
+            {"id": script_id},
+            {"$set": {
+                "status": "failed",
+                "error": str(e)[:500],
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            }},
+        )
+
+
+async def _enqueue_script(*, user: AuthUser, mode: str, topic: str, system_prompt: str,
+                          user_message: str, extra: dict) -> dict:
+    script_id = str(uuid.uuid4())
+    rec = {
+        "id": script_id,
+        "user_email": user.email,
+        "mode": mode,
+        "topic": topic,
+        "status": "running",
+        "text": None,
+        "error": None,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "completed_at": None,
+        **extra,
+    }
+    await db.scripts.insert_one(rec)
+    asyncio.create_task(_run_script_job(script_id, system_prompt, user_message))
+    rec.pop("_id", None)
+    return rec
+
+
 # --- Script Engine: long-form -----------------------------------------------
 
 class LongScriptRequest(BaseModel):
     topic: str
     length: str = "medium"  # "short" | "medium" | "long"
     angle: Optional[str] = None
-
-
-def _require_entitlement(user: AuthUser, ent: str) -> None:
-    if ent not in user.entitlements:
-        raise HTTPException(status_code=403, detail=f"{ent} entitlement required")
 
 
 @api.post("/scripts/long")
@@ -576,22 +639,11 @@ async def scripts_long(payload: LongScriptRequest, user: AuthUser = Depends(curr
     if payload.angle:
         user_msg += f"\n\nANGLE BIAS: {payload.angle}. Commit fully to this angle."
 
-    text = await _claude_complete(system, user_msg)
-
-    # Persist for history
-    rec = {
-        "id": str(uuid.uuid4()),
-        "user_email": user.email,
-        "mode": "long",
-        "topic": payload.topic,
-        "length": payload.length,
-        "angle": payload.angle,
-        "text": text,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    await db.scripts.insert_one(rec)
-    rec.pop("_id", None)
-    return rec
+    return await _enqueue_script(
+        user=user, mode="long", topic=payload.topic,
+        system_prompt=system, user_message=user_msg,
+        extra={"length": payload.length, "angle": payload.angle},
+    )
 
 
 # --- Script Engine: shorts --------------------------------------------------
@@ -615,21 +667,11 @@ async def scripts_shorts(payload: ShortsRequest, user: AuthUser = Depends(curren
     if payload.angle:
         user_msg += f"\n\nHOOK ANGLE BIAS FOR THIS SHORT: {payload.angle}. Commit fully to this one — don't hedge."
 
-    text = await _claude_complete(system, user_msg)
-
-    rec = {
-        "id": str(uuid.uuid4()),
-        "user_email": user.email,
-        "mode": "shorts",
-        "topic": payload.topic,
-        "platform": payload.platform,
-        "angle": payload.angle,
-        "text": text,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    await db.scripts.insert_one(rec)
-    rec.pop("_id", None)
-    return rec
+    return await _enqueue_script(
+        user=user, mode="shorts", topic=payload.topic,
+        system_prompt=system, user_message=user_msg,
+        extra={"platform": payload.platform, "angle": payload.angle},
+    )
 
 
 # --- Script Engine: repurpose (long → short) --------------------------------
@@ -658,21 +700,22 @@ async def scripts_repurpose(payload: RepurposeRequest, user: AuthUser = Depends(
         f"fits and turn it into a complete short package using the exact output structure defined in your system instructions."
     )
 
-    text = await _claude_complete(system, user_msg)
+    return await _enqueue_script(
+        user=user, mode="shorts", topic="(repurposed)",
+        system_prompt=system, user_message=user_msg,
+        extra={"platform": payload.platform, "angle": payload.angle},
+    )
 
-    rec = {
-        "id": str(uuid.uuid4()),
-        "user_email": user.email,
-        "mode": "shorts",
-        "topic": "(repurposed)",
-        "platform": payload.platform,
-        "angle": payload.angle,
-        "text": text,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    await db.scripts.insert_one(rec)
-    rec.pop("_id", None)
-    return rec
+
+# --- Script Engine: job status ----------------------------------------------
+
+@api.get("/scripts/job/{script_id}")
+async def scripts_job_status(script_id: str, user: AuthUser = Depends(current_user)):
+    doc = await db.scripts.find_one({"id": script_id, "user_email": user.email})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Not found")
+    doc.pop("_id", None)
+    return doc
 
 
 # --- Script Engine: history -------------------------------------------------
@@ -704,7 +747,7 @@ async def scripts_delete(script_id: str, user: AuthUser = Depends(current_user))
     return {"ok": True}
 
 
-LENGTH_VALID = {"short", "medium", "long"}
+LENGTH_VALID_DEPRECATED = None  # Kept for backwards-compat — see top of script engine block.
 
 
 # ---------------------------------------------------------------------------
