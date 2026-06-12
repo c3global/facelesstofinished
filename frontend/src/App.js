@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, createContext, useContext } from "react";
-import { BrowserRouter, Routes, Route, Navigate, useNavigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import axios from "axios";
 import Studio from "./pages/Studio";
 import Login from "./pages/Login";
@@ -8,12 +8,15 @@ import "./App.css";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 const TOKEN_KEY = "f48_studio_token";
+const THEME_KEY = "f48_studio_theme";
 
 axios.defaults.timeout = 30000;
 
 const AuthCtx = createContext(null);
+const ThemeCtx = createContext(null);
 
 export const useAuth = () => useContext(AuthCtx);
+export const useTheme = () => useContext(ThemeCtx);
 
 export const apiClient = axios.create({ baseURL: API });
 apiClient.interceptors.request.use((cfg) => {
@@ -21,6 +24,27 @@ apiClient.interceptors.request.use((cfg) => {
   if (t) cfg.headers.Authorization = `Bearer ${t}`;
   return cfg;
 });
+
+function ThemeProvider({ children }) {
+  const [theme, setTheme] = useState(() => {
+    return localStorage.getItem(THEME_KEY) || "dark";
+  });
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem(THEME_KEY, theme);
+  }, [theme]);
+
+  const toggle = useCallback(() => {
+    setTheme((t) => (t === "dark" ? "light" : "dark"));
+  }, []);
+
+  return (
+    <ThemeCtx.Provider value={{ theme, toggle }}>
+      {children}
+    </ThemeCtx.Provider>
+  );
+}
 
 function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
@@ -76,16 +100,18 @@ function RequireStudio({ children }) {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <BrowserRouter>
-        <Header />
-        <Routes>
-          <Route path="/login" element={<Login />} />
-          <Route path="/studio" element={<RequireStudio><Studio /></RequireStudio>} />
-          <Route path="/" element={<Navigate to="/studio" replace />} />
-          <Route path="*" element={<Navigate to="/studio" replace />} />
-        </Routes>
-      </BrowserRouter>
-    </AuthProvider>
+    <ThemeProvider>
+      <AuthProvider>
+        <BrowserRouter>
+          <Header />
+          <Routes>
+            <Route path="/login" element={<Login />} />
+            <Route path="/studio" element={<RequireStudio><Studio /></RequireStudio>} />
+            <Route path="/" element={<Navigate to="/studio" replace />} />
+            <Route path="*" element={<Navigate to="/studio" replace />} />
+          </Routes>
+        </BrowserRouter>
+      </AuthProvider>
+    </ThemeProvider>
   );
 }
