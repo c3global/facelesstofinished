@@ -520,12 +520,11 @@ export default function Scripts() {
   };
 
   // Selecting one flag clears the other so they remain mutually exclusive.
-  const toggleSprint = () => {
-    setSprint((v) => {
-      const next = !v;
-      if (next) setMultiPlatform(false);
-      return next;
-    });
+  // Clicking the Sprint pill always turns it ON (not a toggle) — the Single
+  // pill handles the off-case, so this avoids surprising double-click flicker.
+  const enableSprint = () => {
+    setSprint(true);
+    setMultiPlatform(false);
   };
   const toggleMultiPlatform = (checked) => {
     setMultiPlatform(checked);
@@ -669,7 +668,7 @@ export default function Scripts() {
                 <button
                   className={`sprint-opt ${sprint ? "is-active" : ""}`}
                   data-testid="sprint-opt-sprint"
-                  onClick={toggleSprint}
+                  onClick={enableSprint}
                 >
                   <Layers size={12} /> Content sprint
                   <span className="sprint-opt-count">5</span>

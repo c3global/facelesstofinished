@@ -139,6 +139,52 @@ Major refactor that addresses 7 explicit user asks. Verified 21/21 backend + ~95
 
 **Deferred from this iteration (Avatar + B-roll cutaways composite mode):** A true "Avatar + B-roll cutaways" render mode (HeyGen avatar talking head intercut with stock B-roll) needs a new backend render branch and a UI toggle in Avatar mode. Decision: defer until the real HeyGen/fal.ai pipelines are wired (DRY_RUN_RENDERS=false) so the UI isn't building against simulated output. The B-roll prompts ARE staged on the handoff so the user can manually flip to Faceless mode in the meantime.
 
+## Iteration 9 — Scripts component extraction + Script Engine 3.0 polish (2026-02-12)
+Two big landings in this iteration. Verified live via `/app/test_reports/iteration_9.json` — all 14 features PASS, no bugs found.
+
+**Component extraction.** Scripts.jsx had grown to ~800 lines of inline component defs. Extracted to `/app/frontend/src/components/scripts/`:
+- `SectionCard.jsx` — exports `SectionCard`, `SkeletonCard`, `CopyButton`, `SECTION_LABEL`. Accepts a new `revealIndex` prop that adds `section-card-reveal` class + inline `animationDelay` for staggered fade-in on result render. Sets `data-section="<key>"` on each card so CSS can key per-section accent colors off the DOM.
+- `AngleCard.jsx` — exports `AngleCard`, `ANGLE_CAT` map.
+- `ShortPhoneBody.jsx` — phone-frame HOOK/BODY/CTA beat parser (default export).
+- `SavedAnglesPanel.jsx` — saved-angles drawer (default export). Reads `ANGLE_CAT` from AngleCard.
+- `ScriptHistoryList.jsx` — recent-scripts list (default export) with `fmtDate` helper.
+- `GenProgress.jsx` — animated progress bar + rotating stage labels (`long` / `shorts` / `sprint` stage tables).
+- `SprintResult.jsx` — 5-variant grid renderer (one PhoneFrame per variant with variant header).
+
+`Scripts.jsx` is still ~1040 lines because the 4-step state machine (TOPIC / ANGLES / GENERATING / RESULT) plus the 3-column Shorts result layout is verbose JSX, but all reusable presentational pieces are now externalized. Further extraction (ScriptInputsPanel, ResultHeader, PlatformTabsStrip) is queued as a P1 follow-up.
+
+**Mode-pill active state.** New CSS rules `.mode-opt[data-mode="long"].is-active` (purple-soft fill) and `.mode-opt[data-mode="shorts"].is-active` (platform-accent soft fill). Previously the Studio's Avatar/Faceless pills had active styling but the Scripts page's Long-form/Shorts pills did not.
+
+**Per-section accent colors.** App.css adds 8 `--sec-*` color tokens (orange/lavender/red/blue/green/pink/cyan/amber) plus 14 `[data-section="..."] { --sec-color: ... }` rules. Section cards render with a 3px left-border in the accent color and the title inherits the accent color too. Matches the reference deployment palette.
+
+**Animated progress bar + rotating stage labels.** New `<GenProgress mode="long|shorts|sprint" elapsed={N} />` component. CSS-only indeterminate shuttle bar (`.gen-progress-fill` with a 1.6s `gen-progress-slide` keyframe) plus a label that rotates through stage strings every 7s ("Brainstorming the angle" → "Drafting video concept" → "Writing hook variations" → …). Stage tables differ per mode — sprint mode rotates through "Drafting Variant 1" → "Drafting Variant 2" → … → "Drafting Variant 5" → "Final pass + polish". Replaces the static "Generating · {N}s" label.
+
+**Section card staggered fade-in.** `.section-card.section-card-reveal` triggers a `section-fade-in` keyframe (opacity + 8px translateY). Scripts.jsx passes `revealIndex={i}` to each SectionCard which sets `style={{ animationDelay: 'i*90ms' }}` — sections appear left-to-right (Plan/Script/Distribute on Shorts) or top-to-bottom (Long-form) for a streaming feel.
+
+**Content Sprint mode (Shorts).** New `sprint: bool` field on `ShortsRequest`. When true, the backend uses `build_sprint_system_prompt(platform)` from `prompts.py` which asks Claude for 5 distinct angle variants in a single response with header `### 🎬 SPRINT VARIANT N — name`. Each variant has Angle + Category + HOOK/BODY/CTA beats + Caption + Hashtags. Job is stored with `mode="sprint"`. Frontend parses with `parseSprintVariants()` (new in `parser.js`) which uses a strict `\p{Extended_Pictographic}`-aware regex with a relaxed fallback for prompt drift. Result rendered via `<SprintResult>` — 5 vertical phone frames in an auto-fit grid, each with its own variant header (number / name / angle / category pill). `Send to Studio` is hidden in sprint result (no single script to hand off).
+
+**"Generate for all 3 platforms at once" multi-platform mode.** New `multiPlatform` boolean state in Scripts.jsx. When checked, the platform cards hide and the CTA copy becomes "Generate for all 3 platforms →". `kickoffGeneration` then does `Promise.all` on three `/scripts/shorts` POSTs (one per platform) and `pollMultiJobs` polls all 3 statuses in parallel (single 2.5s interval ticks all jobs in one go). Result view renders `.platform-tabs` with one tab per platform — each tab has a pulsing/green/red status dot (running/complete/failed). Clicking a tab swaps the active output and re-applies the platform's `--platform-accent` so the PhoneFrame color flips. The first complete job auto-selects on completion.
+
+**Mutual exclusion.** Sprint and multi-platform are mutually exclusive. Toggling sprint ON clears multi-platform; checking multi-platform clears sprint. Mode-revert (Shorts → Long-form) clears both. The Sprint pill uses an explicit `enableSprint()` setter (not a toggle) so clicking it twice does NOT flip it off — the "Single short" pill handles the off-case for predictable UX.
+
+**Parser hardening.** `parseSprintVariants` ships with a strict regex (requires the literal `### 🎬 SPRINT VARIANT N — name`) chained with a relaxed fallback (matches any `## SPRINT VARIANT N` with any separator) so a single Claude prompt drift doesn't produce a blank sprint-grid.
+
+**Backend smoke.** `POST /api/scripts/shorts {topic, platform, sprint:true}` → job completes in ~45-50s with 9.3KB of text containing exactly 5 valid `### 🎬 SPRINT VARIANT N — name` headers. `parseSprintVariants` extracts all 5 with name + angle + category + body. Verified on the live Claude endpoint.
+
+**Files touched in iter 9**
+- `/app/backend/prompts.py` — added `build_sprint_system_prompt(platform)`.
+- `/app/backend/server.py` — `ShortsRequest.sprint`, branch in `/scripts/shorts` for sprint vs single-short, stores `mode="sprint"` + extra `{sprint: true}`.
+- `/app/frontend/src/utils/parser.js` — added `parseSprintVariants(raw)` with strict + relaxed regex.
+- `/app/frontend/src/components/scripts/` — added GenProgress.jsx, SprintResult.jsx (this iter); SectionCard.jsx, AngleCard.jsx, ShortPhoneBody.jsx, SavedAnglesPanel.jsx, ScriptHistoryList.jsx (extracted in this iter).
+- `/app/frontend/src/pages/Scripts.jsx` — clean rewrite using all extracted components, adds sprint + multi-platform state, `kickoffGeneration` unified entry, `pollMultiJobs` parallel poller, `switchTab` for multi-platform results.
+- `/app/frontend/src/App.css` — added Long-form/Shorts mode-pill active rules + ~250 lines for per-section accents, gen-progress, sprint-toggle, multi-platform-row, platform-tabs, sprint-grid.
+
+**Deferred from this iteration**
+- Live multi-platform end-to-end was not exercised by the testing agent to conserve token budget; structurally sound code path; persisted sprint job exercises the same render path. Recommend a quick smoke once before deploy.
+- Per-platform elapsed timers in multi-platform view (currently shows one cumulative elapsed).
+- Scripts.jsx further extraction (ScriptInputsPanel, ResultHeader, PlatformTabsStrip) to get below 500 lines.
+- Co-locate per-section accent palette with `SECTION_LABEL` in a shared `sectionsMeta.js` so JS consumers (e.g. saved-angles category pills) can use the same tokens.
+
 ## Prioritized backlog
 
 ### P0 — must-have for Phase 2

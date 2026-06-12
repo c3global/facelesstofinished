@@ -159,7 +159,10 @@ export function parseSprintVariants(raw) {
   let current = null;
   let buffer = [];
 
+  // Strict header: `### 🎬 SPRINT VARIANT N — name`
   const HEADER = /^#{1,6}\s+(?:\p{Extended_Pictographic}\s*)?SPRINT\s+VARIANT\s+(\d+)\s*[—–-]?\s*(.*)$/iu;
+  // Relaxed fallback for prompt drift (different bullet style, no em-dash, etc.)
+  const HEADER_LOOSE = /^#{1,6}\s*.*?SPRINT\s+VARIANT\s+(\d+)\s*[—–\-:]?\s*(.*)$/iu;
 
   const flush = () => {
     if (current) {
@@ -178,7 +181,7 @@ export function parseSprintVariants(raw) {
   };
 
   for (const line of lines) {
-    const m = line.match(HEADER);
+    const m = line.match(HEADER) || line.match(HEADER_LOOSE);
     if (m) {
       flush();
       current = { index: parseInt(m[1], 10), name: (m[2] || "").trim() };
