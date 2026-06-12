@@ -68,6 +68,16 @@
   --radius-md: 10px;
   --radius-lg: 14px;
   --radius-xl: 20px;
+
+  /* Angle category palette (Content Sprint taxonomy) */
+  --cat-curiosity:  #9B8AF7;   /* purple */
+  --cat-contrarian: #EF4444;   /* red */
+  --cat-howto:      #22C55E;   /* green */
+  --cat-story:      #F59E0B;   /* amber */
+  --cat-list:       #3B82F6;   /* blue */
+
+  /* Platform accent — set dynamically by Scripts.jsx via JS */
+  --platform-accent: var(--accent);
 }
 
 * { box-sizing: border-box; }

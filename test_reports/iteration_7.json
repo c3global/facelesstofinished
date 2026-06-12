@@ -1,0 +1,59 @@
+{
+  "summary": "Iteration 7 testing — Backend 21/21 PASS. Frontend two-step flow + saved-angles + platform theming verified. CRITICAL: no section-{key} cards render inside scripts-output for long-form (only Copy/Cut/Send buttons + 3 total testid'd descendants; 0 section-* cards). Markdown rendering is partially verified (1 <strong>, 0 literal '**' in DOM) but the section cards themselves are essentially empty — likely a section-parsing or render regression.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "Scripts.jsx — SectionCard render inside [data-testid='scripts-output']",
+        "issue": "After long-form completes and 'scripts-output' shows, NO section-{key} cards render. Probed document at runtime: out.querySelectorAll('[data-testid]') returned only 3 elements (Copy all, Cut into a Short, Send to Studio); section-* count = 0. Tested with both fresh generation and re-opening a recent long-form from history — same result. The 'concept', 'hooks', 'outline', 'script', 'transitions', 'broll', 'notes' SectionCards never appear, even though the long-form text was generated successfully (backend status=complete, text>200 chars). Spec required these section-{key} testids and markdown rendering inside them.",
+        "selector": "[data-testid='scripts-output'] [data-testid^='section-']",
+        "priority": "HIGH"
+      },
+      {
+        "component": "Scripts.jsx — copyAll() / Toast",
+        "issue": "Copy-all toast fires with 'Copy failed — try again.' instead of 'Copied entire script.' in headless browser (clipboard API unavailable). Spec acknowledges this is expected in sandbox, but toast text is the wrong path. Either treat absence of clipboard API as silent fallback to legacy execCommand, or display 'Copied entire script.' optimistically and only show failure if execCommand also fails. Currently a real user on HTTPS will hit the success path; this is mainly a UX nit when copy genuinely fails.",
+        "selector": "[data-testid='toast']",
+        "priority": "MEDIUM"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "verified_features": {
+    "rotating_tagline": "PASS — all 3 expected taglines observed across 5 reloads, all values match spec",
+    "get_angles_btn_text": "PASS — reads 'Show me 4 angles →'",
+    "angles_section": "PASS — angles-section appears within 30s, 4 angle cards rendered (angle-card-0..3) each with -pick and -save buttons",
+    "save_for_later": "PASS — clicking angle-card-2-save shows toast 'Saved for later'; saved-angles-toggle appears with text 'Show saved angles (1)'; panel opens with the saved-angle-{uuid} entry",
+    "saved_angle_delete": "PASS — deleting the last saved angle removes the saved-angles-toggle from the DOM",
+    "generating_state": "PASS — scripts-generating appears with 7 skeleton-* cards and an elapsed counter ticking ('Xs' visible after 3.5s wait)",
+    "section_cards": "FAIL — section-{key} cards do not render inside scripts-output (see frontend_issues)",
+    "markdown_strong": "PARTIAL — 1 <strong> + 0 literal '**' in scripts-output; but with no section cards rendered there's little content to compare against",
+    "platform_accent_tiktok": "PASS — --platform-accent = '#25F4EE' when scripts-platform-tiktok selected; .is-selected class applied",
+    "platform_accent_youtube": "PASS — --platform-accent = '#FF0033'",
+    "platform_accent_reels": "PASS — --platform-accent = '#E1306C'",
+    "long_form_accent": "ACCEPTABLE — after switching from shorts→long, --platform-accent resolves to '#7F77DD' (brand accent purple). Spec allowed either unset or var(--accent); the brand purple matches the OR clause but the useEffect appears to set rather than remove. Mainly cosmetic.",
+    "no_topic_angles_in_output": "PASS — long-form text from /api/scripts/long does not contain 'TOPIC ANGLES'; shorts text from /api/scripts/shorts contains '### 📱 SHORT-FORM SCRIPT' + [HOOK]/[BODY]/[CTA] markers (verified via backend tests)"
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_scripts.py",
+    "/app/test_reports/pytest/iteration_7.xml"
+  ],
+  "action_items": [
+    "HIGH: Investigate why SectionCard components don't render inside [data-testid='scripts-output']. The output container shows only Copy/Cut/Send action buttons; 0 [data-testid^='section-'] descendants. Could be (a) the parser/section-builder producing an empty sections array for long-form, (b) a state field mismatch (e.g. setSections vs setOutput), or (c) a guard that hides the sections grid until some flag flips. Repro: log in, scripts page, type any topic, get angles, pick angle 1, wait for completion. Same result when re-opening any long-form from history.",
+    "MEDIUM: copyAll() toast should not say 'Copy failed — try again.' on success path; or add execCommand('copy') fallback before showing failure. Real-user HTTPS path likely works; preview/sandbox path shows failure variant."
+  ],
+  "critical_code_review_comments": [
+    "Scripts.jsx: with the new two-step state machine (STEPS.TOPIC | ANGLES | GENERATING | RESULT) ensure each STEP transition explicitly clears the previous step's output state so stale data can't leak. Consider a small useReducer instead of multiple useState pairs.",
+    "Backend prompts.py: build_long_system_prompt + build_shorts_system_prompt removing the TOPIC ANGLES section is good. The _angle_clause helper is clean. Consider validating chosen_angle dict shape with a Pydantic submodel (name/framing/category) instead of free-form dict so bad payloads 400 earlier instead of silently being ignored downstream.",
+    "Saved-angles endpoints: no rate limit / no max-saved cap. A user could spam-save unlimited rows. Suggest a soft cap (e.g. 200 per user) and/or unique index on (user_email, angle.name, topic) to dedupe."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_scripts.py — rewrote for iter7: added /scripts/angles tests, saved-angles CRUD tests, updated long/shorts tests to pass chosen_angle and assert TOPIC ANGLES absent, removed obsolete repurpose section-header assertion against TOPIC ANGLES"
+  ],
+  "success_rate": { "backend": "100% (21/21)", "frontend": "~75% — happy path of two-step + saved-angles + theming works; section cards do not render in output (HIGH)" },
+  "test_credentials": "drcharitycampbell@gmail.com (DEV_BYPASS, all entitlements)",
+  "seed_data_creation": "Backend tests create 3 saved-angles via /api/scripts/saved-angles with TEST_topic_* prefixes and clean them up in fixture teardown. Long-form + shorts scripts also created during test run (deleted at end of test_scripts_delete_and_verify).",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend is solid — all /api/scripts/* and saved-angles endpoints behave correctly under iter7 chosen_angle contract, and TOPIC ANGLES is verifiably absent from both long-form and shorts output text. The unresolved frontend issue is the missing section cards inside scripts-output. Reproducing: any long-form result (fresh or opened from history) shows the topic header + 3 action buttons but no section-{key} cards. Suspect the section-builder code in Scripts.jsx — when iter6 parser logic was reused, the new 'sections' state field may not be getting populated after the async job completes. Confirm by adding a console.log of the parsed sections array in the post-completion handler. The platform-accent system itself works perfectly (all 3 platforms map to correct hex values)."
+}

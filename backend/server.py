@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import secrets
 import time
 import uuid
@@ -33,6 +34,8 @@ from prompts import (
     build_long_system_prompt,
     build_shorts_system_prompt,
     BROLL_PROMPTS_SYSTEM,
+    ANGLES_SYSTEM_PROMPT,
+    build_angles_user_message,
 )
 
 # ---------------------------------------------------------------------------
@@ -558,11 +561,104 @@ async def studio_broll_prompts(payload: BrollPromptsRequest, user: AuthUser = De
 # pattern that's been in production since iteration 1.
 
 LENGTH_VALID = {"short", "medium", "long"}
+ANGLE_CATEGORIES = {"curiosity", "contrarian", "how-to", "story", "list"}
 
 
 def _require_entitlement(user: AuthUser, ent: str) -> None:
     if ent not in user.entitlements:
         raise HTTPException(status_code=403, detail=f"{ent} entitlement required")
+
+
+# --- Script Engine: STEP 1 — topic angles only -----------------------------
+
+class AnglesRequest(BaseModel):
+    topic: str
+
+
+@api.post("/scripts/angles")
+async def scripts_angles(payload: AnglesRequest, user: AuthUser = Depends(current_user)):
+    _require_entitlement(user, "base")
+    topic = payload.topic.strip()
+    if not topic:
+        raise HTTPException(status_code=400, detail="Topic required")
+
+    raw = await _claude_complete(ANGLES_SYSTEM_PROMPT, build_angles_user_message(topic))
+    # Tolerate accidental markdown fences or preamble — extract the JSON array.
+    text = raw.strip()
+    m = re.search(r"\[\s*\{[\s\S]*\}\s*\]", text)
+    if not m:
+        raise HTTPException(status_code=502, detail="Angle generation failed (no JSON array found)")
+    try:
+        angles_raw = json.loads(m.group(0))
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=502, detail=f"Angle generation failed (bad JSON): {e}")
+
+    angles = []
+    for a in angles_raw[:5]:
+        if not isinstance(a, dict):
+            continue
+        name = (a.get("name") or "").strip()
+        framing = (a.get("framing") or "").strip()
+        category = (a.get("category") or "").strip().lower()
+        if category not in ANGLE_CATEGORIES:
+            category = "curiosity"
+        if name and framing:
+            angles.append({"name": name, "framing": framing, "category": category})
+
+    if not angles:
+        raise HTTPException(status_code=502, detail="No usable angles in response")
+
+    return {"topic": topic, "angles": angles}
+
+
+# --- Script Engine: STEP 2 — saved angles backlog --------------------------
+
+class SaveAngleRequest(BaseModel):
+    topic: str
+    angle: dict  # { name, framing, category }
+
+
+@api.post("/scripts/saved-angles")
+async def saved_angles_create(payload: SaveAngleRequest, user: AuthUser = Depends(current_user)):
+    _require_entitlement(user, "base")
+    a = payload.angle or {}
+    if not (a.get("name") and a.get("framing")):
+        raise HTTPException(status_code=400, detail="Angle name + framing required")
+    rec = {
+        "id": str(uuid.uuid4()),
+        "user_email": user.email,
+        "topic": payload.topic.strip(),
+        "angle": {
+            "name": str(a.get("name", "")).strip(),
+            "framing": str(a.get("framing", "")).strip(),
+            "category": (str(a.get("category", "")).strip().lower() or "curiosity"),
+        },
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.saved_angles.insert_one(rec)
+    rec.pop("_id", None)
+    return rec
+
+
+@api.get("/scripts/saved-angles")
+async def saved_angles_list(user: AuthUser = Depends(current_user)):
+    cursor = db.saved_angles.find({"user_email": user.email}).sort("created_at", -1).limit(100)
+    out = []
+    async for doc in cursor:
+        doc.pop("_id", None)
+        out.append(doc)
+    return {"items": out}
+
+
+@api.delete("/scripts/saved-angles/{angle_id}")
+async def saved_angles_delete(angle_id: str, user: AuthUser = Depends(current_user)):
+    r = await db.saved_angles.delete_one({"id": angle_id, "user_email": user.email})
+    if r.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Not found")
+    return {"ok": True}
+
+
+# --- Script Engine: STEP 2 — full script package locked to a chosen angle --
 
 
 async def _run_script_job(script_id: str, system_prompt: str, user_message: str):
@@ -623,7 +719,22 @@ async def _enqueue_script(*, user: AuthUser, mode: str, topic: str, system_promp
 class LongScriptRequest(BaseModel):
     topic: str
     length: str = "medium"  # "short" | "medium" | "long"
-    angle: Optional[str] = None
+    angle: Optional[str] = None  # legacy free-text hint
+    chosen_angle: Optional[dict] = None  # {name, framing, category} — locked angle from step 1
+
+
+def _angle_clause(chosen: Optional[dict], free_text: Optional[str]) -> str:
+    """Format a chosen angle (preferred) or free-text angle bias into the user msg."""
+    if chosen and chosen.get("name") and chosen.get("framing"):
+        return (
+            f"\n\nLOCKED ANGLE — commit to this fully. Do not propose alternatives:"
+            f"\n• Name: {chosen['name']}"
+            f"\n• Framing: {chosen['framing']}"
+            f"\n• Category: {chosen.get('category', 'curiosity')}"
+        )
+    if free_text:
+        return f"\n\nANGLE BIAS: {free_text}. Commit fully to this angle."
+    return ""
 
 
 @api.post("/scripts/long")
@@ -635,14 +746,13 @@ async def scripts_long(payload: LongScriptRequest, user: AuthUser = Depends(curr
         raise HTTPException(status_code=400, detail="Invalid length")
 
     system = build_long_system_prompt(payload.length)
-    user_msg = f"Generate a complete faceless YouTube long-form script package for this topic: {payload.topic.strip()}"
-    if payload.angle:
-        user_msg += f"\n\nANGLE BIAS: {payload.angle}. Commit fully to this angle."
+    user_msg = f"Generate the full faceless YouTube long-form script package (skipping the angle step) for topic: {payload.topic.strip()}"
+    user_msg += _angle_clause(payload.chosen_angle, payload.angle)
 
     return await _enqueue_script(
         user=user, mode="long", topic=payload.topic,
         system_prompt=system, user_message=user_msg,
-        extra={"length": payload.length, "angle": payload.angle},
+        extra={"length": payload.length, "angle": payload.angle, "chosen_angle": payload.chosen_angle},
     )
 
 
@@ -652,6 +762,7 @@ class ShortsRequest(BaseModel):
     topic: str
     platform: str = "youtube"   # "youtube" | "reels" | "tiktok"
     angle: Optional[str] = None
+    chosen_angle: Optional[dict] = None
 
 
 @api.post("/scripts/shorts")
@@ -663,14 +774,13 @@ async def scripts_shorts(payload: ShortsRequest, user: AuthUser = Depends(curren
         raise HTTPException(status_code=400, detail="Invalid platform")
 
     system = build_shorts_system_prompt(payload.platform)
-    user_msg = f"Generate a complete faceless short-form video package for this topic: {payload.topic.strip()}"
-    if payload.angle:
-        user_msg += f"\n\nHOOK ANGLE BIAS FOR THIS SHORT: {payload.angle}. Commit fully to this one — don't hedge."
+    user_msg = f"Generate the full faceless short-form video package (skipping the angle step) for topic: {payload.topic.strip()}"
+    user_msg += _angle_clause(payload.chosen_angle, payload.angle)
 
     return await _enqueue_script(
         user=user, mode="shorts", topic=payload.topic,
         system_prompt=system, user_message=user_msg,
-        extra={"platform": payload.platform, "angle": payload.angle},
+        extra={"platform": payload.platform, "angle": payload.angle, "chosen_angle": payload.chosen_angle},
     )
 
 
