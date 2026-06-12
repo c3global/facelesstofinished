@@ -1,6 +1,13 @@
 // CommonJS shim of parser.js for the standalone unit test.
 // Mirrors src/utils/parser.js verbatim. Keep in sync.
 
+const KNOWN_SECTION_KEYS = new Set([
+  "shortScript", "onScreen", "caption", "hashtags",
+  "coverPrompts", "titleVariants", "angles", "hooks",
+  "outline", "concept", "transitions", "script",
+  "broll", "notes",
+]);
+
 function parseSections(raw) {
   if (!raw) return {};
   const lines = raw.split("\n");
@@ -12,14 +19,17 @@ function parseSections(raw) {
     buffer = [];
   };
   for (const line of lines) {
-    const m = line.match(/^###\s+(.*)$/);
+    const m = line.match(/^#{1,6}\s+(.+)$/);
     if (m) {
-      flush();
       const title = m[1].trim();
-      current = { key: classify(title), title };
-    } else if (current) {
-      buffer.push(line);
+      const key = classify(title);
+      if (KNOWN_SECTION_KEYS.has(key)) {
+        flush();
+        current = { key, title };
+        continue;
+      }
     }
+    if (current) buffer.push(line);
   }
   flush();
   return sections;

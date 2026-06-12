@@ -1,6 +1,16 @@
 // Parse the script-engine markdown output into named sections keyed by ### header.
 // Ported from the legacy Netlify parser.
 
+// List of known top-level section keys we expect from the script-engine output.
+// Any heading whose classified key isn't in this set is treated as sub-content
+// of the currently-open section (so e.g. "### Trap #1" doesn't start a new section).
+const KNOWN_SECTION_KEYS = new Set([
+  "shortScript", "onScreen", "caption", "hashtags",
+  "coverPrompts", "titleVariants", "angles", "hooks",
+  "outline", "concept", "transitions", "script",
+  "broll", "notes",
+]);
+
 export function parseSections(raw) {
   if (!raw) return {};
   const lines = raw.split("\n");
@@ -14,14 +24,21 @@ export function parseSections(raw) {
   };
 
   for (const line of lines) {
-    const m = line.match(/^###\s+(.*)$/);
+    // Accept any markdown heading level — Claude often uses '# VIDEO CONCEPT'
+    // for top-level sections and '###' for sub-headings, even though the prompt
+    // template says '###'. We classify the heading text and only START a new
+    // section when classify() resolves to a known top-level key.
+    const m = line.match(/^#{1,6}\s+(.+)$/);
     if (m) {
-      flush();
       const title = m[1].trim();
-      current = { key: classify(title), title };
-    } else if (current) {
-      buffer.push(line);
+      const key = classify(title);
+      if (KNOWN_SECTION_KEYS.has(key)) {
+        flush();
+        current = { key, title };
+        continue;
+      }
     }
+    if (current) buffer.push(line);
   }
   flush();
   return sections;

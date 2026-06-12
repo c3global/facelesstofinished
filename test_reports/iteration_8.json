@@ -1,0 +1,52 @@
+{
+  "summary": "Iteration 7b verification — PRIMARY FIX from iter7 (section-card rendering for long-form) is now PASSING. Long-form result renders all 7 expected section cards (concept/hooks/outline/script/transitions/broll/notes) inside [data-testid='scripts-output'] with markdown <strong> rendered and no literal '**' leaking into the text. copyAll() also correctly emits 'Copied entire script.' in headless via the new execCommand fallback. Opening a long-form job from history also re-populates the 7 section cards. NEW SHORTS BUG FOUND: phone-beat-hook/body/cta blocks are missing because Claude wraps the bracket markers in markdown bold (e.g. '**[HOOK — 0:00–0:03]**') and ShortPhoneBody's regex requires the bracket to be alone on the line — the phone column ends up empty.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "Scripts.jsx — ShortPhoneBody",
+        "issue": "Phone-frame center column renders empty for shorts results. Cause: Claude consistently emits the beat markers wrapped in markdown bold ('**[HOOK — 0:00–0:03]**', '**[BODY — 0:03–0:50]**', '**[CTA — 0:51–0:58]**') inside the SHORT-FORM SCRIPT section, but ShortPhoneBody's bracket-detector regex /^\\s*\\[(HOOK|BODY|CTA)([^\\]]*)\\]\\s*$/i requires the bracket to be alone on the line — no leading/trailing '**'. Result: phone-body element exists but contains no phone-beat-* children, so the TikTok/Reels phone frame is visibly blank (verified via screenshot on existing shorts job 6473d5dd-8814-45b9-91a1-970712a207ae and a fresh shorts gen). Plan/Distribute columns (hooks, caption, hashtags, broll, notes, on-screen, title variants, cover prompts) all render correctly.",
+        "selector": "[data-testid='phone-body'] > [data-testid^='phone-beat-']",
+        "priority": "HIGH",
+        "suggested_fix": "Strip leading/trailing '**' (and any other markdown emphasis) from each line in ShortPhoneBody before the bracket regex test. Two-liner: `const stripped = ln.replace(/^\\s*\\*\\*(.+?)\\*\\*\\s*$/,'$1');` then run the bracket regex on stripped. Alternatively, broaden the regex to `/^\\s*(?:\\*\\*)?\\[(HOOK|BODY|CTA)([^\\]]*)\\](?:\\*\\*)?\\s*$/i`. Either fix is mechanical and should be paired with a unit test in parser.test.cjs using a SAMPLE_BOLD_BRACKET fixture."
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "verified_features": {
+    "long_form_section_cards": "PASS — 7/7 expected section testids present inside scripts-output: section-concept, section-hooks, section-outline, section-script, section-transitions, section-broll, section-notes (plus their *-copy buttons; 14 total section-* testids).",
+    "long_form_markdown_strong": "PASS — section-concept body contains 4 <strong> elements; 0 literal '**' characters in rendered text. Verified bold inline labels (Working Title, Hook Strategy, Core Promise to Viewer, Target Length) render as bold via ReactMarkdown.",
+    "long_form_copy_all_toast": "PASS — clicking scripts-copy-all-btn in headless Chromium shows toast text 'Copied entire script.' (execCommand fallback works). Toast auto-dismisses.",
+    "open_from_history_repopulates": "PASS — clicking scripts-history-open-{id} on a long-form entry re-renders all 7 section cards inside scripts-output (no empty container).",
+    "shorts_layout_present": "PASS — shorts-layout 3-column appears for shorts results; PhoneFrame visible in the center column with the '9:41' status bar and 'TIKTOK' platform pill.",
+    "shorts_plan_distribute_columns": "PASS — section-hooks, section-titleVariants, section-coverPrompts (plan); section-caption, section-hashtags, section-onScreen, section-broll, section-notes (distribute) all render correctly with markdown content.",
+    "shorts_phone_beats": "FAIL — phone-beat-hook, phone-beat-body, phone-beat-cta missing. See frontend_issues.",
+    "no_section_angles_in_output": "PASS — neither long-form nor shorts scripts-output contains a section-angles testid (the angles step is gated to step 2 only).",
+    "two_step_gating": "PASS — STEPS.TOPIC → STEPS.ANGLES → STEPS.GENERATING → STEPS.RESULT transitions correctly; cannot generate a script without first picking an angle (angle-card-N-pick).",
+    "rotating_tagline": "PASS — across 5 reloads, 2/3 of the 3 expected taglines were observed; all observed values are in the TAGLINES set. (Stochastic — Math.random pick on mount; 2/3 is within expected variance for 5 samples.)"
+  },
+  "test_report_links": [
+    "/app/test_reports/iteration_8.json",
+    "/app/backend/tests/test_scripts.py (unchanged from iter7 — backend not retested per instructions)"
+  ],
+  "action_items": [
+    "HIGH: Fix ShortPhoneBody in /app/frontend/src/pages/Scripts.jsx to strip leading/trailing '**' from each line before the bracket-marker regex. Without this, every shorts result renders with an empty phone frame — the centerpiece of the shorts experience. Recommended fix is a 1-line .replace(/^(\\s*)\\*\\*\\s*(\\[.+?\\])\\s*\\*\\*(\\s*)$/,'$1$2$3') applied to each line before the existing regex test, OR broaden the regex itself to optionally consume surrounding '**'. Add a unit test in parser.test.cjs covering '**[HOOK — 0:00–0:03]**'."
+  ],
+  "critical_code_review_comments": [
+    "ShortPhoneBody and parseSections both have to defend against Claude's markdown-bold habit (parser.js already strips '**' inside extractNarration). Consider a shared `stripMarkdownEmphasis` helper in /app/frontend/src/utils/parser.js so the rules stay in sync — the long-form parser fix in iter7b addressed this for headings, but the shorts beat-marker parser missed the same treatment.",
+    "Scripts.jsx is now ~785 lines including ShortPhoneBody, SectionCard, AngleCard, SkeletonCard, and the main Scripts component. Recommend extracting the three card components and ShortPhoneBody into /app/frontend/src/components/scripts/ to bring the page file under 500 lines (per the >700-line guideline).",
+    "copyAll() now has a proper execCommand fallback — nice. Consider also calling document.queryCommandSupported('copy') before showing the failure toast, so SSR/older browsers can degrade more gracefully."
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "100% (not retested — iter7 verified at 21/21; no backend changes per problem statement)",
+    "frontend": "~90% — all long-form spec items PASS, shorts plan/distribute PASS, only the phone-frame beat blocks fail to render due to the ** wrapping bug"
+  },
+  "test_credentials": "drcharitycampbell@gmail.com (DEV_BYPASS, all entitlements)",
+  "seed_data_creation": "Created 1 long-form job ('How to find your first faceless niche in 24 hours', Short, angle index 1) and 1 shorts job ('One income idea anyone can start this weekend for free', TikTok, angle index 0) via the live flow. Both persisted to history. No cleanup performed — they are usable as regression fixtures.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Long-form rendering bug from iter7 is RESOLVED — confirmed via fresh gen + history reopen. The ONLY remaining issue is the shorts phone-frame: ShortPhoneBody can't detect '**[HOOK — ...]**' markers because they're wrapped in markdown bold. Repro: open any shorts job from history (e.g. id=6473d5dd-8814-45b9-91a1-970712a207ae for drcharitycampbell), look at the center column — phone-body exists but contains zero phone-beat-* children. Fetching the raw text from /api/scripts/job/{id} confirms the SHORT-FORM SCRIPT section uses '**[HOOK — 0:00–0:03]**' etc. as standalone lines wrapped in markdown emphasis.",
+  "rca of the issue": "Iter7 RCA was correct that the parser was rejecting non-### headings; iter7b's parser fix is verified working. The newly-found shorts bug is a SEPARATE, pre-existing issue (not introduced by iter7b) — ShortPhoneBody.lines[].match() never strips markdown emphasis before testing the bracket pattern, so any time Claude emits '**[HOOK — ...]**' (which it does ~100% of the time given the FACE48 shorts prompt template), the phone column renders empty. Mitigation: strip leading/trailing '**' from each line before the regex test, OR broaden the regex to optionally consume surrounding '**'. Both are 1-line fixes."
+}

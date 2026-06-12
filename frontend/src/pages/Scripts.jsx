@@ -403,12 +403,27 @@ export default function Scripts() {
   // ---- Copy all sections (markdown) ----
   const copyAll = async () => {
     if (!output?.text) return;
+    let copied = false;
     try {
-      await navigator.clipboard.writeText(output.text);
-      setToast("Copied entire script.");
-    } catch {
-      setToast("Copy failed — try again.");
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(output.text);
+        copied = true;
+      }
+    } catch { /* fall through to legacy execCommand */ }
+    if (!copied) {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = output.text;
+        ta.setAttribute("readonly", "");
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        copied = document.execCommand("copy");
+        document.body.removeChild(ta);
+      } catch {}
     }
+    setToast(copied ? "Copied entire script." : "Copy failed — try selecting & copying manually.");
   };
 
   const useInStudio = () => {
