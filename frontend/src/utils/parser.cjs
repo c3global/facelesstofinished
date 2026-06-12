@@ -49,8 +49,8 @@ function extractNarration(raw) {
   const sections = parseSections(raw);
   let narration = sections.script?.body || sections.shortScript?.body || raw;
   narration = narration.replace(/\[\s*(B-?ROLL|ON[- ]SCREEN)\s*:[^\]]*\]/gi, "");
-  narration = narration.replace(/^\s*\[[^\]]*\]\s*$/gm, "");
   narration = narration.replace(/\*\*(.+?)\*\*/g, "$1").replace(/\*(.+?)\*/g, "$1");
+  narration = narration.replace(/^\s*\[[^\]\n]*\]\s*$/gm, "");
   narration = narration.replace(/`+/g, "");
   narration = narration.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).join("\n\n");
   return narration;

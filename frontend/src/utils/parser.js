@@ -75,13 +75,14 @@ export function extractNarration(raw) {
 
   // Drop inline directive cues (anywhere they appear)
   narration = narration.replace(/\[\s*(B-?ROLL|ON[- ]SCREEN)\s*:[^\]]*\]/gi, "");
-  // Drop standalone beat headers on their own line
-  narration = narration.replace(/^\s*\[[^\]]*\]\s*$/gm, "");
-  // Strip markdown emphasis markers
+  // Strip markdown emphasis FIRST — Claude wraps beat headers in **...** so we
+  // need to remove the asterisks before the bracket-strip can match the line.
   narration = narration.replace(/\*\*(.+?)\*\*/g, "$1").replace(/\*(.+?)\*/g, "$1");
+  // Drop standalone bracket beat headers on their own line (single-line bracket only)
+  narration = narration.replace(/^\s*\[[^\]\n]*\]\s*$/gm, "");
   // Strip code backticks
   narration = narration.replace(/`+/g, "");
-  // Collapse: trim every line, drop empties, rejoin with a blank line between paragraphs
+  // Collapse: trim every line, drop empties, rejoin with blank line between paragraphs
   narration = narration
     .split(/\r?\n/)
     .map((l) => l.trim())

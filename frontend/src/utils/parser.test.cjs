@@ -16,19 +16,19 @@ const SAMPLE_LONG = `### 🎯 TOPIC ANGLES
 
 ### 🎙️ FULL NARRATION SCRIPT
 
-[HOOK — 0:00–0:30]
+**[HOOK — 0:00–0:30]**
 You're over 40. You're tired. You feel like you're doing everything right.
 [B-ROLL: woman in her 40s looking tired in a bright kitchen]
 And yet the scale won't budge. Here's what nobody tells you.
 [B-ROLL: close-up of vegetables and salad on a plate]
 
-[SECTION 1 — The Protein Problem]
+**[SECTION 1: WHY YOUR CURRENT DIET MIGHT BE FAILING YOU — 1:00–2:30]**
 Most diets aimed at women over 40 are protein-starved.
 [B-ROLL: chicken breast being prepared on a wooden board]
 That's because we were told fat is the enemy. **It isn't.**
 [ON-SCREEN: Protein > calories]
 
-[OUTRO + CTA — Final 60 seconds]
+**[OUTRO + CTA — 6:30–7:00]**
 If this resonated, subscribe.
 [B-ROLL: laptop with subscribe button on screen]
 

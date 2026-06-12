@@ -1,0 +1,57 @@
+{
+  "summary": "Iteration 5b re-verification PASSED. The parser fix (bold-strip BEFORE bracket-strip + tightened single-line regex) successfully eliminates all forbidden substrings from the Studio script textarea when handing off real Claude long-form output. End-to-end UI flow on the public preview URL verified: (a) long-form handoff produces 5694-char clean narration with zero bracket beat headers, zero markdown bold, zero ### headings; (b) handoff-switch-faceless click now correctly flips mode-faceless to is-active and renders bulk-prompts (12 lines) and 12 scene cards; (c) Shorts handoff auto-switches to Faceless mode and hides the Switch-CTA as designed; (d) backward-compat plain-string handoff still pre-fills the textarea; (e) theme-toggle logo swap regression intact. Token economy honored — zero new generations triggered; reused existing real-Claude scripts from history.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/frontend/src/utils/parser.test.cjs",
+    "/app/test_reports/iteration_6.json"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "parser.js and parser.cjs are still duplicate hand-synced implementations. The iter 5 review flagged this; still worth a tiny build step (e.g. esbuild --format=cjs) to derive one from the other and remove the drift risk. Not blocking.",
+    "Scripts.jsx useInStudio() silently no-ops if output.text is missing — consider a user-facing toast/disabled state on the Send-to-Studio button so users get feedback if they click before output is ready. Currently it just does nothing.",
+    "Studio handoff useEffect: localStorage.removeItem('f48_handoff_script') should run in a finally block to guarantee cleanup even on JSON.parse failure mid-flow. Today the try/catch path handles the happy + JSON-fail cases, but worth a defensive finally."
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "not retested (frontend-only per request)",
+    "frontend": "100% — all 4 primary assertions pass. Long-form clean narration ✅, Shorts auto-faceless ✅, switch-faceless mode flip ✅, banner close ✅, plain-string fallback ✅, theme-toggle regression ✅."
+  },
+  "test_credentials": "drcharitycampbell@gmail.com — passwordless DEV_BYPASS, all entitlements (auth bypass working as expected)",
+  "seed_data_creation": "None. Reused existing Recent Scripts (Long: 'Animal based diet for black women over 40' + Short: 'Stop scrolling before bed'). Both contain real Claude output including the previously-problematic bold-wrapped bracket beat headers (verified — source contained '**[HOOK' before extractNarration runs).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iteration 5b bug fully closed. The bracket-beat-header leak is gone for both long and shorts paths. Parser fix verified at both unit-test (parser.test.cjs) and end-to-end UI level on a real Claude long-form FULL NARRATION SCRIPT body that explicitly contained '**[HOOK — 0:00–0:30]**', '**[SECTION ...]**', '**[OUTRO + CTA — ...]**' markers in the source (confirmed by output_section snippet check). If another iteration is needed, focus areas would be (1) error-path coverage for empty/malformed handoff payloads, (2) consolidating parser.js+parser.cjs duplication, (3) chip-modal regression — the data-testid 'chip-voice' did not exist (chips found via visible labels but no testid match). Main agent should confirm intended chip testid naming for future test coverage.",
+  "verification_evidence": {
+    "long_form": {
+      "textarea_length": 5694,
+      "forbidden_substrings_found": [],
+      "banner_text_snippet": "Loaded from Script Engine 964-word script + 12 B-roll prompts — Animal based diet for black women over 40 · Switch to Faceless to use the B-roll prompts →",
+      "initial_mode_avatar_active": true,
+      "post_switch_mode_faceless_active": true,
+      "bulk_prompts_lines": 12,
+      "scene_cards_rendered": 12,
+      "banner_closes": true
+    },
+    "shorts": {
+      "textarea_length": 790,
+      "forbidden_substrings_found": [],
+      "mode_faceless_active_by_default": true,
+      "bulk_prompts_lines": 7,
+      "handoff_switch_faceless_cta_absent": true
+    },
+    "backward_compat_plain_string": {
+      "pre_filled_value": "just a plain string fallback test 12345",
+      "passed": true
+    },
+    "regression": {
+      "theme_toggle_logo_swap": "logo-light.png → logo-dark.png",
+      "generate_prompts_btn_present": true,
+      "generate_prompts_btn_disabled": false
+    }
+  }
+}
