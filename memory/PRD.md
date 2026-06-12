@@ -76,6 +76,26 @@ back to it for entitlement verification.
 - ✅ Removed redundant "Add scene" / "Pick footage" / inline scene-number-remove UI
 - ✅ Frontend Playwright E2E (~30 scenarios pass) per `/app/test_reports/iteration_2.json`
 
+## Iteration 3 — Script Engine + Claude prompts (2026-01-12)
+- ✅ Script Engine fully ported from legacy Netlify build at `/scripts` route
+  - Long-form mode (gated by `base` entitlement) with Short/Medium/Long length presets
+  - Shorts mode (gated by `shorts` entitlement) with YouTube/Reels/TikTok platform presets
+  - Optional angle bias input
+  - "Cut into a Short" repurposes a long script via a new Claude call
+  - "Send to Studio" hands the narration off via localStorage to pre-fill Studio's script box
+  - Section cards rendered from `### header` parsing; Copy button per section
+  - History list, open, delete
+- ✅ "Generate from script" button next to Studio's bulk B-roll textarea — Claude returns 4-12 visual prompts that auto-fill the textarea
+- ✅ All Claude calls use the Emergent Universal LLM key (`claude-sonnet-4-5-20250929`)
+- ✅ System prompts (`prompts.py`) ported verbatim from legacy so the section-header structure stays identical and the legacy parser keeps working
+
+## Iteration 4 — Async job pattern (2026-01-12)
+- ✅ Fixed Cloudflare 60s edge timeout for long-form script generation. `/api/scripts/long`, `/scripts/shorts`, `/scripts/repurpose` now follow the same async-job pattern as `/api/studio/render`:
+  - POST inserts a mongo record with `status="running"` and spawns the Claude call in `asyncio.create_task`
+  - Returns the queued record in <1s (no edge-timeout exposure)
+  - Frontend polls `GET /api/scripts/job/{id}` every 2.5s with an elapsed-seconds counter UI
+- ✅ Tested end-to-end on the PUBLIC preview URL — 18/18 backend, 100% frontend per `/app/test_reports/iteration_4.json`
+
 ## Prioritized backlog
 
 ### P0 — must-have for Phase 2

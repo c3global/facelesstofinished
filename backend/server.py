@@ -747,9 +747,6 @@ async def scripts_delete(script_id: str, user: AuthUser = Depends(current_user))
     return {"ok": True}
 
 
-LENGTH_VALID_DEPRECATED = None  # Kept for backwards-compat — see top of script engine block.
-
-
 # ---------------------------------------------------------------------------
 # Mount
 # ---------------------------------------------------------------------------
