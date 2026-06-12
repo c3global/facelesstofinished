@@ -138,13 +138,17 @@ function AngleCard({ angle, onPick, onSave, isSaved, testid }) {
 // =====================================================================
 function ShortPhoneBody({ shortBody }) {
   if (!shortBody) return null;
-  // Parse the [HOOK — 0:00–0:03], [BODY — ...], [CTA — ...] blocks, stripping
-  // inline directive cues and markdown bold so the phone reads cleanly.
+  // Parse the [HOOK — 0:00–0:03], [BODY — ...], [CTA — ...] blocks. Claude often
+  // wraps these markers in markdown bold ('**[HOOK — ...]**'), so we strip
+  // leading/trailing emphasis from each line BEFORE the bracket regex test.
+  const stripEmphasis = (s) =>
+    s.replace(/^\s*\*\*\s*/, "").replace(/\s*\*\*\s*$/, "").replace(/^\s*\*\s*/, "").replace(/\s*\*\s*$/, "");
+
   const blocks = [];
-  const re = /^\s*\[(HOOK|BODY|CTA)([^\]]*)\]\s*$/gim;
   const lines = shortBody.split(/\r?\n/);
   let current = null;
-  for (const ln of lines) {
+  for (const rawLn of lines) {
+    const ln = stripEmphasis(rawLn);
     const m = ln.match(/^\s*\[(HOOK|BODY|CTA)([^\]]*)\]\s*$/i);
     if (m) {
       if (current) blocks.push(current);
@@ -155,7 +159,6 @@ function ShortPhoneBody({ shortBody }) {
     }
   }
   if (current) blocks.push(current);
-  re.lastIndex = 0;
 
   const cleanLine = (s) => s
     .replace(/\*\*(.+?)\*\*/g, "$1")

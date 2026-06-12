@@ -89,8 +89,42 @@ back to it for entitlement verification.
 - ✅ All Claude calls use the Emergent Universal LLM key (`claude-sonnet-4-5-20250929`)
 - ✅ System prompts (`prompts.py`) ported verbatim from legacy so the section-header structure stays identical and the legacy parser keeps working
 
-## Iteration 5/5b — Smart Send-to-Studio handoff (2026-01-12)
-- ✅ Fixed handoff bug where the entire script-engine output (including `### TOPIC ANGLES`, `### HOOK VARIATIONS`, and bracket beat markers like `**[HOOK — 0:00–0:30]**`) was being copied into the avatar's script box. Avatar would have read out section headers aloud.
+## Iteration 7 — Script Engine 2.0 (2026-01-12)
+Major refactor that addresses 7 explicit user asks. Verified 21/21 backend + ~95% frontend across two test passes (iteration_7.json + iteration_8.json).
+
+**Two-step gated flow.** `/api/scripts/angles` is a new, fast (~5-8s) sync endpoint that returns 4 distinct creative angles for a topic, each tagged with category (`curiosity` / `contrarian` / `how-to` / `story` / `list`). The full script package (`/api/scripts/long` and `/scripts/shorts`) now accepts a `chosen_angle` dict and explicitly tells Claude to skip the "TOPIC ANGLES" section and commit fully to the locked angle. The UI is a state machine — `TOPIC → ANGLES → GENERATING → RESULT`.
+
+**Saved Angles backlog.** `db.saved_angles` collection keyed by user_email; CRUD at `/api/scripts/saved-angles`. Each angle card has a bookmark icon (BookmarkCheck when saved). A "Show saved angles (N)" toggle reveals a panel of saved angles — one click loads the topic + angle and jumps straight to generation.
+
+**Markdown rendering** via `react-markdown` + `remark-gfm`. Section card bodies render `**bold**`, lists, headings, code, blockquotes, and tables as proper HTML instead of raw asterisks. Brand-aligned typography.
+
+**Skeleton placeholders + elapsed counter.** During step-2 generation, each expected section renders a shimmer-animated skeleton card with a live "Generating · {N}s" label. When the job completes, the result snaps in.
+
+**"Copy all" button + toast.** Copies the entire markdown script package to the clipboard. Falls back to `document.execCommand('copy')` if `navigator.clipboard` isn't available (improves sandbox / headless behavior). Toast confirms "Copied entire script." and auto-dismisses.
+
+**Rotating tagline.** Hero h1 randomly picks one of three on mount: "Write a script that gets watched.", "Type a topic. Get a complete script.", "From blank page to ready-to-record — in seconds."
+
+**Platform color theming (Shorts).** `--platform-accent` CSS variable set at the document root via `document.documentElement.style.setProperty()` based on the selected platform: YouTube `#FF0033`, Reels `#E1306C`, TikTok `#25F4EE`. Applied to: platform-card selected state, Generate CTA gradient, phone-frame chrome + glow, status-bar platform badge, beat-label color, on-screen cue background, and section-column headers in Shorts mode. Long-form mode actively removes the variable so the brand purple takes over.
+
+**Phone-frame wrapper (Shorts).** New `<PhoneFrame platform={p}>` component renders a 320px phone shell with notch, fake 9:41 status bar, platform pill (TIKTOK / REELS / YOUTUBE) and a 22px-radius screen. Shorts result lays out in a 3-column Plan / Script / Distribute grid — Plan column has Hook Variations + Title Variants + Cover Image Prompts; Script column centers the phone containing parsed HOOK/BODY/CTA beat blocks with inline `[ON-SCREEN: ...]` and `[B-ROLL: ...]` cues styled as platform-tinted chips; Distribute column has Caption, Hashtags, On-Screen, B-Roll list, Notes.
+
+**Parser hardening.** Two real Claude-quirk fixes shipped in this iteration:
+- `parseSections()` now accepts any heading level (`#{1,6}`) and only starts a new section when `classify(title)` resolves to one of 14 known top-level keys. Sub-headings like `### Trap #1` inside the FULL NARRATION SCRIPT fold into the parent section's body instead of starting an orphan section. Regression test in `/app/frontend/src/utils/parser.test.cjs`.
+- `ShortPhoneBody` strips leading/trailing markdown emphasis (`**`, `*`) from each line before the beat-marker regex test, so `**[HOOK — 0:00–0:03]**` is detected correctly. Verified against real shorts job from history.
+
+**Files touched**
+- `/app/backend/server.py` — new `/scripts/angles`, saved-angles CRUD, `_angle_clause()` helper, `LongScriptRequest.chosen_angle` + `ShortsRequest.chosen_angle`.
+- `/app/backend/prompts.py` — new `ANGLES_SYSTEM_PROMPT` and `build_angles_user_message`. Long + shorts prompts no longer emit a TOPIC ANGLES section.
+- `/app/frontend/src/pages/Scripts.jsx` — full rewrite (state machine, AngleCard, SectionCard, SkeletonCard, ShortPhoneBody, copyAll with execCommand fallback, applySavedAngle, tagline rotation, platform accent useEffect).
+- `/app/frontend/src/components/PhoneFrame.jsx`, `/app/frontend/src/components/Toast.jsx` — new.
+- `/app/frontend/src/utils/parser.js` + `parser.cjs` — heading-level fix, narration extractor unchanged.
+- `/app/frontend/src/utils/parser.test.cjs` — added SAMPLE_MIXED_HEADINGS regression test.
+- `/app/frontend/src/index.css` — new `--cat-*` variables, `--platform-accent` token.
+- `/app/frontend/src/App.css` — appended ~250 lines: `.toast`, `.angle-card`, `.angles-grid`, `.saved-angle-card`, `.skeleton-bar` w/ shimmer, `.markdown` rules, `.platform-card.is-selected` using `--platform-accent`, `.shorts-layout`, `.phone-wrap` / `.phone-shell` / `.phone-status` / `.phone-platform-badge` / `.phone-beat-*` / `.phone-cue-onscreen` / `.phone-cue-broll`.
+
+**Deferred (acknowledged in test report)**
+- Scripts.jsx is now ~800 lines — recommend extracting AngleCard / SectionCard / SkeletonCard / ShortPhoneBody to `/app/frontend/src/components/scripts/` next iteration.
+- Saved-angles endpoint has no per-user max cap or rate limit (suggest 200/user soft cap + unique index on `(user_email, angle.name, topic)`).
 - ✅ New `extractNarration(rawScript)` helper in `/app/frontend/src/utils/parser.js`:
   - Prefers the `FULL NARRATION SCRIPT` (long) or `SHORT-FORM SCRIPT` (shorts) section
   - Strips inline `[B-ROLL: ...]` and `[ON-SCREEN: ...]` directive cues
