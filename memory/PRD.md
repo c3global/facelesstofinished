@@ -64,6 +64,18 @@ back to it for entitlement verification.
 - ✅ Auto scene generation from script paragraphs (faceless mode), storyboard preview strip
 - ✅ Backend tests (15/15 pass), Frontend Playwright E2E (16/16 scenarios pass) per `/app/test_reports/iteration_1.json`
 
+## Iteration 2 — Brand/UX (2026-01-12)
+- ✅ Brand restyle to user's F2F48 palette (deep navy purple bg, rose-gold/copper warm accent, red CTA gradient, purple selection states)
+- ✅ Header now uses real F2F48 logo image (`/logo-dark.png` and `/logo-light.png`) that swaps with theme toggle
+- ✅ Dark/light theme toggle in header, persisted in localStorage
+- ✅ Avatar vs Faceless mode visually differentiated: Avatar = warm copper accent, Faceless = purple accent (mode toggle, eyebrow color)
+- ✅ Bulk B-Roll prompts textarea — one prompt per line auto-creates one scene card, capped at 12 with live count "3 scenes · up to 12"
+- ✅ Per-scene source override pills (AI / Pexels / Pixabay) — default to global B-Roll chip, override per scene
+- ✅ "Mix per scene" global option forces explicit per-scene source picks
+- ✅ Source badges (AI / Px / Pb) on storyboard thumbnails
+- ✅ Removed redundant "Add scene" / "Pick footage" / inline scene-number-remove UI
+- ✅ Frontend Playwright E2E (~30 scenarios pass) per `/app/test_reports/iteration_2.json`
+
 ## Prioritized backlog
 
 ### P0 — must-have for Phase 2
