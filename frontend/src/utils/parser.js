@@ -141,3 +141,51 @@ export function extractBrollPrompts(raw, maxCount = 12) {
   }
   return out;
 }
+
+// =====================================================================
+// Content Sprint parser — split a single sprint output into 5 variants
+// =====================================================================
+
+/**
+ * Parse a Content Sprint output string into an array of variant objects.
+ * Each variant has `{ index, name, angle, category, body }`.
+ * The split key is the literal header: `### 🎬 SPRINT VARIANT N — name`
+ * — but we also tolerate the emoji being missing.
+ */
+export function parseSprintVariants(raw) {
+  if (!raw) return [];
+  const lines = raw.split(/\r?\n/);
+  const variants = [];
+  let current = null;
+  let buffer = [];
+
+  const HEADER = /^#{1,6}\s+(?:\p{Extended_Pictographic}\s*)?SPRINT\s+VARIANT\s+(\d+)\s*[—–-]?\s*(.*)$/iu;
+
+  const flush = () => {
+    if (current) {
+      const body = buffer.join("\n").trim();
+      const angleMatch = body.match(/\*\*Angle:\*\*\s*(.+)/i);
+      const catMatch = body.match(/\*\*Category:\*\*\s*([a-z-]+)/i);
+      variants.push({
+        index: current.index,
+        name: current.name,
+        angle: angleMatch ? angleMatch[1].trim() : "",
+        category: catMatch ? catMatch[1].trim().toLowerCase() : "curiosity",
+        body,
+      });
+      buffer = [];
+    }
+  };
+
+  for (const line of lines) {
+    const m = line.match(HEADER);
+    if (m) {
+      flush();
+      current = { index: parseInt(m[1], 10), name: (m[2] || "").trim() };
+      continue;
+    }
+    if (current) buffer.push(line);
+  }
+  flush();
+  return variants;
+}

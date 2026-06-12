@@ -271,6 +271,18 @@
   box-shadow: inset 0 0 0 1px var(--accent-soft);
 }
 
+/* Scripts page mode toggle — Long-form (purple) vs Shorts (platform color) */
+.mode-opt[data-mode="long"].is-active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.mode-opt[data-mode="shorts"].is-active {
+  background: color-mix(in srgb, var(--platform-accent, #25F4EE) 14%, transparent);
+  color: var(--platform-accent, #25F4EE);
+  box-shadow: inset 0 0 0 1px var(--platform-accent, #25F4EE);
+}
+
 /* When in Avatar mode, the studio takes on a subtle warm wash */
 .studio-main[data-mode="avatar"] .studio-eyebrow { color: var(--warning); }
 .studio-main[data-mode="faceless"] .studio-eyebrow { color: var(--accent); }
@@ -1438,3 +1450,307 @@
   flex-shrink: 0;
 }
 .phone-cue-onscreen .phone-cue-tag { background: var(--platform-accent, var(--accent)); }
+
+/* =====================================================================
+   Script Engine 3.0 — per-section accents, progress bar, sprint UI, tabs
+   ===================================================================== */
+
+/* Per-section accent colors — left border on each section card */
+:root {
+  --sec-angles:      #FF7A29;   /* orange */
+  --sec-concept:     #A78BFA;   /* lavender */
+  --sec-hooks:       #EF4444;   /* red */
+  --sec-outline:     #3B82F6;   /* blue */
+  --sec-script:      #22C55E;   /* green */
+  --sec-transitions: #EC4899;   /* pink */
+  --sec-broll:       #06B6D4;   /* cyan */
+  --sec-notes:       #F59E0B;   /* amber */
+  --sec-shortScript: #22C55E;
+  --sec-onScreen:    #06B6D4;
+  --sec-caption:     #A78BFA;
+  --sec-hashtags:    #EC4899;
+  --sec-titleVariants: #3B82F6;
+  --sec-coverPrompts: #FF7A29;
+}
+
+[data-section="angles"]        { --sec-color: var(--sec-angles); }
+[data-section="concept"]       { --sec-color: var(--sec-concept); }
+[data-section="hooks"]         { --sec-color: var(--sec-hooks); }
+[data-section="outline"]       { --sec-color: var(--sec-outline); }
+[data-section="script"]        { --sec-color: var(--sec-script); }
+[data-section="transitions"]   { --sec-color: var(--sec-transitions); }
+[data-section="broll"]         { --sec-color: var(--sec-broll); }
+[data-section="notes"]         { --sec-color: var(--sec-notes); }
+[data-section="shortScript"]   { --sec-color: var(--sec-shortScript); }
+[data-section="onScreen"]      { --sec-color: var(--sec-onScreen); }
+[data-section="caption"]       { --sec-color: var(--sec-caption); }
+[data-section="hashtags"]      { --sec-color: var(--sec-hashtags); }
+[data-section="titleVariants"] { --sec-color: var(--sec-titleVariants); }
+[data-section="coverPrompts"]  { --sec-color: var(--sec-coverPrompts); }
+
+.section-card[data-section] {
+  border-left: 3px solid var(--sec-color, var(--border-soft));
+}
+.section-card[data-section] .section-card-title {
+  color: var(--sec-color, var(--text));
+}
+
+/* Staggered fade-in for result section cards */
+@keyframes section-fade-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.section-card.section-card-reveal {
+  opacity: 0;
+  animation: section-fade-in 360ms cubic-bezier(.16,1,.3,1) forwards;
+}
+
+/* =====================================================================
+   Generating: animated progress bar + rotating stage label
+   ===================================================================== */
+.gen-progress {
+  margin: 18px 0 22px;
+  padding: 16px 18px;
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.gen-progress-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  font-weight: 500;
+}
+.gen-progress-label {
+  color: var(--text);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 12px;
+}
+.gen-progress-elapsed {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+}
+.gen-progress-bar {
+  position: relative;
+  height: 6px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.gen-progress-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 30%;
+  background: linear-gradient(
+    90deg,
+    var(--platform-accent, var(--accent)),
+    color-mix(in srgb, var(--platform-accent, var(--accent)) 60%, #fff 40%)
+  );
+  border-radius: 999px;
+  animation: gen-progress-slide 1.6s cubic-bezier(.4,0,.6,1) infinite;
+}
+@keyframes gen-progress-slide {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(360%); }
+}
+.spin { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* =====================================================================
+   Content Sprint toggle (Single Short / Content Sprint 5)
+   ===================================================================== */
+.sprint-toggle {
+  display: inline-flex;
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  padding: 3px;
+  gap: 2px;
+  margin: 0;
+}
+.sprint-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 16px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  transition: color .15s, background .15s;
+}
+.sprint-opt:hover { color: var(--text); }
+.sprint-opt.is-active {
+  background: var(--platform-accent, var(--accent));
+  color: #fff;
+  box-shadow: 0 4px 12px -4px color-mix(in srgb, var(--platform-accent, var(--accent)) 70%, transparent);
+}
+.sprint-opt-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, #000 35%, transparent);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+/* Multi-platform checkbox */
+.multi-platform-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+  transition: border-color .15s, background .15s;
+}
+.multi-platform-row:hover { border-color: color-mix(in srgb, var(--accent) 50%, var(--border-soft)); }
+.multi-platform-row input[type="checkbox"] {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid var(--border-strong, var(--border-soft));
+  border-radius: 4px;
+  background: var(--surface-soft);
+  cursor: pointer;
+  display: inline-grid;
+  place-items: center;
+  position: relative;
+}
+.multi-platform-row input[type="checkbox"]:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.multi-platform-row input[type="checkbox"]:checked::after {
+  content: "";
+  width: 9px;
+  height: 5px;
+  border-left: 2px solid #fff;
+  border-bottom: 2px solid #fff;
+  transform: rotate(-45deg) translate(0, -1px);
+}
+
+/* =====================================================================
+   Multi-platform results — tabs
+   ===================================================================== */
+.platform-tabs {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  margin-bottom: 18px;
+}
+.platform-tab {
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  transition: color .15s, background .15s;
+}
+.platform-tab:hover { color: var(--text); }
+.platform-tab.is-active {
+  background: color-mix(in srgb, var(--tab-accent, var(--accent)) 16%, transparent);
+  color: var(--tab-accent, var(--accent));
+  box-shadow: inset 0 0 0 1px var(--tab-accent, var(--accent));
+}
+.platform-tab-status {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.platform-tab-status.is-running {
+  background: var(--accent);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+.platform-tab-status.is-complete { background: #22C55E; }
+.platform-tab-status.is-failed   { background: #EF4444; }
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: .5; transform: scale(1.3); }
+}
+
+/* =====================================================================
+   Sprint result — 5 vertical phone variants
+   ===================================================================== */
+.sprint-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 24px;
+  margin-top: 16px;
+}
+.sprint-variant {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+.sprint-variant-head {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  max-width: 320px;
+}
+.sprint-variant-num {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--platform-accent, var(--accent));
+}
+.sprint-variant-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.3;
+}
+.sprint-variant-angle {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+.sprint-variant-cat {
+  align-self: center;
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  background: color-mix(in srgb, var(--platform-accent, var(--accent)) 16%, transparent);
+  color: var(--platform-accent, var(--accent));
+  margin-top: 2px;
+}
+

@@ -33,6 +33,7 @@ from pydantic import BaseModel, Field
 from prompts import (
     build_long_system_prompt,
     build_shorts_system_prompt,
+    build_sprint_system_prompt,
     BROLL_PROMPTS_SYSTEM,
     ANGLES_SYSTEM_PROMPT,
     build_angles_user_message,
@@ -763,6 +764,7 @@ class ShortsRequest(BaseModel):
     platform: str = "youtube"   # "youtube" | "reels" | "tiktok"
     angle: Optional[str] = None
     chosen_angle: Optional[dict] = None
+    sprint: bool = False  # if True, generate a 5-variant Content Sprint instead of a single short
 
 
 @api.post("/scripts/shorts")
@@ -773,14 +775,28 @@ async def scripts_shorts(payload: ShortsRequest, user: AuthUser = Depends(curren
     if payload.platform not in ("youtube", "reels", "tiktok"):
         raise HTTPException(status_code=400, detail="Invalid platform")
 
-    system = build_shorts_system_prompt(payload.platform)
-    user_msg = f"Generate the full faceless short-form video package (skipping the angle step) for topic: {payload.topic.strip()}"
-    user_msg += _angle_clause(payload.chosen_angle, payload.angle)
+    if payload.sprint:
+        system = build_sprint_system_prompt(payload.platform)
+        user_msg = (
+            f"Generate a CONTENT SPRINT — 5 distinct shorts on the topic: {payload.topic.strip()}.\n"
+            f"Each variant must use a different angle. Tune everything to {payload.platform}."
+        )
+        mode = "sprint"
+    else:
+        system = build_shorts_system_prompt(payload.platform)
+        user_msg = f"Generate the full faceless short-form video package (skipping the angle step) for topic: {payload.topic.strip()}"
+        user_msg += _angle_clause(payload.chosen_angle, payload.angle)
+        mode = "shorts"
 
     return await _enqueue_script(
-        user=user, mode="shorts", topic=payload.topic,
+        user=user, mode=mode, topic=payload.topic,
         system_prompt=system, user_message=user_msg,
-        extra={"platform": payload.platform, "angle": payload.angle, "chosen_angle": payload.chosen_angle},
+        extra={
+            "platform": payload.platform,
+            "angle": payload.angle,
+            "chosen_angle": payload.chosen_angle,
+            "sprint": payload.sprint,
+        },
     )
 
 

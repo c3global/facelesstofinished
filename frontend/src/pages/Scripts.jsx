@@ -4,10 +4,10 @@ import {
   FileText,
   Smartphone,
   Repeat,
-  Loader2,
   Bookmark,
   ArrowLeft,
   ClipboardCopy,
+  Layers,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { apiClient, useAuth } from "../App";
@@ -17,6 +17,7 @@ import {
   SHORTS_SECTION_ORDER,
   extractNarration,
   extractBrollPrompts,
+  parseSprintVariants,
 } from "../utils/parser";
 import PhoneFrame from "../components/PhoneFrame";
 import Toast from "../components/Toast";
@@ -25,6 +26,8 @@ import { AngleCard } from "../components/scripts/AngleCard";
 import ShortPhoneBody from "../components/scripts/ShortPhoneBody";
 import SavedAnglesPanel from "../components/scripts/SavedAnglesPanel";
 import ScriptHistoryList from "../components/scripts/ScriptHistoryList";
+import GenProgress from "../components/scripts/GenProgress";
+import SprintResult from "../components/scripts/SprintResult";
 
 const MODES = { LONG: "long", SHORTS: "shorts" };
 const STEPS = {
@@ -67,6 +70,8 @@ export default function Scripts() {
   const [topic, setTopic] = useState("");
   const [length, setLength] = useState("medium");
   const [platform, setPlatform] = useState("youtube");
+  const [sprint, setSprint] = useState(false);
+  const [multiPlatform, setMultiPlatform] = useState(false);
 
   // Apply platform accent CSS variable
   useEffect(() => {
@@ -84,10 +89,13 @@ export default function Scripts() {
   const [angles, setAngles] = useState([]);
   const [pickedAngle, setPickedAngle] = useState(null);
   const [busy, setBusy] = useState(false);
-  const [, setGenerating] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [err, setErr] = useState("");
   const [output, setOutput] = useState(null);
+  // Multi-platform results: array of { platform, id, status, output? }
+  const [multiJobs, setMultiJobs] = useState([]);
+  const [activeTab, setActiveTab] = useState("youtube");
+
   const [history, setHistory] = useState([]);
   const [savedAngles, setSavedAngles] = useState([]);
   const [showSaved, setShowSaved] = useState(false);
@@ -95,17 +103,23 @@ export default function Scripts() {
 
   const pollRef = useRef(null);
   const elapsedRef = useRef(null);
+  const multiPollRef = useRef(null);
 
   useEffect(
     () => () => {
       if (pollRef.current) clearInterval(pollRef.current);
       if (elapsedRef.current) clearInterval(elapsedRef.current);
+      if (multiPollRef.current) clearInterval(multiPollRef.current);
     },
     []
   );
 
   const sections = useMemo(
     () => (output?.text ? parseSections(output.text) : {}),
+    [output]
+  );
+  const sprintVariants = useMemo(
+    () => (output?.mode === "sprint" && output?.text ? parseSprintVariants(output.text) : []),
     [output]
   );
   const orderedKeys =
@@ -137,6 +151,13 @@ export default function Scripts() {
     [savedAngles]
   );
 
+  // Sprint AND multi-platform both skip the angle picker step:
+  //   - sprint generates its own 5 distinct angles internally
+  //   - multi-platform fans out one job per platform; angle picking would
+  //     force the user to pick once and use the same angle for all 3, which
+  //     defeats the parallel-discovery point of the feature
+  const skipAngleStep = mode === MODES.SHORTS && (sprint || multiPlatform);
+
   // ---- Step 1: fetch angles ----
   const fetchAngles = async () => {
     setErr("");
@@ -152,6 +173,13 @@ export default function Scripts() {
       setErr("Shorts requires the shorts entitlement.");
       return;
     }
+
+    // Sprint / multi-platform: skip the angle picker entirely.
+    if (skipAngleStep) {
+      kickoffGeneration(null, topic);
+      return;
+    }
+
     setBusy(true);
     setAngles([]);
     setPickedAngle(null);
@@ -178,10 +206,7 @@ export default function Scripts() {
       } catch {}
     } else {
       try {
-        const r = await apiClient.post("/scripts/saved-angles", {
-          topic,
-          angle: a,
-        });
+        const r = await apiClient.post("/scripts/saved-angles", { topic, angle: a });
         setSavedAngles((arr) => [r.data, ...arr]);
         setToast("Saved for later");
       } catch {}
@@ -195,7 +220,7 @@ export default function Scripts() {
     } catch {}
   };
 
-  // ---- Polling ----
+  // ---- Generic job polling ----
   const pollJob = (id, onDone) => {
     if (pollRef.current) clearInterval(pollRef.current);
     if (elapsedRef.current) clearInterval(elapsedRef.current);
@@ -227,42 +252,127 @@ export default function Scripts() {
     }, 2500);
   };
 
-  // ---- Step 2: pick an angle → kick off full generation ----
-  const pickAngle = async (angleObj, topicOverride) => {
+  // ---- Multi-platform polling: tracks N jobs at once ----
+  const pollMultiJobs = (initialJobs) => {
+    if (multiPollRef.current) clearInterval(multiPollRef.current);
+    if (elapsedRef.current) clearInterval(elapsedRef.current);
+    const startedAt = Date.now();
+    setElapsed(0);
+    elapsedRef.current = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - startedAt) / 1000));
+    }, 1000);
+
+    multiPollRef.current = setInterval(async () => {
+      const updates = await Promise.all(
+        initialJobs.map(async (j) => {
+          if (j.status === "complete" || j.status === "failed") return j;
+          try {
+            const r = await apiClient.get(`/scripts/job/${j.id}`);
+            return { ...j, status: r.data.status, output: r.data };
+          } catch {
+            return { ...j, status: "failed", error: "Network error" };
+          }
+        })
+      );
+
+      // Mutate the working copy in place so the next tick polls fresh statuses
+      initialJobs.splice(0, initialJobs.length, ...updates);
+      setMultiJobs([...updates]);
+
+      const allDone = updates.every(
+        (j) => j.status === "complete" || j.status === "failed"
+      );
+      if (allDone) {
+        clearInterval(multiPollRef.current);
+        multiPollRef.current = null;
+        clearInterval(elapsedRef.current);
+        elapsedRef.current = null;
+        // pick the first complete as the active tab
+        const firstComplete = updates.find((j) => j.status === "complete");
+        if (firstComplete) {
+          setActiveTab(firstComplete.platform);
+          setOutput(firstComplete.output);
+        } else {
+          setErr("All platforms failed. Try again.");
+        }
+        setStep(STEPS.RESULT);
+        loadHistory();
+      }
+    }, 2500);
+  };
+
+  // ---- Kickoff generation (called after angle pick OR direct from step 1) ----
+  const kickoffGeneration = async (angleObj, topicOverride) => {
     setErr("");
     setPickedAngle(angleObj);
     setStep(STEPS.GENERATING);
-    setGenerating(true);
     setOutput(null);
+    setMultiJobs([]);
     const effectiveTopic = (topicOverride || topic).trim();
+
+    // ---- Multi-platform: fire 3 parallel jobs ----
+    if (mode === MODES.SHORTS && multiPlatform) {
+      try {
+        const responses = await Promise.all(
+          PLATFORMS.map((p) =>
+            apiClient.post("/scripts/shorts", {
+              topic: effectiveTopic,
+              platform: p.id,
+              chosen_angle: angleObj || undefined,
+              sprint: false,
+            })
+          )
+        );
+        const jobs = responses.map((r, i) => ({
+          platform: PLATFORMS[i].id,
+          id: r.data.id,
+          status: "running",
+          output: null,
+        }));
+        setMultiJobs(jobs);
+        setActiveTab(PLATFORMS[0].id);
+        pollMultiJobs(jobs);
+      } catch (e) {
+        setErr(e?.response?.data?.detail || "Could not start generation.");
+        setStep(STEPS.TOPIC);
+      }
+      return;
+    }
+
+    // ---- Sprint or single-shorts or long-form ----
     try {
       const url = mode === MODES.LONG ? "/scripts/long" : "/scripts/shorts";
       const body =
         mode === MODES.LONG
-          ? { topic: effectiveTopic, length, chosen_angle: angleObj }
-          : { topic: effectiveTopic, platform, chosen_angle: angleObj };
+          ? { topic: effectiveTopic, length, chosen_angle: angleObj || undefined }
+          : {
+              topic: effectiveTopic,
+              platform,
+              chosen_angle: angleObj || undefined,
+              sprint,
+            };
       const r = await apiClient.post(url, body);
       pollJob(r.data.id, (final) => {
-        setGenerating(false);
         if (final.status === "complete") {
           setOutput(final);
           setStep(STEPS.RESULT);
           loadHistory();
-          setTimeout(() => {
-            document.getElementById("scripts-output")?.scrollIntoView({
-              behavior: "smooth",
-              block: "start",
-            });
-          }, 100);
+          setTimeout(
+            () =>
+              document.getElementById("scripts-output")?.scrollIntoView({
+                behavior: "smooth",
+                block: "start",
+              }),
+            100
+          );
         } else {
           setErr(final.error || "Generation failed. Try again.");
-          setStep(STEPS.ANGLES);
+          setStep(skipAngleStep ? STEPS.TOPIC : STEPS.ANGLES);
         }
       });
     } catch (e) {
-      setGenerating(false);
       setErr(e?.response?.data?.detail || "Could not start generation.");
-      setStep(STEPS.ANGLES);
+      setStep(skipAngleStep ? STEPS.TOPIC : STEPS.ANGLES);
     }
   };
 
@@ -270,7 +380,7 @@ export default function Scripts() {
     setTopic(saved.topic || "");
     setMode(MODES.LONG);
     setShowSaved(false);
-    pickAngle(saved.angle, saved.topic);
+    kickoffGeneration(saved.angle, saved.topic);
   };
 
   // ---- Cut into a Short ----
@@ -364,6 +474,7 @@ export default function Scripts() {
     try {
       const r = await apiClient.get(`/scripts/job/${id}`);
       setOutput(r.data);
+      setMultiJobs([]);
       setStep(STEPS.RESULT);
       setTimeout(
         () =>
@@ -392,11 +503,54 @@ export default function Scripts() {
     setAngles([]);
     setPickedAngle(null);
     setOutput(null);
+    setMultiJobs([]);
     setErr("");
+  };
+
+  // When switching to/from Shorts or toggling sprint/multi-platform, reset
+  // the conflicting flags so the UI stays coherent (can't be both sprint and
+  // multi-platform — the combinatorial output would explode).
+  const onModeChange = (next) => {
+    setMode(next);
+    if (next === MODES.LONG) {
+      setSprint(false);
+      setMultiPlatform(false);
+    }
+    startOver();
+  };
+
+  // Selecting one flag clears the other so they remain mutually exclusive.
+  const toggleSprint = () => {
+    setSprint((v) => {
+      const next = !v;
+      if (next) setMultiPlatform(false);
+      return next;
+    });
+  };
+  const toggleMultiPlatform = (checked) => {
+    setMultiPlatform(checked);
+    if (checked) setSprint(false);
+  };
+
+  // ---- Tab switching for multi-platform ----
+  const switchTab = (platformId) => {
+    const job = multiJobs.find((j) => j.platform === platformId);
+    setActiveTab(platformId);
+    if (job?.status === "complete" && job.output) setOutput(job.output);
+    // Apply the platform's accent token so phone color updates
+    const p = PLATFORMS.find((x) => x.id === platformId);
+    if (p) document.documentElement.style.setProperty("--platform-accent", p.accent);
   };
 
   const shortsMode = mode === MODES.SHORTS;
   const platformId = shortsMode ? platform : null;
+
+  // CTA copy varies with the active sub-mode
+  let ctaCopy;
+  if (busy) ctaCopy = "Brainstorming angles…";
+  else if (sprint) ctaCopy = "Generate 5-short content sprint →";
+  else if (multiPlatform) ctaCopy = "Generate for all 3 platforms →";
+  else ctaCopy = "Show me 4 angles →";
 
   return (
     <main
@@ -448,10 +602,7 @@ export default function Scripts() {
           data-mode="long"
           className={`mode-opt ${mode === MODES.LONG ? "is-active" : ""}`}
           data-testid="scripts-mode-long"
-          onClick={() => {
-            setMode(MODES.LONG);
-            startOver();
-          }}
+          onClick={() => onModeChange(MODES.LONG)}
         >
           <FileText size={14} /> Long-form
         </button>
@@ -460,10 +611,7 @@ export default function Scripts() {
           data-mode="shorts"
           className={`mode-opt ${mode === MODES.SHORTS ? "is-active" : ""}`}
           data-testid="scripts-mode-shorts"
-          onClick={() => {
-            setMode(MODES.SHORTS);
-            startOver();
-          }}
+          onClick={() => onModeChange(MODES.SHORTS)}
         >
           <Smartphone size={14} /> Shorts
         </button>
@@ -508,25 +656,67 @@ export default function Scripts() {
             </div>
           ) : (
             <div className="settings-grid" data-testid="scripts-settings-shorts">
-              <span className="script-label">Platform</span>
-              <div className="length-grid platform-grid">
-                {PLATFORMS.map((p) => (
-                  <button
-                    key={p.id}
-                    className={`length-card platform-card ${platform === p.id ? "is-selected" : ""}`}
-                    data-testid={`scripts-platform-${p.id}`}
-                    data-platform={p.id}
-                    style={{ "--platform-accent": p.accent }}
-                    onClick={() => setPlatform(p.id)}
-                  >
-                    <span className="length-name">{p.label}</span>
-                  </button>
-                ))}
+              {/* Sprint pill toggle */}
+              <span className="script-label">Sprint mode</span>
+              <div className="sprint-toggle" data-testid="sprint-toggle">
+                <button
+                  className={`sprint-opt ${!sprint ? "is-active" : ""}`}
+                  data-testid="sprint-opt-single"
+                  onClick={() => setSprint(false)}
+                >
+                  Single short
+                </button>
+                <button
+                  className={`sprint-opt ${sprint ? "is-active" : ""}`}
+                  data-testid="sprint-opt-sprint"
+                  onClick={toggleSprint}
+                >
+                  <Layers size={12} /> Content sprint
+                  <span className="sprint-opt-count">5</span>
+                </button>
               </div>
+
+              {/* Platform cards — hidden when multi-platform is on */}
+              {!multiPlatform && (
+                <>
+                  <span className="script-label" style={{ marginTop: 6 }}>Platform</span>
+                  <div className="length-grid platform-grid">
+                    {PLATFORMS.map((p) => (
+                      <button
+                        key={p.id}
+                        className={`length-card platform-card ${platform === p.id ? "is-selected" : ""}`}
+                        data-testid={`scripts-platform-${p.id}`}
+                        data-platform={p.id}
+                        style={{ "--platform-accent": p.accent }}
+                        onClick={() => setPlatform(p.id)}
+                      >
+                        <span className="length-name">{p.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              {/* Multi-platform checkbox — disabled when sprint is on */}
+              {!sprint && (
+                <label
+                  className="multi-platform-row"
+                  data-testid="multi-platform-row"
+                  style={{ marginTop: 8 }}
+                >
+                  <input
+                    type="checkbox"
+                    data-testid="multi-platform-checkbox"
+                    checked={multiPlatform}
+                    onChange={(e) => toggleMultiPlatform(e.target.checked)}
+                  />
+                  Generate for all 3 platforms at once
+                </label>
+              )}
             </div>
           )}
 
-          {/* CTA — Step 1 → fetch angles */}
+          {/* CTA — Step 1 → fetch angles (or skip to gen for sprint/multi) */}
           {step === STEPS.TOPIC && (
             <div className="cta-block">
               <button
@@ -540,7 +730,7 @@ export default function Scripts() {
                 }
                 onClick={fetchAngles}
               >
-                {busy ? "Brainstorming angles…" : "Show me 4 angles →"}
+                {ctaCopy}
               </button>
               {err && (
                 <p className="cta-error" data-testid="scripts-error">
@@ -552,7 +742,7 @@ export default function Scripts() {
         </>
       )}
 
-      {/* Step 2: angle picker */}
+      {/* Step 2: angle picker (skipped in sprint / multi-platform mode) */}
       {step === STEPS.ANGLES && angles.length > 0 && (
         <div className="angles-section" data-testid="angles-section">
           <div className="angles-head">
@@ -583,7 +773,7 @@ export default function Scripts() {
                 angle={a}
                 testid={`angle-card-${i}`}
                 isSaved={savedKeys.has(angleKey(a))}
-                onPick={pickAngle}
+                onPick={(angleObj) => kickoffGeneration(angleObj)}
                 onSave={toggleSaveAngle}
               />
             ))}
@@ -591,7 +781,7 @@ export default function Scripts() {
         </div>
       )}
 
-      {/* Step 3: skeleton + elapsed counter while Claude generates */}
+      {/* Step 3: progress bar + skeleton stack while Claude generates */}
       {step === STEPS.GENERATING && (
         <div
           id="scripts-output"
@@ -600,14 +790,8 @@ export default function Scripts() {
         >
           <div className="scripts-output-head">
             <div>
-              <p
-                className="script-label"
-                style={{ display: "inline-flex", alignItems: "center", gap: 8 }}
-              >
-                <Loader2 size={14} className="spin" /> Generating · {elapsed}s
-              </p>
               <h2 className="scripts-output-title">
-                {pickedAngle?.name || topic}
+                {pickedAngle?.name || (sprint ? "Content sprint" : topic)}
               </h2>
               {pickedAngle?.framing && (
                 <p
@@ -623,13 +807,43 @@ export default function Scripts() {
               )}
             </div>
           </div>
-          <div className="skeleton-stack">
-            {(mode === MODES.LONG ? LONG_SECTION_ORDER : SHORTS_SECTION_ORDER)
-              .filter((k) => k !== "angles")
-              .map((k) => (
-                <SkeletonCard key={k} keyName={k} />
-              ))}
-          </div>
+
+          <GenProgress
+            mode={sprint ? "sprint" : mode === MODES.LONG ? "long" : "shorts"}
+            elapsed={elapsed}
+          />
+
+          {/* Multi-platform: show per-platform status row */}
+          {multiPlatform && multiJobs.length > 0 ? (
+            <div className="platform-tabs" data-testid="multi-platform-status">
+              {multiJobs.map((j) => {
+                const p = PLATFORMS.find((x) => x.id === j.platform);
+                return (
+                  <span
+                    key={j.platform}
+                    className="platform-tab"
+                    data-testid={`multi-status-${j.platform}`}
+                    style={{ "--tab-accent": p?.accent }}
+                  >
+                    <span className={`platform-tab-status is-${j.status}`} />
+                    {p?.label || j.platform}
+                  </span>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="skeleton-stack">
+              {(sprint
+                ? ["shortScript", "shortScript", "shortScript", "shortScript", "shortScript"]
+                : mode === MODES.LONG
+                ? LONG_SECTION_ORDER
+                : SHORTS_SECTION_ORDER)
+                .filter((k) => k !== "angles")
+                .map((k, i) => (
+                  <SkeletonCard key={`${k}-${i}`} keyName={k} />
+                ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -679,18 +893,47 @@ export default function Scripts() {
                   {busy ? "Cutting into a Short…" : "Cut into a Short"}
                 </button>
               )}
-              <button
-                className="header-btn"
-                data-testid="scripts-use-in-studio"
-                onClick={useInStudio}
-              >
-                <Sparkles size={13} /> Send to Studio
-              </button>
+              {output.mode !== "sprint" && (
+                <button
+                  className="header-btn"
+                  data-testid="scripts-use-in-studio"
+                  onClick={useInStudio}
+                >
+                  <Sparkles size={13} /> Send to Studio
+                </button>
+              )}
             </div>
           </div>
 
-          {/* Shorts result: phone-frame layout */}
-          {output.mode === "shorts" ? (
+          {/* Multi-platform tabs */}
+          {multiJobs.length > 0 && (
+            <div className="platform-tabs" data-testid="platform-tabs">
+              {multiJobs.map((j) => {
+                const p = PLATFORMS.find((x) => x.id === j.platform);
+                return (
+                  <button
+                    key={j.platform}
+                    type="button"
+                    className={`platform-tab ${activeTab === j.platform ? "is-active" : ""}`}
+                    data-testid={`platform-tab-${j.platform}`}
+                    style={{ "--tab-accent": p?.accent }}
+                    onClick={() => switchTab(j.platform)}
+                  >
+                    <span className={`platform-tab-status is-${j.status}`} />
+                    {p?.label || j.platform}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Sprint result */}
+          {output.mode === "sprint" ? (
+            <SprintResult
+              variants={sprintVariants}
+              platform={output.platform || platform}
+            />
+          ) : output.mode === "shorts" ? (
             <div className="shorts-layout" data-testid="shorts-layout">
               {/* PLAN column */}
               <div className="shorts-col">
@@ -700,6 +943,7 @@ export default function Scripts() {
                     keyName="hooks"
                     section={sections.hooks}
                     testid="section-hooks"
+                    revealIndex={0}
                   />
                 )}
                 {sections.titleVariants && (
@@ -707,6 +951,7 @@ export default function Scripts() {
                     keyName="titleVariants"
                     section={sections.titleVariants}
                     testid="section-titleVariants"
+                    revealIndex={1}
                   />
                 )}
                 {sections.coverPrompts && (
@@ -714,6 +959,7 @@ export default function Scripts() {
                     keyName="coverPrompts"
                     section={sections.coverPrompts}
                     testid="section-coverPrompts"
+                    revealIndex={2}
                   />
                 )}
               </div>
@@ -732,6 +978,7 @@ export default function Scripts() {
                     keyName="caption"
                     section={sections.caption}
                     testid="section-caption"
+                    revealIndex={3}
                   />
                 )}
                 {sections.hashtags && (
@@ -739,6 +986,7 @@ export default function Scripts() {
                     keyName="hashtags"
                     section={sections.hashtags}
                     testid="section-hashtags"
+                    revealIndex={4}
                   />
                 )}
                 {sections.onScreen && (
@@ -746,6 +994,7 @@ export default function Scripts() {
                     keyName="onScreen"
                     section={sections.onScreen}
                     testid="section-onScreen"
+                    revealIndex={5}
                   />
                 )}
                 {sections.broll && (
@@ -753,6 +1002,7 @@ export default function Scripts() {
                     keyName="broll"
                     section={sections.broll}
                     testid="section-broll"
+                    revealIndex={6}
                   />
                 )}
                 {sections.notes && (
@@ -760,19 +1010,21 @@ export default function Scripts() {
                     keyName="notes"
                     section={sections.notes}
                     testid="section-notes"
+                    revealIndex={7}
                   />
                 )}
               </div>
             </div>
           ) : (
             // Long-form: classic vertical stack of cards
-            orderedKeys.map((k) =>
+            orderedKeys.map((k, i) =>
               sections[k] && k !== "angles" ? (
                 <SectionCard
                   key={k}
                   keyName={k}
                   section={sections[k]}
                   testid={`section-${k}`}
+                  revealIndex={i}
                 />
               ) : null
             )

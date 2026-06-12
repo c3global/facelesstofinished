@@ -26,10 +26,16 @@ export function CopyButton({ text, testid }) {
   );
 }
 
-export function SectionCard({ keyName, section, testid }) {
+export function SectionCard({ keyName, section, testid, revealIndex }) {
   if (!section) return null;
+  const style = revealIndex != null ? { animationDelay: `${revealIndex * 90}ms` } : undefined;
   return (
-    <section className="section-card" data-testid={testid}>
+    <section
+      className={`section-card${revealIndex != null ? " section-card-reveal" : ""}`}
+      data-testid={testid}
+      data-section={keyName}
+      style={style}
+    >
       <header className="section-card-head">
         <h3 className="section-card-title">{SECTION_LABEL[keyName] || section.title}</h3>
         <CopyButton text={section.body} testid={`${testid}-copy`} />

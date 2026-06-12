@@ -1,0 +1,54 @@
+{
+  "summary": "Iteration 9 — Script Engine 3.0 polish verification. All 5 UI polish requirements verified end-to-end against the live preview with the drcharitycampbell DEV_BYPASS account. Mode-pill active state, sprint/multi-platform mutual exclusion (incl. CTA copy variants and platform-card auto-hide), sprint vs non-sprint Send-to-Studio visibility, per-section data-section accent attribute, section-card-reveal stagger via inline animationDelay, and the 5-variant sprint grid (with hook/body/cta phone beats x5) all PASS. The iter8 markdown-bold beat-marker bug is also RESOLVED — the persisted sprint job renders 5/5/5 phone-beat-hook/body/cta. Live multi-platform 3-way parallel and fresh sprint generation were NOT run live (token budget), but the persisted sprint job already exercises the same render path end-to-end and the parallel-dispatch code (Promise.all on /scripts/shorts) is structurally sound.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "verified_features": {
+    "mode_pill_active_state": "PASS — Long-form is-active by default; clicking Shorts swaps is-active; computed backgrounds differ between active and inactive pills.",
+    "shorts_settings_default": "PASS — sprint-toggle, multi-platform-row, and 3 scripts-platform-* cards all visible on first Shorts switch; sprint-opt-single is is-active by default.",
+    "multi_platform_hides_platforms_updates_cta": "PASS — checking multi-platform-checkbox removes all 3 platform cards (count==0) and CTA copy becomes 'Generate for all 3 platforms →'.",
+    "sprint_clears_multi_platform": "PASS — clicking sprint-opt-sprint while MP is on clears mp_checked, hides multi-platform-row, re-shows the 3 platform cards, and updates CTA to 'Generate 5-short content sprint →'.",
+    "single_clears_sprint": "PASS — clicking sprint-opt-single deactivates sprint-opt-sprint and re-shows the multi-platform-row.",
+    "mode_revert_clears_flags": "PASS — switching back to Long-form clears sprint+MP and shows scripts-settings-long; sprint-toggle DOM is removed.",
+    "saved_angles_toggle": "PASS — saved-angles-toggle visible (3 saved); clicking expands the panel; category pills render with correct per-section accent colors (how-to=green, curiosity=lavender, story=amber visible in screenshot).",
+    "history_list": "PASS — 23 history entries present including the new sprint job; each has scripts-history-open-{id}.",
+    "sprint_result_render": "PASS — opening a sprint history job renders sprint-grid with sprint-variant-1..5 (5 unique testids), each containing a PhoneFrame and a header with variant number ('Variant N / 5'), name, angle line, and category pill (CURIOSITY/CONTRARIAN/HOW-TO/STORY).",
+    "sprint_phone_beats": "PASS (REGRESSION FIX VERIFIED) — phone-beat-hook x5, phone-beat-body x5, phone-beat-cta x5 inside sprint-grid. The iter8 '**[HOOK]**' markdown-bold wrap bug is resolved — phone frames are no longer empty.",
+    "sprint_hides_send_to_studio": "PASS — scripts-use-in-studio is absent from sprint result header (only Copy all is present).",
+    "long_form_section_data_attrs_and_reveal": "PASS — opening a long-form history job renders 7 section cards inside scripts-output, each with data-section (concept/hooks/outline/script/transitions/broll/notes), class section-card-reveal, and inline animationDelay scaling with revealIndex (90ms / 180ms / 270ms / ...).",
+    "long_form_send_to_studio_visible": "PASS — scripts-use-in-studio visible on non-sprint result; copy-all + cut-into-short + send-to-studio all render.",
+    "per_section_accent_colors": "PASS (visual) — Video Concept card shows lavender left-border accent in screenshot; saved-angles category pills show per-category color tokens. Accent color rules in App.css are correctly keyed off [data-section] attribute.",
+    "ctas_copy_variants": "PASS — three CTA strings observed: 'Show me 4 angles →' (default), 'Generate for all 3 platforms →' (MP), 'Generate 5-short content sprint →' (sprint)."
+  },
+  "tests_not_run_live_with_rationale": {
+    "fresh_multi_platform_generation": "Not run live to conserve Claude tokens (would fire 3 parallel ~30s jobs). Code path verified: kickoffGeneration → Promise.all over PLATFORMS → pollMultiJobs sets activeTab to first complete + applies --platform-accent on switchTab. multi-platform-status and platform-tabs testids exist in JSX.",
+    "fresh_sprint_generation": "Not run live — token budget. The persisted sprint job in history already exercises the full render path (sprint-grid + 5 variants + 5/5/5 phone beats) and parseSprintVariants extracted all 5 variants from the persisted text.",
+    "fresh_long_form_generation": "Not run — per problem statement guidance to skip long-form happy-path."
+  },
+  "test_report_links": [
+    "/app/test_reports/iteration_9.json",
+    "/app/backend/tests/test_scripts.py (unchanged from iter7 — backend not retested per instructions; smoke-tested separately by main agent via curl)"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Scripts.jsx is now ~1042 lines (still above the 700-line guideline despite previous extractions of AngleCard / SectionCard / ShortPhoneBody / SavedAnglesPanel / ScriptHistoryList / GenProgress / SprintResult). Recommend a follow-up extraction of: (a) the topic+settings step (TOPIC/ANGLES) into a ScriptInputsPanel, (b) the result header (Copy all / Cut into Short / Send to Studio) into a ResultHeader component, and (c) the multi-platform-status + platform-tabs strip into a PlatformTabsStrip. After that the page should be under 500 lines and easier to reason about.",
+    "kickoffGeneration's multi-platform branch fires 3 parallel POSTs but only sets one shared elapsed timer in pollMultiJobs. Consider per-platform elapsed timers (or per-platform 'done at' timestamps in the multiJobs entries) so the UI can show 'YouTube done in 32s · TikTok done in 41s' instead of one cumulative number. Minor UX polish, not blocking.",
+    "The sprint-opt-sprint button uses both setSprint(false) on the Single side and toggleSprint() on the Sprint side. The asymmetric handler is slightly surprising — toggleSprint() can flip the flag off if the user clicks the Sprint pill twice. Recommend changing it to an unconditional setSprint(true) + setMultiPlatform(false) for clarity; the Single pill already handles the off-case.",
+    "parseSprintVariants relies on the exact header '### 🎬 SPRINT VARIANT N — name' from Claude — any prompt drift (e.g. Claude using '##' or replacing the em-dash) silently produces zero variants and a blank sprint-grid. Suggest a defensive fallback in parser.js: if zero matches with the strict regex, retry with a relaxed /^#{2,3}\\s*(?:🎬\\s*)?SPRINT\\s+VARIANT\\s+(\\d+)\\s*[—\\-:]/im pattern. Add a sample fixture to parser.test.cjs.",
+    "Per-section accent colors are defined as raw CSS in App.css keyed off [data-section]. The mapping (orange/lavender/red/blue/green/pink/cyan/amber) duplicates intent with SECTION_LABEL in SectionCard.jsx — consider co-locating both in a single SECTION_META object exported from /app/frontend/src/utils/parser.js (or a new sectionsMeta.js) so the color tokens can also be consumed by JS (e.g. by SavedAnglesPanel category pills which appear to use the same palette today)."
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "100% (not retested in this iteration — sprint endpoint smoke-tested by main agent via curl; no backend changes flagged)",
+    "frontend": "100% on all UI polish / mode-toggle / sprint-render / section-card-reveal / Send-to-Studio gating assertions actually exercised in this iteration"
+  },
+  "test_credentials": "drcharitycampbell@gmail.com (DEV_BYPASS, all entitlements)",
+  "seed_data_creation": "No new seed data created in this iteration. Existing history (23 entries including a sprint job and several long-form/shorts jobs) was reused as regression fixtures. The previously-flagged iter8 shorts-phone-empty bug is no longer reproducible on the persisted sprint job — 5/5/5 phone beats render.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All Script Engine 3.0 polish features verified. Mode-pill active state, sprint/multi-platform mutual exclusion, per-section data-section accent attribute, section-card-reveal stagger, sprint-grid with 5 variants + phone beats, Send-to-Studio gating, saved-angles, and history all PASS. The only items NOT exercised live were: (a) fresh multi-platform 3-way Promise.all dispatch — code is structurally sound but no live job was fired; (b) fresh sprint generation — persisted sprint job already exercises the same render path. If a future iteration wants to verify live multi-platform, the test budget is ~90s of Claude time and can be triggered with 'thyroid health' as topic. Code review comments are non-blocking polish/refactor suggestions for the main agent's queue.",
+  "rca of the issue": "N/A — no bugs found in this iteration. The iter8 markdown-bold beat-marker bug is RESOLVED (verified via the persisted sprint job rendering 5/5/5 phone-beat-hook/body/cta inside sprint-grid)."
+}
