@@ -1,0 +1,88 @@
+{
+  "theme": "dark",
+  "archetype": "5 (Luxury / Premium Creator Tool)",
+  "typography": {
+    "heading_font": "Cabinet Grotesk",
+    "body_font": "Satoshi",
+    "strategy": "Swiss Brutalist meets Premium Creator. High weight contrast, tight tracking for headings. Clean and highly legible geometric body font."
+  },
+  "colors": {
+    "background_base": "#0A0B10",
+    "surface_primary": "#141622",
+    "surface_hover": "#1E2135",
+    "border_subtle": "#2A2D43",
+    "border_focus": "#E87A5D",
+    "accent_primary": "#E87A5D",
+    "accent_hover": "#F0947D",
+    "text_primary": "#FFFFFF",
+    "text_secondary": "#9BA1B6",
+    "success": "#22C55E",
+    "warning": "#F59E0B"
+  },
+  "layout": {
+    "spacing_scale": "Generous (p-6 to p-8) for structural containers, tightly packed (p-2 to p-4) for internal components like chips and thumbnails.",
+    "container_max_width": "max-w-5xl mx-auto",
+    "anatomy": {
+      "header": "Sticky with glassmorphism (backdrop-blur-xl bg-[#0A0B10]/80). Contains Logo and Mode Segmented Toggle (Avatar vs Faceless).",
+      "script_area": "Large, borderless or subtle 1px border. Focus state glows with accent color. Ample line-height (leading-relaxed) and text-lg for easy reading.",
+      "chip_row": "Horizontal flex row, gap-3, directly below the script area. Each chip is pill-shaped (rounded-full).",
+      "modals": "Centered, contained max-h-[80vh] with internal scrolling. Backdrop: backdrop-blur-md bg-black/60. Top sticky area for tabs/search.",
+      "storyboard_strip": "Horizontal scrolling flex container, gap-4, placed above Generate button. Thumbnails with duration overlay.",
+      "cta_area": "Bottom sticky or visually prominent section with a massive Generate button (w-full or max-w-md), using Accent Primary.",
+      "recent_renders": "Grid or vertical stack of cards below CTA. Includes thumbnail, meta chips, and play/delete actions."
+    }
+  },
+  "components": {
+    "mode_toggle": "Segmented control, pill shape. Active: surface_primary bg, Text Primary. Inactive: transparent bg, Text Secondary.",
+    "chips": "Compact pills (h-8 px-4 text-sm). Default: border-border_subtle bg-surface_primary. Hover: border-border_focus. Active (selected): ring-1 ring-accent_primary text-accent_primary.",
+    "avatar_card": "Vertical rectangle (aspect ratio approx 3:4). On hover: play button overlay. Selected state: 2px solid accent_primary border and a '✓ Selected' floating badge.",
+    "voice_card": "Horizontal row or compact square. Includes Play button (▶). Selected state: highlight border and checkmark.",
+    "scene_card": "For Faceless mode. Includes text prompt input and stock search results grid. Video thumbnails have bottom-right duration overlay (e.g., '0:05') and top-left source badge.",
+    "progress_card": "Dynamic rendering state. Progress bar using accent_primary. Status label updates: Queued -> Voiceover -> Visuals -> Composing -> Complete.",
+    "buttons": "CTAs are highly rounded (rounded-full or rounded-xl). Primary CTA uses accent_primary with hover lift (-translate-y-1) and subtle shadow."
+  },
+  "interactions": {
+    "modal_entry": "Framer motion scale-up (0.95 to 1) with opacity fade-in (0 to 1).",
+    "chip_click": "Opens corresponding modal. No inline expanding galleries.",
+    "hover_states": "Cards lift slightly. Play buttons appear. Borders transition to lighter shade.",
+    "defaults": "DO NOT silently pick defaults. Show default choices as initial chip values. Captions ON for 9:16, OFF for 16:9."
+  },
+  "icons_library": "lucide-react",
+  "media": {
+    "empty_script_hint": {
+      "url": "https://images.unsplash.com/photo-1616441065120-81e9e146d3ef?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxOTF8MHwxfHNlYXJjaHwxfHxibGFuayUyMHZpbnRhZ2UlMjBub3RlYm9vayUyMGRhcmt8ZW58MHx8fHwxNzgxMjc4NTg0fDA&ixlib=rb-4.1.0&q=85",
+      "description": "Dark blank vintage notebook, used as an empty state visual next to the script textarea.",
+      "category": "empty_state"
+    },
+    "empty_renders": {
+      "url": "https://images.unsplash.com/photo-1760170437237-a3654545ab4c?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2MzR8MHwxfHNlYXJjaHwxfHxlbXB0eSUyMGNpbmVtYSUyMGRhcmslMjBtb3ZpZSUyMHRoZWF0ZXJ8ZW58MHx8fHwxNzgxMjc4NTg0fDA&ixlib=rb-4.1.0&q=85",
+      "description": "Empty vintage cinema hall in the dark, used for the 'No Recent Renders' state.",
+      "category": "empty_state"
+    },
+    "avatar_placeholders": [
+      {
+        "url": "https://images.pexels.com/photos/31869537/pexels-photo-31869537.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "description": "Professional female headshot, dark background.",
+        "category": "avatar"
+      },
+      {
+        "url": "https://images.pexels.com/photos/36623225/pexels-photo-36623225.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "description": "Elegant female portrait, dark background.",
+        "category": "avatar"
+      }
+    ]
+  },
+  "testing": {
+    "attributes": "All interactive elements MUST include a data-testid attribute formatted as kebab-case and role-based (e.g., data-testid='mode-toggle-avatar', data-testid='generate-video-button', data-testid='chip-avatar-select')."
+  },
+  "instructions_to_main_agent": [
+    "Ensure the UI acts as a 'Studio', not a basic form. The layout must match HeyGen/Jogg.ai workspace patterns: large primary input (script) and compact configuration (chips).",
+    "NEVER build inline galleries. All heavy selection lists (Voices, Avatars, Stock Media) MUST open in a centered modal dialog.",
+    "Implement the custom Mode Switcher (Avatar vs Faceless) as a segmented toggle pill near the top.",
+    "Faceless mode must include a 'B-Roll Source' chip. Avatar mode replaces this with an 'Avatar' chip.",
+    "Do not expose vendor names (HeyGen, Pexels) in the UI text. Keep it white-labeled (e.g., 'Stock Video', 'AI Generation').",
+    "All chips must visually display the currently selected value (e.g., instead of just 'Voice', show 'Voice: Sarah (US)').",
+    "Implement 9:16 and 16:9 conditional logic for Captions default state as requested.",
+    "Use data-testid on all key interactive elements."
+  ]
+}
