@@ -9,7 +9,9 @@ export default function Header() {
   const nav = useNavigate();
   const loc = useLocation();
 
-  const logoSrc = theme === "dark" ? "/logo-dark.png" : "/logo-light.png";
+  // Logo naming is inverse: the file named "light" has light-colored text and is
+  // designed to sit on a DARK background; "dark" has dark-colored text for LIGHT bg.
+  const logoSrc = theme === "dark" ? "/logo-light.png" : "/logo-dark.png";
 
   return (
     <header className="site-header" data-testid="site-header">
