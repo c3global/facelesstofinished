@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { UserCircle2, Mic, Ratio, Captions, Film, ChevronDown, Play, Trash2, Plus } from "lucide-react";
+import { UserCircle2, Mic, Ratio, Captions, Film, ChevronDown, Play, Trash2, Sparkles } from "lucide-react";
 import { apiClient } from "../App";
 import {
   AvatarPicker,
@@ -11,16 +11,46 @@ import {
 } from "../components/Pickers";
 
 const MODES = { AVATAR: "avatar", FACELESS: "faceless" };
+const MAX_SCENES = 12;
+const SOURCE_HINT = {
+  ai:      "An image will be generated from your prompt.",
+  pexels:  "We'll search the Pexels stock library.",
+  pixabay: "We'll search the Pixabay stock library.",
+};
+const SOURCE_SHORT = { ai: "AI", pexels: "Px", pixabay: "Pb" };
 
 function fmtDate(iso) {
   if (!iso) return "";
-  try {
-    return new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
-  } catch { return iso; }
+  try { return new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }); }
+  catch { return iso; }
 }
+const modeChipLabel = (m) => (m === MODES.AVATAR ? "Avatar" : "Faceless");
 
-function modeChipLabel(mode) {
-  return mode === MODES.AVATAR ? "Avatar" : "Faceless";
+const SOURCE_PILL_OPTS = [
+  { id: "ai", label: "AI" },
+  { id: "pexels", label: "Pexels" },
+  { id: "pixabay", label: "Pixabay" },
+];
+
+function SourcePills({ idx, current, onPick }) {
+  return (
+    <div className="scene-sources" role="radiogroup" data-testid={`scene-sources-${idx}`}>
+      {SOURCE_PILL_OPTS.map((o) => (
+        <button
+          key={o.id}
+          type="button"
+          role="radio"
+          aria-checked={current === o.id}
+          className={`source-pill ${current === o.id ? "is-on" : ""}`}
+          data-source={o.id}
+          data-testid={`scene-source-${idx}-${o.id}`}
+          onClick={() => onPick(idx, o.id)}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
 }
 
 export default function Studio() {
@@ -32,7 +62,6 @@ export default function Studio() {
 
   // Settings
   const [aspect, setAspect] = useState("9_16");
-  // Captions default mirrors aspect (ON for vertical, OFF for horizontal)
   const [captions, setCaptions] = useState(true);
   const captionsTouched = useRef(false);
   useEffect(() => {
@@ -45,10 +74,12 @@ export default function Studio() {
 
   // Faceless mode picks
   const [ttsVoice, setTtsVoice] = useState(null);
-  const [brollSource, setBrollSource] = useState("pexels");
-  const [scenes, setScenes] = useState([
-    { prompt: "", pick: null },
-  ]);
+  const [brollSource, setBrollSource] = useState("pexels"); // global default
+  // Bulk prompts model:
+  // - bulkPrompts: raw textarea text
+  // - sceneOverrides: per-index { source?, pick? } overrides
+  const [bulkPrompts, setBulkPrompts] = useState("");
+  const [sceneOverrides, setSceneOverrides] = useState([]); // [{source?, pick?}]
 
   // Render state
   const [render, setRender] = useState(null);
@@ -61,6 +92,37 @@ export default function Studio() {
   const [stockModal, setStockModal] = useState({ open: false, idx: -1 });
 
   const closeModal = () => setModal(null);
+
+  // ---- Derive scene lines from textarea ----
+  const sceneLines = useMemo(() => {
+    return bulkPrompts
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .slice(0, MAX_SCENES);
+  }, [bulkPrompts]);
+
+  // Keep sceneOverrides array length aligned with line count
+  useEffect(() => {
+    setSceneOverrides((prev) => {
+      const next = sceneLines.map((_, i) => prev[i] || {});
+      return next;
+    });
+  }, [sceneLines.length]);
+
+  // The fully-resolved scenes (line + effective source + pick)
+  const scenes = useMemo(() => {
+    return sceneLines.map((prompt, i) => {
+      const ov = sceneOverrides[i] || {};
+      // When global is "mix" we leave source undefined unless overridden.
+      const effective = ov.source ?? (brollSource === "mix" ? null : brollSource);
+      return {
+        prompt,
+        source: effective,
+        pick: ov.pick || null,
+      };
+    });
+  }, [sceneLines, sceneOverrides, brollSource]);
 
   // ---- Load history on mount ----
   useEffect(() => {
@@ -75,47 +137,15 @@ export default function Studio() {
     } catch { /* noop */ }
   };
 
-  // ---- Storyboard scenes (auto-suggest from script paragraphs in faceless mode) ----
-  const scriptSegments = useMemo(() => {
-    return script
-      .split(/\n{2,}|(?<=[.!?])\s+(?=[A-Z])/)
-      .map((s) => s.trim())
-      .filter(Boolean);
-  }, [script]);
-
-  // Pad scenes to match segments (only fills empty prompts)
-  useEffect(() => {
-    if (mode !== MODES.FACELESS) return;
-    if (scriptSegments.length === 0) return;
-    setScenes((prev) => {
-      // Auto-create new scenes for new segments if user hasn't added any
-      const len = Math.max(prev.length, Math.min(scriptSegments.length, 6));
-      const next = [];
-      for (let i = 0; i < len; i++) {
-        const existing = prev[i];
-        if (existing) {
-          // Auto-fill prompt only if user hasn't typed
-          if (!existing.prompt.trim() && scriptSegments[i]) {
-            next.push({ ...existing, prompt: scriptSegments[i].slice(0, 80) });
-          } else {
-            next.push(existing);
-          }
-        } else if (scriptSegments[i]) {
-          next.push({ prompt: scriptSegments[i].slice(0, 80), pick: null });
-        }
-      }
-      return next.length ? next : [{ prompt: "", pick: null }];
-    });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, scriptSegments.length]);
-
   // ---- Validation ----
   const canGenerate = useMemo(() => {
     if (!script.trim()) return false;
-    if (mode === MODES.AVATAR) {
-      return !!avatar && !!voice;
-    }
-    return !!ttsVoice && scenes.some((s) => s.prompt.trim());
+    if (mode === MODES.AVATAR) return !!avatar && !!voice;
+    if (!ttsVoice) return false;
+    if (scenes.length === 0) return false;
+    // Every scene needs a resolved source (mix mode requires explicit pick per scene)
+    if (scenes.some((s) => !s.source)) return false;
+    return true;
   }, [script, mode, avatar, voice, ttsVoice, scenes]);
 
   // ---- Generate ----
@@ -132,7 +162,7 @@ export default function Studio() {
         tts_voice_id: mode === MODES.FACELESS ? ttsVoice?.id : null,
         broll_source: mode === MODES.FACELESS ? brollSource : null,
         scenes: mode === MODES.FACELESS ? scenes.map((s) => ({
-          source: s.pick?.source || brollSource,
+          source: s.source,
           prompt: s.prompt,
           video_url: s.pick?.video_url || null,
           thumb: s.pick?.thumb || null,
@@ -173,20 +203,25 @@ export default function Studio() {
     }
   };
 
-  // ---- Scene helpers ----
-  const updateScene = (idx, patch) => {
-    setScenes((s) => s.map((row, i) => i === idx ? { ...row, ...patch } : row));
+  // ---- Scene source override ----
+  const setSceneSource = (idx, src) => {
+    setSceneOverrides((prev) => {
+      const next = [...prev];
+      next[idx] = { ...(next[idx] || {}), source: src, pick: null };
+      return next;
+    });
   };
-  const addScene = () => setScenes((s) => [...s, { prompt: "", pick: null }]);
-  const removeScene = (idx) => setScenes((s) => s.filter((_, i) => i !== idx));
+  const setScenePick = (idx, pick) => {
+    setSceneOverrides((prev) => {
+      const next = [...prev];
+      next[idx] = { ...(next[idx] || {}), pick };
+      return next;
+    });
+  };
 
-  // ---- Chip render helpers ----
+  // ---- Chips ----
   const chipAvatar = (
-    <button
-      className={`chip ${avatar ? "is-set" : ""}`}
-      data-testid="chip-avatar"
-      onClick={() => setModal("avatar")}
-    >
+    <button className={`chip ${avatar ? "is-set" : ""}`} data-testid="chip-avatar" onClick={() => setModal("avatar")}>
       {avatar?.preview_image_url
         ? <img src={avatar.preview_image_url} alt="" className="chip-thumb" />
         : <span className="chip-icon"><UserCircle2 size={16} /></span>}
@@ -194,61 +229,57 @@ export default function Studio() {
       <ChevronDown size={14} className="chip-caret" />
     </button>
   );
-
   const chipVoice = (
-    <button
-      className={`chip ${voice ? "is-set" : ""}`}
-      data-testid="chip-voice"
-      onClick={() => setModal("voice")}
-    >
+    <button className={`chip ${voice ? "is-set" : ""}`} data-testid="chip-voice" onClick={() => setModal("voice")}>
       <span className="chip-icon"><Mic size={14} /></span>
       <span className="chip-label">{voice ? `Voice · ${voice.name}` : "Voice"}</span>
       <ChevronDown size={14} className="chip-caret" />
     </button>
   );
-
   const chipTtsVoice = (
-    <button
-      className={`chip ${ttsVoice ? "is-set" : ""}`}
-      data-testid="chip-tts-voice"
-      onClick={() => setModal("tts-voice")}
-    >
+    <button className={`chip ${ttsVoice ? "is-set" : ""}`} data-testid="chip-tts-voice" onClick={() => setModal("tts-voice")}>
       <span className="chip-icon"><Mic size={14} /></span>
       <span className="chip-label">{ttsVoice ? `Voice · ${ttsVoice.name}` : "Voice"}</span>
       <ChevronDown size={14} className="chip-caret" />
     </button>
   );
-
   const chipAspect = (
-    <button className={`chip is-set`} data-testid="chip-aspect" onClick={() => setModal("aspect")}>
+    <button className="chip is-set" data-testid="chip-aspect" onClick={() => setModal("aspect")}>
       <span className="chip-icon"><Ratio size={14} /></span>
       <span className="chip-label">{aspect === "9_16" ? "9:16 Vertical" : "16:9 Horizontal"}</span>
       <ChevronDown size={14} className="chip-caret" />
     </button>
   );
-
   const chipCaptions = (
-    <button className={`chip is-set`} data-testid="chip-captions" onClick={() => setModal("captions")}>
+    <button className="chip is-set" data-testid="chip-captions" onClick={() => setModal("captions")}>
       <span className="chip-icon"><Captions size={14} /></span>
       <span className="chip-label">{captions ? "Captions ON" : "Captions OFF"}</span>
       <ChevronDown size={14} className="chip-caret" />
     </button>
   );
-
+  const brollChipLabel = {
+    ai: "B-Roll · AI",
+    pexels: "B-Roll · Pexels",
+    pixabay: "B-Roll · Pixabay",
+    mix: "B-Roll · Mix",
+  }[brollSource] || "B-Roll";
   const chipBroll = (
-    <button className={`chip is-set`} data-testid="chip-broll" onClick={() => setModal("broll")}>
+    <button className="chip is-set" data-testid="chip-broll" onClick={() => setModal("broll")}>
       <span className="chip-icon"><Film size={14} /></span>
-      <span className="chip-label">B-Roll · {brollSource === "ai" ? "AI" : brollSource === "mix" ? "Mix" : brollSource === "pixabay" ? "Library B" : "Library A"}</span>
+      <span className="chip-label">{brollChipLabel}</span>
       <ChevronDown size={14} className="chip-caret" />
     </button>
   );
 
-  return (
-    <main className="studio-main" data-testid="studio-page">
+  // ---- Source pills handled by hoisted SourcePills component ----
 
+  return (
+    <main className="studio-main" data-mode={mode} data-testid="studio-page">
       {/* Hero */}
       <div className="studio-hero">
-        <p className="studio-eyebrow">Studio</p>
+        <p className="studio-eyebrow" data-testid="studio-eyebrow">
+          Faceless to Finished · Video Engine
+        </p>
         <h1 className="studio-title">Turn your script into a finished video.</h1>
         <p className="studio-sub">
           Paste your script, pick your look in two clicks, and we&rsquo;ll render the final cut — captions, voice, footage and all.
@@ -259,6 +290,7 @@ export default function Studio() {
       <div className="mode-toggle" role="tablist" data-testid="mode-toggle">
         <button
           role="tab"
+          data-mode="avatar"
           className={`mode-opt ${mode === MODES.AVATAR ? "is-active" : ""}`}
           data-testid="mode-avatar"
           onClick={() => setMode(MODES.AVATAR)}
@@ -267,6 +299,7 @@ export default function Studio() {
         </button>
         <button
           role="tab"
+          data-mode="faceless"
           className={`mode-opt ${mode === MODES.FACELESS ? "is-active" : ""}`}
           data-testid="mode-faceless"
           onClick={() => setMode(MODES.FACELESS)}
@@ -283,7 +316,7 @@ export default function Studio() {
           data-testid="script-textarea"
           placeholder={mode === MODES.AVATAR
             ? "Paste the script your avatar will read…"
-            : "Paste the script for your voiceover. We'll suggest one scene per paragraph."}
+            : "Paste the script for your voiceover."}
           value={script}
           onChange={(e) => setScript(e.target.value)}
           rows={6}
@@ -297,92 +330,118 @@ export default function Studio() {
       {/* Chip row */}
       <div className="chip-row" data-testid="chip-row">
         {mode === MODES.AVATAR ? (
-          <>
-            {chipAvatar}
-            {chipVoice}
-            {chipAspect}
-            {chipCaptions}
-          </>
+          <>{chipAvatar}{chipVoice}{chipAspect}{chipCaptions}</>
         ) : (
-          <>
-            {chipTtsVoice}
-            {chipBroll}
-            {chipAspect}
-            {chipCaptions}
-          </>
+          <>{chipTtsVoice}{chipBroll}{chipAspect}{chipCaptions}</>
         )}
       </div>
 
-      {/* Faceless: scene list */}
+      {/* Faceless: Bulk prompts + scene list */}
       {mode === MODES.FACELESS && (
         <div className="scene-section" data-testid="scene-section">
-          <span className="script-label">Scenes</span>
-          <div className="scene-list" data-testid="scene-list">
-            {scenes.map((s, i) => (
-              <div className="scene-card" key={i} data-testid={`scene-card-${i}`}>
-                <div className="scene-head">
-                  <span className="scene-num">Scene {i + 1}</span>
-                  <input
-                    className="scene-prompt-input"
-                    data-testid={`scene-prompt-${i}`}
-                    placeholder="Describe the scene (e.g. 'sunrise over mountains')"
-                    value={s.prompt}
-                    onChange={(e) => updateScene(i, { prompt: e.target.value })}
-                  />
-                  {scenes.length > 1 && (
-                    <button
-                      className="scene-remove"
-                      data-testid={`scene-remove-${i}`}
-                      onClick={() => removeScene(i)}
-                      aria-label="Remove scene"
-                    >×</button>
-                  )}
-                </div>
-                <div className="scene-row">
-                  {brollSource !== "ai" && (
-                    <button
-                      className={`scene-pick ${s.pick ? "is-picked" : ""}`}
-                      data-testid={`scene-pick-${i}`}
-                      onClick={() => setStockModal({ open: true, idx: i })}
-                    >
-                      {s.pick?.thumb && <img src={s.pick.thumb} alt="" className="scene-pick-thumb" />}
-                      {s.pick ? "Replace footage" : "Pick footage"}
-                    </button>
-                  )}
-                  {brollSource === "ai" && (
-                    <span className="scene-pick is-picked" data-testid={`scene-ai-${i}`}>AI-generated scene</span>
-                  )}
-                </div>
-              </div>
-            ))}
+          <div className="scene-section-head">
+            <span className="scene-section-title">B-Roll prompts</span>
+            <span className="scene-section-count" data-testid="scene-count">
+              <strong>{sceneLines.length}</strong> {sceneLines.length === 1 ? "scene" : "scenes"} · up to {MAX_SCENES}
+            </span>
           </div>
-          <button className="scene-add" data-testid="scene-add" onClick={addScene}>
-            <Plus size={12} style={{ verticalAlign: -2, marginRight: 4 }} /> Add scene
-          </button>
+          <textarea
+            className="bulk-prompts"
+            data-testid="bulk-prompts"
+            placeholder={`One prompt per line. Each line becomes one scene. Up to ${MAX_SCENES} scenes.\n\nsunrise over mountains\nentrepreneur working late at her laptop\nlaughing customer holding a product`}
+            value={bulkPrompts}
+            onChange={(e) => {
+              // Cap to MAX_SCENES non-empty lines while preserving formatting
+              const text = e.target.value;
+              const lines = text.split(/\r?\n/);
+              let count = 0;
+              const capped = [];
+              for (const ln of lines) {
+                if (ln.trim()) {
+                  if (count >= MAX_SCENES) break;
+                  count++;
+                }
+                capped.push(ln);
+              }
+              setBulkPrompts(capped.join("\n"));
+            }}
+            rows={6}
+          />
+
+          {/* Resolved scenes (read-only prompt + per-scene source pills) */}
+          {sceneLines.length > 0 && (
+            <div className="scene-list" data-testid="scene-list">
+              {scenes.map((s, i) => (
+                <div className="scene-card" key={i} data-testid={`scene-card-${i}`}>
+                  <div className="scene-card-head">
+                    <span className="scene-num">Scene {i + 1}</span>
+                    <span className="scene-prompt-readonly">{s.prompt}</span>
+                  </div>
+                  <SourcePills idx={i} current={s.source} onPick={setSceneSource} />
+                  <div className="scene-hint" data-testid={`scene-hint-${i}`}>
+                    {s.source ? (
+                      <>
+                        {s.source === "ai" && <Sparkles size={12} />}
+                        {s.source === "pexels" && <Film size={12} />}
+                        {s.source === "pixabay" && <Film size={12} />}
+                        <span>{SOURCE_HINT[s.source]}</span>
+                        {(s.source === "pexels" || s.source === "pixabay") && (
+                          <button
+                            type="button"
+                            className="scene-hint-pick"
+                            data-testid={`scene-pick-${i}`}
+                            onClick={() => setStockModal({ open: true, idx: i })}
+                          >
+                            {s.pick ? (
+                              <>
+                                {s.pick.thumb && <img src={s.pick.thumb} alt="" className="scene-hint-thumb" style={{ verticalAlign: -6, marginRight: 6 }} />}
+                                Change clip
+                              </>
+                            ) : "Pre-pick a clip"}
+                          </button>
+                        )}
+                      </>
+                    ) : (
+                      <span style={{ color: "var(--warning)" }}>Pick a source for this scene.</span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
-      {/* Storyboard (avatar mode shows a single placeholder, faceless shows scenes) */}
-      {mode === MODES.FACELESS && scenes.some((s) => s.prompt.trim()) && (
+      {/* Storyboard */}
+      {mode === MODES.FACELESS && sceneLines.length > 0 && (
         <div className="storyboard-block" data-testid="storyboard-block">
           <div className="storyboard-head">
             <span className="storyboard-title">Storyboard</span>
           </div>
           <div className="storyboard-strip" data-testid="storyboard-strip">
-            {scenes.filter((s) => s.prompt.trim()).map((s, i) => (
+            {scenes.map((s, i) => (
               <button
                 className="storyboard-card"
                 key={i}
                 data-testid={`storyboard-card-${i}`}
-                onClick={() => setStockModal({ open: true, idx: i })}
+                onClick={() => {
+                  if (s.source === "pexels" || s.source === "pixabay") setStockModal({ open: true, idx: i });
+                }}
               >
                 <div className={`storyboard-thumb ${aspect === "16_9" ? "is-16-9" : ""}`}>
                   <span className="storyboard-idx">{i + 1}</span>
+                  {s.source && (
+                    <span className="storyboard-source-badge" data-source={s.source}>
+                      {SOURCE_SHORT[s.source]}
+                    </span>
+                  )}
                   {s.pick?.thumb && <img src={s.pick.thumb} alt="" />}
                 </div>
                 <div className="storyboard-meta">
                   <div className="storyboard-prompt">{s.prompt}</div>
-                  <div className={`storyboard-status ${s.pick ? "is-ready" : ""}`}>{s.pick ? "Ready" : "Needs footage"}</div>
+                  <div className={`storyboard-status ${s.pick || s.source === "ai" ? "is-ready" : ""}`}>
+                    {!s.source ? "Pick source" : s.source === "ai" ? "AI scene" : (s.pick ? "Clip ready" : "Auto search")}
+                  </div>
                 </div>
               </button>
             ))}
@@ -406,7 +465,9 @@ export default function Studio() {
               ? "Paste a script to begin."
               : mode === MODES.AVATAR
                 ? !avatar ? "Pick an avatar." : !voice ? "Pick a voice." : ""
-                : !ttsVoice ? "Pick a voice." : "Add at least one scene prompt."}
+                : !ttsVoice ? "Pick a voice."
+                  : scenes.length === 0 ? "Add at least one B-roll prompt."
+                    : "Pick a source for every scene."}
           </p>
         )}
         {renderErr && <p className="cta-error" data-testid="cta-error">{renderErr}</p>}
@@ -425,13 +486,7 @@ export default function Studio() {
             <div className="render-bar-fill" style={{ width: `${render.progress}%` }} />
           </div>
           {render.status === "complete" && render.result_url && (
-            <video
-              className="render-video"
-              data-testid="render-video"
-              src={render.result_url}
-              controls
-              playsInline
-            />
+            <video className="render-video" data-testid="render-video" src={render.result_url} controls playsInline />
           )}
           {render.status === "failed" && (
             <p style={{ color: "var(--danger)", margin: 0 }}>Render failed: {render.error || "unknown error"}</p>
@@ -478,53 +533,32 @@ export default function Studio() {
       </div>
 
       {/* Modals */}
-      <AvatarPicker
-        open={modal === "avatar"}
-        onClose={closeModal}
-        value={avatar}
-        onPick={setAvatar}
-      />
-      <VoicePicker
-        open={modal === "voice"}
-        onClose={closeModal}
-        value={voice}
-        onPick={setVoice}
-        source="heygen"
-      />
-      <VoicePicker
-        open={modal === "tts-voice"}
-        onClose={closeModal}
-        value={ttsVoice}
-        onPick={setTtsVoice}
-        source="tts"
-      />
+      <AvatarPicker open={modal === "avatar"} onClose={closeModal} value={avatar} onPick={setAvatar} />
+      <VoicePicker open={modal === "voice"} onClose={closeModal} value={voice} onPick={setVoice} source="heygen" />
+      <VoicePicker open={modal === "tts-voice"} onClose={closeModal} value={ttsVoice} onPick={setTtsVoice} source="tts" />
       <BRollSourcePicker
         open={modal === "broll"}
         onClose={closeModal}
         value={brollSource}
-        onPick={setBrollSource}
+        onPick={(src) => {
+          setBrollSource(src);
+          // Clear per-scene overrides so the new global takes effect (except when going to "mix")
+          if (src !== "mix") setSceneOverrides((prev) => prev.map(() => ({})));
+        }}
       />
-      <AspectPicker
-        open={modal === "aspect"}
-        onClose={closeModal}
-        value={aspect}
-        onPick={setAspect}
-      />
-      <CaptionsPicker
-        open={modal === "captions"}
-        onClose={closeModal}
-        value={captions}
-        onPick={(v) => { captionsTouched.current = true; setCaptions(v); }}
-      />
+      <AspectPicker open={modal === "aspect"} onClose={closeModal} value={aspect} onPick={setAspect} />
+      <CaptionsPicker open={modal === "captions"} onClose={closeModal} value={captions} onPick={(v) => { captionsTouched.current = true; setCaptions(v); }} />
       <StockPicker
         open={stockModal.open}
         sceneIdx={stockModal.idx}
-        defaultSource={brollSource === "pixabay" ? "pixabay" : "pexels"}
+        defaultSource={
+          stockModal.idx >= 0 && scenes[stockModal.idx]?.source === "pixabay" ? "pixabay" : "pexels"
+        }
         query={stockModal.idx >= 0 ? scenes[stockModal.idx]?.prompt : ""}
         aspect={aspect}
         onClose={() => setStockModal({ open: false, idx: -1 })}
         onPick={(r) => {
-          if (stockModal.idx >= 0) updateScene(stockModal.idx, { pick: r });
+          if (stockModal.idx >= 0) setScenePick(stockModal.idx, r);
         }}
       />
     </main>

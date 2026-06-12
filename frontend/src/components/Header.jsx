@@ -9,14 +9,19 @@ export default function Header() {
   const nav = useNavigate();
   const loc = useLocation();
 
+  const logoSrc = theme === "dark" ? "/logo-dark.png" : "/logo-light.png";
+
   return (
     <header className="site-header" data-testid="site-header">
       <div className="brand" data-testid="brand">
-        <span className="brand-mark">F</span>
-        <span>
-          <span className="brand-name">Faceless to Finished</span>{" "}
-          <span className="brand-sub">— Studio</span>
-        </span>
+        <img
+          src={logoSrc}
+          alt="Faceless 48 — The 48-Hour Publishing System"
+          className="brand-logo"
+          data-testid="brand-logo"
+        />
+        <span className="brand-divider" aria-hidden="true">/</span>
+        <span className="brand-section">Studio</span>
       </div>
       <div className="header-meta">
         {user && loc.pathname !== "/login" && (

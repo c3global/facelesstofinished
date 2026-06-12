@@ -267,10 +267,10 @@ export function VoicePicker({ open, onClose, value, onPick, source = "heygen" })
 // =====================================================================
 export function BRollSourcePicker({ open, onClose, value, onPick }) {
   const options = [
-    { id: "pexels",  name: "Stock Video",      icon: <Film size={22} />,    desc: "Free, high-quality footage. Best for lifestyle, business, nature." },
-    { id: "pixabay", name: "Stock Video (alt)", icon: <Film size={22} />,    desc: "Alternate library — broader, more niche topics." },
-    { id: "ai",      name: "AI Generation",   icon: <Sparkles size={22} />, desc: "Generate every scene with AI. Best for abstract or stylized topics." },
-    { id: "mix",     name: "Mix",              icon: <Layers size={22} />,   desc: "Use stock when available, AI for the rest. Choose per scene." },
+    { id: "ai",      name: "Generate with AI",  icon: <Sparkles size={22} />, desc: "Every scene is generated with AI from your prompt. Best for abstract, stylized topics." },
+    { id: "pexels",  name: "Stock from Pexels", icon: <Film size={22} />,     desc: "Free, premium stock footage. Strong on lifestyle, business, and nature." },
+    { id: "pixabay", name: "Stock from Pixabay", icon: <Film size={22} />,    desc: "Alternate library — broader catalog, more niche topics." },
+    { id: "mix",     name: "Mix per scene",     icon: <Layers size={22} />,   desc: "No global default — pick AI / Pexels / Pixabay individually for each scene." },
   ];
   return (
     <Modal open={open} onClose={onClose} title="B-Roll source" testId="broll-modal">
@@ -411,12 +411,12 @@ export function StockPicker({ open, onClose, sceneIdx, defaultSource, query: def
               className={`modal-tab ${source === "pexels" ? "is-active" : ""}`}
               data-testid="stock-source-pexels"
               onClick={() => setSource("pexels")}
-            >Library A</button>
+            >Pexels</button>
             <button
               className={`modal-tab ${source === "pixabay" ? "is-active" : ""}`}
               data-testid="stock-source-pixabay"
               onClick={() => setSource("pixabay")}
-            >Library B</button>
+            >Pixabay</button>
           </div>
           <input
             className="modal-search"
@@ -449,7 +449,7 @@ export function StockPicker({ open, onClose, sceneIdx, defaultSource, query: def
                 <div className={`stock-thumb ${aspect === "16_9" ? "is-landscape" : ""}`} />
               )}
               <div className="stock-meta">
-                <span className="stock-source">{r.source === "pexels" ? "A" : "B"}</span>
+                <span className="stock-source">{r.source === "pexels" ? "Pexels" : "Pixabay"}</span>
                 {r.duration != null && <span className="stock-duration">{Math.round(r.duration)}s</span>}
               </div>
             </button>

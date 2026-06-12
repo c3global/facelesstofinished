@@ -22,8 +22,9 @@
   --success-soft:  rgba(29, 158, 117, 0.12);
   --info:          #378ADD;
   --info-soft:     rgba(55, 138, 221, 0.12);
-  --warning:       #C9956C;
-  --warning-soft:  rgba(201, 149, 108, 0.12);
+  --warning:       #C4866A;
+  --warning-soft:  rgba(196, 134, 106, 0.14);
+  --warning-ring:  rgba(196, 134, 106, 0.30);
   --danger:        #C41A18;
   --danger-soft:   rgba(196, 26, 24, 0.12);
   --header-bg:     rgba(15, 10, 30, 0.6);
@@ -49,8 +50,9 @@
   --success-soft:  rgba(18, 134, 96, 0.10);
   --info:          #2872C2;
   --info-soft:     rgba(40, 114, 194, 0.10);
-  --warning:       #A87645;
-  --warning-soft:  rgba(168, 118, 69, 0.10);
+  --warning:       #A87045;
+  --warning-soft:  rgba(168, 112, 69, 0.10);
+  --warning-ring:  rgba(168, 112, 69, 0.22);
   --danger:        #B11614;
   --danger-soft:   rgba(177, 22, 20, 0.10);
   --header-bg:     rgba(246, 244, 251, 0.75);
