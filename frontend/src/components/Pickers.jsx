@@ -6,12 +6,22 @@ import { apiClient } from "../App";
 // =====================================================================
 // Avatar picker
 // =====================================================================
-export function AvatarPicker({ open, onClose, value, onPick }) {
+export function AvatarPicker({ open, onClose, value, onPick, currentAspect = "9_16" }) {
   const [avatars, setAvatars] = useState([]);
   const [loading, setLoading] = useState(false);
   const [tab, setTab] = useState("all");
-  const [aspectFilter, setAspectFilter] = useState("all");
+  // Default the aspect filter to whatever the Studio is currently rendering
+  // for. Iter-15 left this hard-coded to "all" which meant landscape-only
+  // avatars showed up even when the user had picked 9:16 — causing the
+  // "Choose your avatar shows the same list for every aspect" bug.
+  const [aspectFilter, setAspectFilter] = useState(currentAspect);
   const [search, setSearch] = useState("");
+
+  // Keep the filter in sync if the Studio's aspect changes while the modal
+  // is mounted (closed). Opening the modal then will default to the latest.
+  useEffect(() => {
+    if (!open) setAspectFilter(currentAspect);
+  }, [open, currentAspect]);
 
   useEffect(() => {
     if (!open || avatars.length) return;
@@ -25,12 +35,19 @@ export function AvatarPicker({ open, onClose, value, onPick }) {
   const filtered = useMemo(() => {
     let list = avatars;
     if (tab !== "all") list = list.filter((a) => a.gender === tab);
+    // The bug: iter-15 declared aspectFilter state but never read it here,
+    // so the dropdown was visually changing without filtering. Wired now.
+    if (aspectFilter === "9_16") {
+      list = list.filter((a) => a.aspect !== "landscape");
+    } else if (aspectFilter === "16_9") {
+      list = list.filter((a) => a.aspect !== "portrait");
+    }
     if (search) {
       const q = search.toLowerCase();
       list = list.filter((a) => (a.name || "").toLowerCase().includes(q));
     }
     return list;
-  }, [avatars, tab, search]);
+  }, [avatars, tab, aspectFilter, search]);
 
   const tabs = [
     { id: "all", label: "All" },
@@ -80,7 +97,14 @@ export function AvatarPicker({ open, onClose, value, onPick }) {
       {loading ? (
         <div className="modal-empty">Loading avatars…</div>
       ) : filtered.length === 0 ? (
-        <div className="modal-empty">No avatars match. Try clearing filters.</div>
+        <div className="modal-empty" data-testid="avatar-empty">
+          No avatars match these filters.
+          {aspectFilter !== "all" && (
+            <span style={{ display: "block", marginTop: 6, fontSize: 12, opacity: 0.7 }}>
+              Switch the aspect filter to "Any aspect" to widen the search.
+            </span>
+          )}
+        </div>
       ) : (
         <div className="avatar-grid" data-testid="avatar-grid">
           {filtered.map((a) => (

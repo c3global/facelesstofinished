@@ -955,7 +955,7 @@ export default function Studio() {
       </div>
 
       {/* Modals */}
-      <AvatarPicker open={modal === "avatar"} onClose={closeModal} value={avatar} onPick={setAvatar} />
+      <AvatarPicker open={modal === "avatar"} onClose={closeModal} value={avatar} onPick={setAvatar} currentAspect={aspect} />
       <VoicePicker open={modal === "voice"} onClose={closeModal} value={voice} onPick={setVoice} source="heygen" />
       <VoicePicker open={modal === "tts-voice"} onClose={closeModal} value={ttsVoice} onPick={setTtsVoice} source="tts" />
       <BRollSourcePicker

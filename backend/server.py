@@ -262,6 +262,21 @@ async def studio_avatars(user: AuthUser = Depends(current_user)):
         avatars = (raw.get("data") or {}).get("avatars") or []
         out = []
         for a in avatars:
+            name = (a.get("avatar_name") or "").lower()
+            # Heuristic aspect tagging based on the pose hint in the name.
+            # HeyGen doesn't expose an explicit aspect-eligibility field on
+            # /avatars, but pose conventions are consistent enough to filter
+            # the picker meaningfully. Avatars with sit/side poses look
+            # mangled when forced into 9:16; we tag them landscape-only.
+            landscape_only = any(t in name for t in (
+                " side", "sofa", "biztalk", "wide", "couch", "background",
+            ))
+            portrait_ok = any(t in name for t in (
+                "upper body", "front", "headshot", "close", "selfie",
+            ))
+            aspect = "landscape" if landscape_only and not portrait_ok else (
+                "both" if portrait_ok else "both"  # default permissive
+            )
             out.append({
                 "id": a.get("avatar_id"),
                 "name": a.get("avatar_name") or a.get("avatar_id"),
@@ -269,10 +284,11 @@ async def studio_avatars(user: AuthUser = Depends(current_user)):
                 "preview_video_url": a.get("preview_video_url"),
                 "gender": (a.get("gender") or "").lower() or "other",
                 "premium": bool(a.get("premium")),
+                "aspect": aspect,  # "both" | "landscape" — used by the picker filter
             })
         return out
 
-    avatars = await _cached("heygen_avatars_v1", 24, fetch)
+    avatars = await _cached("heygen_avatars_v2", 24, fetch)
     return {"avatars": avatars}
 
 
@@ -602,24 +618,29 @@ async def _run_render_avatar(job: dict):
         await _finalize(job_id, ok=False, url=None, actual_cost_cents=0)
         return
     async with httpx.AsyncClient(timeout=60) as client:
-        # 1) Submit. NOTE on captions: HeyGen v2 `/video/generate` requires a
-        # BOOLEAN here — sending a {file_format, style} object returns 400
-        # `caption is invalid: Input should be a valid boolean`. Custom
-        # caption styling lives on HeyGen's Template API, not this endpoint.
+        # Character config. For 9:16 portrait we crop the 16:9 source avatar
+        # by scaling 1.78× (16/9) and nudging upward so the face stays in
+        # frame — without this HeyGen letterboxes the source horizontally
+        # with huge white bars top/bottom (the iter-15 result). `fit` is not
+        # a real HeyGen v2 field — removed.
+        character = {
+            "type": "avatar",
+            "avatar_id": job["avatar_id"],
+            "avatar_style": "normal",
+        }
+        if job["aspect"] == "9_16":
+            character["scale"] = 1.78
+            character["offset"] = {"x": 0.0, "y": -0.12}
+
         body = {
             "video_inputs": [{
-                "character": {"type": "avatar", "avatar_id": job["avatar_id"], "avatar_style": "normal"},
+                "character": character,
                 "voice": {"type": "text", "voice_id": job["voice_id"], "input_text": job["script"]},
             }],
             "dimension": {"width": 1080 if job["aspect"] == "16_9" else 720,
                           "height": 1920 if job["aspect"] == "9_16" else 1080},
-            # `aspect_ratio` + `fit` are the newer HeyGen framing controls.
-            # `fit: "cover"` crops/zooms the avatar to fill the 9:16 frame
-            # cleanly — previously we got a tiny avatar in the centre with
-            # huge black bars top/bottom + white bars left/right because
-            # HeyGen's default behaviour is letterbox-fit a 16:9 avatar.
             "aspect_ratio": "9:16" if job["aspect"] == "9_16" else "16:9",
-            "fit": "cover",
+            # HeyGen v2 /video/generate requires `caption` as a BOOLEAN.
             "caption": bool(job.get("captions", True)),
         }
         r = await client.post(
