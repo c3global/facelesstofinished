@@ -457,7 +457,10 @@ def estimate_render_cost_cents(payload: RenderRequest) -> int:
     elif payload.mode == "faceless":
         # Kokoro TTS + Flux per-scene + compose
         scene_count = max(1, len(payload.scenes) or int(duration_s / 8))
-        cents += (len(payload.script) / 1000.0) * 0.5  # TTS
+        # ~$0.005 / 1k chars for Kokoro-class TTS — coefficient deliberately
+        # conservative (real renders may cost less but we'd rather reject
+        # a borderline payload than surprise-charge the user above the cap).
+        cents += (len(payload.script) / 1000.0) * 5.0  # TTS
         cents += scene_count * 4.0                     # Flux images
         cents += 2.0                                   # compose overhead
     elif payload.mode == "composite":
@@ -659,13 +662,18 @@ async def _run_render_composite(job: dict):
         await _finalize(job_id, ok=True, url=SAMPLE_VIDEO_URL, actual_cost_cents=0)
         return
 
-    # Real path: reuse _run_render_avatar to produce the base track (we'd
-    # capture its result_url separately rather than finalizing the job), then
-    # generate cutaway_count Flux images, then call the ffmpeg overlay
-    # endpoint with cutaway timestamps. Left as a TODO marker — the
-    # scaffold above ensures the job status walk completes cleanly when
-    # dry_run is True so the UI can be built against it today.
-    await _finalize(job_id, ok=False, url=None, actual_cost_cents=actual_cost_cents)
+    # Real path: render HeyGen talking-head as base track, generate
+    # cutaway_count Flux B-roll images, then call ffmpeg overlay endpoint
+    # with cutaway timestamps. Not yet implemented — flip dry_run off only
+    # AFTER this branch is filled in. Until then surface a clear error.
+    await db.renders.update_one(
+        {"id": job_id},
+        {"$set": {
+            "status": "failed",
+            "error": "Composite real-render not implemented yet — keep dry_run on for composite mode.",
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+        }},
+    )
 
 
 @api.post("/studio/render/estimate")

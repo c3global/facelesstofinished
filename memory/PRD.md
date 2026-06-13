@@ -139,6 +139,49 @@ Major refactor that addresses 7 explicit user asks. Verified 21/21 backend + ~95
 
 **Deferred from this iteration (Avatar + B-roll cutaways composite mode):** A true "Avatar + B-roll cutaways" render mode (HeyGen avatar talking head intercut with stock B-roll) needs a new backend render branch and a UI toggle in Avatar mode. Decision: defer until the real HeyGen/fal.ai pipelines are wired (DRY_RUN_RENDERS=false) so the UI isn't building against simulated output. The B-roll prompts ARE staged on the handoff so the user can manually flip to Faceless mode in the meantime.
 
+## Iteration 10 — Cost guards + DRY_RUN render pipelines + admin-only render controls + Sprint promote (2026-02-12)
+Verified live via `/app/test_reports/iteration_10.json` — 13/13 backend pytest PASS, all live-tested UI surfaces PASS, zero bugs found.
+
+**Admin detection.** `/auth/me` now returns `isAdmin` (derived from `ADMIN_EMAILS` env, defaults to `drcharitycampbell@gmail.com`) plus `dryRunDefault` (mirror of `DRY_RUN_RENDERS` env). Frontend reads `user.isAdmin` from `useAuth` and gates the entire admin-render control UI behind `{isAdmin && ...}` — customers see a clean "Render Video" button and nothing else.
+
+**Cost estimator.** New `estimate_render_cost_cents(payload)` helper at `/app/backend/server.py` ~line 415. Conservative ceiling estimates: Avatar = $0.30/min HeyGen + 5¢ overhead; Faceless = $0.005/1k char TTS (calibrated up 10x after iteration-10 code review) + 4¢/Flux image + 2¢ compose; Composite = avatar base + B-roll cutaway per N seconds + 3¢ overhead. New endpoint `POST /api/studio/render/estimate` returns `{estimated_cost_cents, estimated_cost_dollars, cap_cents, cap_dollars, exceeds_cap, dry_run_default, is_admin}` — used by `AdminRenderControl` for the live "~$X.XX" label (250ms-debounced).
+
+**$1.50 hard cap.** `RENDER_COST_CAP_CENTS=150` env-configurable. Any `/studio/render` request whose estimate exceeds the cap is rejected with HTTP 400 + a clear error ("Render rejected: estimated $5.08 exceeds hard cap of $1.50"). Applies even when `dry_run=true` so admins can't accidentally over-shoot the budget by toggling dry_run off after the fact. Composite renders need the extra headroom over single-mode renders — the cap was chosen with this in mind.
+
+**`RenderRequest.dry_run` admin override.** Optional bool on the request body. Resolved server-side as `effective_dry_run = payload.dry_run if (is_admin and payload.dry_run is not None) else DRY_RUN_RENDERS`. Customers' attempts to override are silently ignored — non-admin requests always use the env default. Verified by code review + pytest.
+
+**HeyGen Avatar pipeline (DRY_RUN scaffold).** New `_run_render_avatar` in `server.py`. Walks the status stages voiceover→avatar→polling with sleeps, then finalizes with `SAMPLE_VIDEO_URL` + `actual_cost_cents=0` in dry-run. Real path is fully written: POST `/v2/video/generate`, poll `/v1/video_status.get` every 5s up to 5 min, parse the final `video_url`. Gated behind `if dry_run: return STUBBED_RESPONSE` so flipping `DRY_RUN_RENDERS=false` runs the real code unchanged.
+
+**fal.ai Faceless pipeline (DRY_RUN scaffold).** New `_run_render_faceless`. Walks voiceover→visuals→composing. Real path: `fal-ai/kokoro` for TTS (single call for entire narration), `fal-ai/flux-pro/v1.1` per-scene images (parallel via `asyncio.gather`), then `fal-ai/ffmpeg-api/compose` to stitch. Accumulates `actual_cost_cents` as each stage completes.
+
+**Composite Avatar+B-roll pipeline (DRY_RUN scaffold).** New `_run_render_composite`. Walks avatar→cutaways→composing for the dry-run path. Real path is currently a TODO that surfaces a clear error message ("Composite real-render not implemented yet — keep dry_run on for composite mode.") so an admin who flips dry_run off knows exactly what's missing. The dry-run path completes cleanly so the UI can be built against it today.
+
+**Activity log.** Every `/studio/render` call writes a `studio_render` row to `db.activity` with `detail.dry_run` boolean + `detail.estimated_cost_cents` int. Verified via direct mongosh query.
+
+**Admin-only render controls UI** (`/app/frontend/src/components/AdminRenderControl.jsx`):
+- Amber-themed panel below the chip strip on Studio
+- "Use real render (~$X.XX)" checkbox — default OFF every page mount (no localStorage persistence; every render starts in dry-run for safety)
+- Live cost estimate fetched from `/studio/render/estimate` 250ms-debounced as the form payload changes
+- Cap-exceeded warning panel disables the checkbox + shows "Estimated $X.XX exceeds the $1.50 hard cap" guidance
+- CTA copy flips: "Render your video" → "Render (real)" when toggle is ticked
+- `ConfirmRealRenderModal`: shown when admin+useReal clicks Render. 1-second-armed countdown on the confirm button ("Wait 0.9s…" → "Wait 0.8s…" → … → "Render for $0.12") to prevent reflex double-clicks. Cancel closes without firing.
+
+**Sprint "Promote to full short" button.** Each of the 5 Sprint variant cards now exposes a `[data-testid='sprint-variant-N-promote']` button. Clicking it calls `promoteVariant(variant)` in `Scripts.jsx` which POSTs to the existing `/scripts/shorts` endpoint with `sprint:false` and `chosen_angle={name:variant.name, framing:variant.angle, category:variant.category}`. Page switches to the GENERATING step with the progress bar; on completion renders the standard 3-column Plan/Script/Distribute layout for that single short. While promoting, the other 4 promote buttons are disabled (via `promotingIndex` state).
+
+**Files touched in iter 10**
+- `/app/backend/server.py` — ADMIN_EMAILS + RENDER_COST_CAP_CENTS env, `/auth/me` enriched with `isAdmin`+`dryRunDefault`, `RenderRequest.dry_run`+`broll_cutaway_interval_s` fields, `estimate_render_cost_cents`, `_walk_stages`, `_finalize`, `_run_render_avatar`, `_run_render_faceless`, `_run_render_composite`, `_run_render` dispatcher, `/studio/render/estimate` endpoint, `/studio/render` cost-cap + admin dry_run override.
+- `/app/frontend/src/components/AdminRenderControl.jsx` — new component + `ConfirmRealRenderModal` export.
+- `/app/frontend/src/pages/Studio.jsx` — useAuth, isAdmin gate, `buildPayload`, `fireRender(dryRunOverride)`, `generate` split into customer/admin paths, AdminRenderControl + ConfirmRealRenderModal wired into JSX, CTA copy flips.
+- `/app/frontend/src/components/scripts/SprintResult.jsx` — accepts `onPromote`+`promotingIndex` props, renders Promote button per variant.
+- `/app/frontend/src/pages/Scripts.jsx` — `promoteVariant` handler reusing `/scripts/shorts` with `sprint:false`+synthesized chosen_angle.
+- `/app/frontend/src/App.css` — admin-render-control panel, confirm-real modal, sprint-variant-promote button styles.
+
+**Deferred from iter 10**
+- Real `_run_render_composite` orchestration (talking-head → cutaways → ffmpeg overlay). Marked with a friendly error so an admin who flips dry_run off on composite gets a clear "not implemented yet" message.
+- `server.py` refactor into `/app/backend/renders/{avatar,faceless,composite}.py` — file is now 1185 lines, past the 700-line guideline.
+- `AdminRenderControl.jsx` uses `JSON.stringify(payload)` as the useEffect dep — minor perf smell. Replace with a memoized payload-key tuple.
+- Cross-origin Netlify auth-me deployment — explicitly held per user instruction; the other dev will handle when ready to flip the live URL.
+
 ## Iteration 9 — Scripts component extraction + Script Engine 3.0 polish (2026-02-12)
 Two big landings in this iteration. Verified live via `/app/test_reports/iteration_9.json` — all 14 features PASS, no bugs found.
 

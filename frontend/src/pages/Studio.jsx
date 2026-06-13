@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { UserCircle2, Mic, Ratio, Captions, Film, ChevronDown, Play, Trash2, Sparkles, Wand2, Loader2 } from "lucide-react";
+import { UserCircle2, Mic, Ratio, Captions, Film, ChevronDown, Play, Trash2, Sparkles, Wand2, Loader2, RotateCw } from "lucide-react";
 import { apiClient, useAuth } from "../App";
 import {
   AvatarPicker,
@@ -253,6 +253,43 @@ export default function Studio() {
       setConfirmReal({ dollars: estR.data.estimated_cost_dollars.toFixed(2) });
     } catch (e) {
       setRenderErr(e?.response?.data?.detail || "Could not estimate cost.");
+    }
+  };
+
+  // Admin QA helper: re-fire the SAME render payload but force dry_run=true.
+  // Useful for sanity-checking pipeline plumbing without spending real credits
+  // — e.g. after a real render finishes, click "Re-run as dry-run" to verify
+  // the same stages walk through without burning more API budget.
+  const rerenderAsDryRun = async (sourceDoc) => {
+    if (!sourceDoc) return;
+    setRenderErr("");
+    try {
+      const body = {
+        mode: sourceDoc.mode,
+        script: sourceDoc.script,
+        aspect: sourceDoc.aspect,
+        captions: sourceDoc.captions,
+        avatar_id: sourceDoc.avatar_id,
+        voice_id: sourceDoc.voice_id,
+        tts_voice_id: sourceDoc.tts_voice_id,
+        broll_source: sourceDoc.broll_source,
+        scenes: sourceDoc.scenes || [],
+        broll_cutaway_interval_s: sourceDoc.broll_cutaway_interval_s ?? 12,
+        dry_run: true,
+      };
+      const r = await apiClient.post("/studio/render", body);
+      setRender(r.data);
+      pollStatus(r.data.id);
+      setTimeout(
+        () =>
+          document.querySelector('[data-testid="render-card"]')?.scrollIntoView({
+            behavior: "smooth",
+            block: "start",
+          }),
+        100
+      );
+    } catch (e) {
+      setRenderErr(e?.response?.data?.detail || "Could not re-render.");
     }
   };
 
@@ -644,6 +681,17 @@ export default function Studio() {
           {render.status === "failed" && (
             <p style={{ color: "var(--danger)", margin: 0 }}>Render failed: {render.error || "unknown error"}</p>
           )}
+          {isAdmin && (render.status === "complete" || render.status === "failed") && (
+            <button
+              type="button"
+              className="header-btn"
+              data-testid="render-card-rerun-dryrun"
+              onClick={() => rerenderAsDryRun(render)}
+              style={{ alignSelf: "flex-start" }}
+            >
+              <RotateCw size={13} /> Re-run as dry-run
+            </button>
+          )}
         </div>
       )}
 
@@ -668,6 +716,24 @@ export default function Studio() {
                     <a className="icon-btn" href={r.result_url} target="_blank" rel="noreferrer" data-testid={`history-play-${r.id}`} aria-label="Play">
                       <Play size={14} />
                     </a>
+                  )}
+                  {isAdmin && (r.status === "complete" || r.status === "failed") && (
+                    <button
+                      className="icon-btn"
+                      data-testid={`history-rerun-dryrun-${r.id}`}
+                      onClick={async () => {
+                        try {
+                          const full = await apiClient.get(`/studio/render/${r.id}`);
+                          rerenderAsDryRun(full.data);
+                        } catch (e) {
+                          setRenderErr(e?.response?.data?.detail || "Could not load source render.");
+                        }
+                      }}
+                      aria-label="Re-run as dry-run"
+                      title="Re-run as dry-run"
+                    >
+                      <RotateCw size={14} />
+                    </button>
                   )}
                   <button
                     className="icon-btn is-danger"
