@@ -864,11 +864,14 @@ async def _run_render_faceless(job: dict):
         except Exception:
             captions_srt = None  # best-effort
 
-    # 4) Compose — fal.ai ffmpeg async queue (the synchronous fal.run/.../compose
-    # was hitting a 120s ReadTimeout on multi-scene jobs).
+    # 4) Compose — fal.ai ffmpeg async queue. Schema rule per fal.ai docs:
+    # every keyframe MUST have `timestamp` + `duration` + `url`. Iter-13/14
+    # was sending the audio keyframe with `timestamp: 0` only — the worker
+    # accepted the submit but spun forever waiting for an audio end signal,
+    # which is the >600s polling timeout the user kept seeing.
     tracks = []
+    total_video_duration = 0
     if scenes:
-        # Build the video track from per-scene clips, each ~4s by default
         per_dur = max(2, int(_estimate_duration_seconds(job["script"]) / max(1, len(scenes))))
         keyframes = []
         cursor = 0.0
@@ -880,8 +883,17 @@ async def _run_render_faceless(job: dict):
             cursor += per_dur
         if keyframes:
             tracks.append({"id": "video", "type": "video", "keyframes": keyframes})
+            total_video_duration = cursor
     if audio_url:
-        tracks.append({"id": "audio", "type": "audio", "keyframes": [{"url": audio_url, "timestamp": 0}]})
+        # Audio duration falls back to the video timeline length so the
+        # ffmpeg worker has a definite stop point. fal.ai will cut the audio
+        # if it's actually shorter; pad with silence if longer.
+        audio_duration = max(5, total_video_duration or int(_estimate_duration_seconds(job["script"])))
+        tracks.append({
+            "id": "audio",
+            "type": "audio",
+            "keyframes": [{"url": audio_url, "timestamp": 0, "duration": audio_duration}],
+        })
 
     compose_res = await _fal_queue_run(
         "fal-ai/ffmpeg-api/compose",
