@@ -500,7 +500,7 @@ def _finalize(job_id: str, *, ok: bool, url: Optional[str], actual_cost_cents: i
     )
 
 
-SAMPLE_VIDEO_URL = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
+SAMPLE_VIDEO_URL = "https://www.w3schools.com/html/mov_bbb.mp4"
 
 
 # ---------------------------------------------------------------------------
@@ -545,7 +545,15 @@ async def _run_render_avatar(job: dict):
             json=body,
         )
         if r.status_code != 200:
-            await _finalize(job_id, ok=False, url=None, actual_cost_cents=actual_cost_cents)
+            await db.renders.update_one(
+                {"id": job_id},
+                {"$set": {
+                    "status": "failed",
+                    "error": f"HeyGen API error {r.status_code}: {r.text[:300]}",
+                    "actual_cost_cents": actual_cost_cents,
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                }},
+            )
             return
         video_id = r.json()["data"]["video_id"]
         # 2) Poll
@@ -561,9 +569,25 @@ async def _run_render_avatar(job: dict):
                 await _finalize(job_id, ok=True, url=d.get("video_url"), actual_cost_cents=actual_cost_cents)
                 return
             if d.get("status") == "failed":
-                await _finalize(job_id, ok=False, url=None, actual_cost_cents=actual_cost_cents)
+                await db.renders.update_one(
+                    {"id": job_id},
+                    {"$set": {
+                        "status": "failed",
+                        "error": f"HeyGen returned status=failed: {d.get('error') or 'no detail'}",
+                        "actual_cost_cents": actual_cost_cents,
+                        "completed_at": datetime.now(timezone.utc).isoformat(),
+                    }},
+                )
                 return
-    await _finalize(job_id, ok=False, url=None, actual_cost_cents=actual_cost_cents)
+    await db.renders.update_one(
+        {"id": job_id},
+        {"$set": {
+            "status": "failed",
+            "error": "HeyGen polling timed out after 5 minutes",
+            "actual_cost_cents": actual_cost_cents,
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+        }},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -599,7 +623,15 @@ async def _run_render_faceless(job: dict):
             json={"text": job["script"], "voice": job.get("tts_voice_id") or "af_heart"},
         )
         if tts_r.status_code != 200:
-            await _finalize(job_id, ok=False, url=None, actual_cost_cents=actual_cost_cents)
+            await db.renders.update_one(
+                {"id": job_id},
+                {"$set": {
+                    "status": "failed",
+                    "error": f"fal.ai Kokoro TTS error {tts_r.status_code}: {tts_r.text[:300]}",
+                    "actual_cost_cents": actual_cost_cents,
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                }},
+            )
             return
         audio_url = tts_r.json().get("audio_url") or tts_r.json().get("audio", {}).get("url")
         actual_cost_cents += int((len(job["script"]) / 1000.0) * 0.5)
@@ -633,7 +665,15 @@ async def _run_render_faceless(job: dict):
         )
         actual_cost_cents += 2
         if compose_r.status_code != 200:
-            await _finalize(job_id, ok=False, url=None, actual_cost_cents=actual_cost_cents)
+            await db.renders.update_one(
+                {"id": job_id},
+                {"$set": {
+                    "status": "failed",
+                    "error": f"fal.ai ffmpeg compose error {compose_r.status_code}: {compose_r.text[:300]}",
+                    "actual_cost_cents": actual_cost_cents,
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                }},
+            )
             return
         out_url = compose_r.json().get("video_url")
         await _finalize(job_id, ok=True, url=out_url, actual_cost_cents=actual_cost_cents)

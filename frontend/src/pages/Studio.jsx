@@ -10,6 +10,7 @@ import {
   StockPicker,
 } from "../components/Pickers";
 import AdminRenderControl, { ConfirmRealRenderModal } from "../components/AdminRenderControl";
+import Toast from "../components/Toast";
 
 const MODES = { AVATAR: "avatar", FACELESS: "faceless" };
 const MAX_SCENES = 12;
@@ -137,6 +138,20 @@ export default function Studio() {
   const isAdmin = !!user?.isAdmin;
   const [useReal, setUseReal] = useState(false);
   const [confirmReal, setConfirmReal] = useState(null);  // {dollars} when open
+  const [toast, setToast] = useState("");
+
+  // Scrolls the active render-card into view + briefly highlights so admin
+  // notices when a render kicks off — fixes the "I clicked but nothing
+  // happened" footgun where the render-card is above the user's current
+  // scroll position (common when re-firing from a history row).
+  const scrollToRenderCard = () => {
+    setTimeout(() => {
+      document.querySelector('[data-testid="render-card"]')?.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+    }, 100);
+  };
 
   // Modal state
   const [modal, setModal] = useState(null);
@@ -231,6 +246,12 @@ export default function Studio() {
       if (dryRunOverride !== undefined) body.dry_run = dryRunOverride;
       const r = await apiClient.post("/studio/render", body);
       setRender(r.data);
+      setToast(
+        body.dry_run === false
+          ? "Real render started — scroll up to watch progress."
+          : "Render started…"
+      );
+      scrollToRenderCard();
       pollStatus(r.data.id);
     } catch (e) {
       setRenderErr(e?.response?.data?.detail || "Could not start render. Try again.");
@@ -291,6 +312,8 @@ export default function Studio() {
       };
       const r = await apiClient.post("/studio/render", body);
       setRender(r.data);
+      setToast("Re-firing as dry-run — scroll up to watch.");
+      scrollToRenderCard();
       pollStatus(r.data.id);
       setTimeout(
         () =>
@@ -804,6 +827,8 @@ export default function Studio() {
           }}
         />
       )}
+
+      <Toast message={toast} onDismiss={() => setToast("")} />
     </main>
   );
 }

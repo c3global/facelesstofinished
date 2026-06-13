@@ -139,6 +139,23 @@ Major refactor that addresses 7 explicit user asks. Verified 21/21 backend + ~95
 
 **Deferred from this iteration (Avatar + B-roll cutaways composite mode):** A true "Avatar + B-roll cutaways" render mode (HeyGen avatar talking head intercut with stock B-roll) needs a new backend render branch and a UI toggle in Avatar mode. Decision: defer until the real HeyGen/fal.ai pipelines are wired (DRY_RUN_RENDERS=false) so the UI isn't building against simulated output. The B-roll prompts ARE staged on the handoff so the user can manually flip to Faceless mode in the meantime.
 
+## Iteration 12 — Three real-render bugs fixed (2026-02-13)
+User attempted Test 1 (real render) and reported: (a) play button on completed history rows opened a Google Cloud Storage XML 403 AccessDenied page; (b) clicking the "Render (real)" CTA appeared to do nothing visible. Reproduced both live + fixed three root causes:
+
+**Bug 1 — Dead sample MP4 URL.** Google revoked public read on `commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4` — every dry-run render that landed in history now plays as a broken 403 XML page. Fix: swapped `SAMPLE_VIDEO_URL` to `https://www.w3schools.com/html/mov_bbb.mp4` (small 788KB Big Buck Bunny clip, HTTP 200, stable mirror). All NEW dry-run renders now produce a playable video. Pre-existing history rows still point at the dead URL — they'll need to be manually deleted or re-run via the re-run button.
+
+**Bug 2 — Active render-card hidden below scroll.** When the admin clicked "Render (real)" → confirm modal → confirm-go, the render-card DID appear, but at the TOP of the page. The user was scrolled down at "Recent renders" so they never saw the new card or its progress bar — only saw the new entry land in history once it completed. Same UX trap on the re-run buttons. Fix: new `scrollToRenderCard()` helper called from `fireRender()` and `rerenderAsDryRun()`. Render-card now scrolls into view (smooth, `block: 'center'`) on every render kick-off. Verified live: scrollY 994 → render-card top:0.375, in_viewport:true.
+
+**Bug 3 — Silent backend failures swallowed the real error.** HeyGen/fal.ai API failure paths called `_finalize(ok=False, url=None, actual_cost_cents=0)` which writes a generic "failed" status with no error detail. So a missing key, an invalid voice id, or a billing issue all surfaced as the same vague "Render failed: unknown error". Fix: every non-200 response from HeyGen (initial submit + status polling) and from fal.ai (Kokoro TTS + ffmpeg compose) now writes a detailed `error` field with the HTTP code + first 300 chars of the response body. Polling timeouts also surface a clear "HeyGen polling timed out after 5 minutes" message. The render-card's existing failure JSX (`<p>Render failed: {render.error}</p>`) already renders this — no UI change needed.
+
+**Toast confirmation.** Added a Toast on render kick-off ("Real render started — scroll up to watch progress." / "Render started…" / "Re-firing as dry-run — scroll up to watch.") so the click always produces a visible response even if the user's scroll position is below the render-card.
+
+**Files touched in iter 12**
+- `/app/backend/server.py` — SAMPLE_VIDEO_URL swap; preserved error detail in `_run_render_avatar` (3 failure paths) + `_run_render_faceless` (2 failure paths).
+- `/app/frontend/src/pages/Studio.jsx` — added Toast import, `toast` state, `scrollToRenderCard()` helper, toast + scroll wired into `fireRender()` and `rerenderAsDryRun()`, `<Toast />` mounted at end of return.
+
+**Verified live** (2026-02-13): dry-run render kicked off from a history row at scrollY=994 → render-card auto-scrolled into view at top=0.375 → toast displayed → render walked stages to "Done" → `<video src="https://www.w3schools.com/html/mov_bbb.mp4" controls />` rendered and is playable. End-to-end clean.
+
 ## Iteration 11 — Live UI smoke + Re-run as dry-run (2026-02-12)
 User cleared all 5 deferred-handoff items visually, then requested one polish-only addition before starting real-render testing on their side.
 
