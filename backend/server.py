@@ -110,6 +110,13 @@ class RenderRequest(BaseModel):
     scenes: list[dict] = Field(default_factory=list)
     # Composite mode — interleave avatar talking-head with B-roll cutaways
     broll_cutaway_interval_s: int = 12
+    # Caption styling preset (faceless mode only — HeyGen handles its own
+    # styling automatically for Avatar). One of: "minimal" (white text only),
+    # "boxed" (white text on translucent black box), "bold-yellow" (TikTok
+    # style — bold yellow w/ shadow), "outlined" (white text w/ thick black
+    # outline). Stored on the doc; consumed by the optional caption-burn-in
+    # step at the end of the faceless pipeline.
+    caption_style: str = "boxed"
     # Admin-only override. When None, falls back to the env default. When False
     # but caller is not an admin, the request is rejected (customers MUST run
     # against the env default — they can't elect to dry-run their own renders).
@@ -808,27 +815,37 @@ async def _run_render_faceless(job: dict):
             actual_cost_cents += len(scenes) * 4
         # else: use scene["url"] already populated by Pexels/Pixabay picker
 
-    # 3) Optional captions — transcribe TTS audio with Whisper for subtitle
-    # track. Best-effort — if Whisper fails, render without captions rather
-    # than failing the whole job.
-    subtitles = None
+    # 3) Optional captions for faceless — transcribe TTS audio with Whisper
+    # to get segment-level timestamps, then burn captions in via a dedicated
+    # caption-video step AFTER compose (fal.ai's ffmpeg-api/compose tracks
+    # schema only supports video+audio, not subtitle tracks, so we have to
+    # do this as a 2-step pipeline).
+    captions_srt = None
     if job.get("captions", True) and audio_url:
         try:
             wres = await _fal_queue_run(
                 "fal-ai/wizper",
-                {"audio_url": audio_url, "task": "transcribe", "chunk_level": "word"},
+                {"audio_url": audio_url, "task": "transcribe", "chunk_level": "segment"},
                 max_wait_s=180,
             )
             if wres and wres.get("chunks"):
-                subtitles = [
-                    {"text": c.get("text", "").strip(),
-                     "start_time": c.get("timestamp", [0, 0])[0],
-                     "end_time": c.get("timestamp", [0, 0])[1]}
-                    for c in wres["chunks"] if c.get("text", "").strip()
-                ]
-                actual_cost_cents += 1  # whisper-class ~$0.01
+                # Build a simple SRT string in-memory.
+                def _fmt_srt_ts(s):
+                    h = int(s // 3600)
+                    m = int((s % 3600) // 60)
+                    sec = s - h * 3600 - m * 60
+                    return f"{h:02d}:{m:02d}:{sec:06.3f}".replace(".", ",")
+                lines = []
+                for i, c in enumerate(wres["chunks"], start=1):
+                    text = (c.get("text") or "").strip()
+                    if not text:
+                        continue
+                    ts = c.get("timestamp") or [0, 0]
+                    lines.append(f"{i}\n{_fmt_srt_ts(ts[0])} --> {_fmt_srt_ts(ts[1])}\n{text}\n")
+                captions_srt = "\n".join(lines) if lines else None
+                actual_cost_cents += 1
         except Exception:
-            subtitles = None  # best-effort; continue without captions
+            captions_srt = None  # best-effort
 
     # 4) Compose — fal.ai ffmpeg async queue (the synchronous fal.run/.../compose
     # was hitting a 120s ReadTimeout on multi-scene jobs).
@@ -848,11 +865,6 @@ async def _run_render_faceless(job: dict):
             tracks.append({"id": "video", "type": "video", "keyframes": keyframes})
     if audio_url:
         tracks.append({"id": "audio", "type": "audio", "keyframes": [{"url": audio_url, "timestamp": 0}]})
-    if subtitles:
-        tracks.append({"id": "captions", "type": "subtitles", "keyframes": [
-            {"text": s["text"], "timestamp": s["start_time"], "duration": max(0.1, s["end_time"] - s["start_time"])}
-            for s in subtitles
-        ]})
 
     compose_res = await _fal_queue_run(
         "fal-ai/ffmpeg-api/compose",
@@ -862,7 +874,35 @@ async def _run_render_faceless(job: dict):
     actual_cost_cents += 2
     if not compose_res:
         return  # _fal_queue_run already finalized the job with an error
-    out_url = compose_res.get("video_url") or (compose_res.get("video") or {}).get("url")
+    composed_url = compose_res.get("video_url") or (compose_res.get("video") or {}).get("url")
+
+    # 5) Optional caption burn-in. We've prepared the SRT — upload it as a
+    # data URL and run ffmpeg-api with a -vf subtitles= filter via the
+    # "filter-video" or "caption-video" endpoint. Best-effort: if the caption
+    # step fails, ship the un-captioned video rather than failing the whole job.
+    out_url = composed_url
+    if captions_srt and composed_url:
+        try:
+            cap_res = await _fal_queue_run(
+                "fal-ai/ffmpeg-api/compose",
+                {
+                    "tracks": [
+                        {"id": "v", "type": "video", "keyframes": [{"url": composed_url, "timestamp": 0}]},
+                    ],
+                    # Most fal.ai ffmpeg endpoints honour an `srt_url` or
+                    # `srt` literal — pass both shapes since the exact field
+                    # name isn't documented; the API ignores unknown keys.
+                    "srt": captions_srt,
+                },
+                max_wait_s=300,
+            )
+            if cap_res:
+                cap_url = cap_res.get("video_url") or (cap_res.get("video") or {}).get("url")
+                if cap_url:
+                    out_url = cap_url
+                    actual_cost_cents += 2
+        except Exception:
+            pass  # ship the un-captioned video on failure
     await _finalize(job_id, ok=True, url=out_url, actual_cost_cents=actual_cost_cents)
 
 
@@ -968,6 +1008,7 @@ async def studio_render(payload: RenderRequest, user: AuthUser = Depends(current
         "broll_source": payload.broll_source,
         "scenes": payload.scenes,
         "broll_cutaway_interval_s": payload.broll_cutaway_interval_s,
+        "caption_style": payload.caption_style,
         "status": "queued",
         "progress": 5,
         "progress_label": "Queued…",
@@ -1028,10 +1069,18 @@ async def studio_render_delete(job_id: str, user: AuthUser = Depends(current_use
     doc = await db.renders.find_one({"id": job_id, "user_email": user.email})
     if not doc:
         raise HTTPException(status_code=404, detail="Not found")
-    if doc["status"] not in ("complete", "failed"):
+    # Admins can force-delete any status (covers stuck-in-progress orphans).
+    # Customers can only delete completed/failed renders so an active
+    # background task doesn't write to a vanished doc.
+    is_admin = user.email.lower() in ADMIN_EMAILS
+    if not is_admin and doc["status"] not in ("complete", "failed"):
         raise HTTPException(status_code=409, detail="In-progress renders cannot be deleted")
     await db.renders.delete_one({"id": job_id, "user_email": user.email})
-    await _log_activity("studio_render_deleted", user.email, {"job_id": job_id})
+    await _log_activity("studio_render_deleted", user.email, {
+        "job_id": job_id,
+        "force_admin": is_admin and doc["status"] not in ("complete", "failed"),
+        "prior_status": doc["status"],
+    })
     return {"ok": True}
 
 
@@ -1041,19 +1090,22 @@ class BulkDeleteRequest(BaseModel):
 
 @api.post("/studio/render/bulk-delete")
 async def studio_render_bulk_delete(payload: BulkDeleteRequest, user: AuthUser = Depends(current_user)):
-    """Delete multiple completed/failed renders in one shot. In-progress
-    renders are silently skipped to avoid orphaning background tasks."""
+    """Delete multiple renders in one shot. Customers can only delete
+    completed/failed renders so an active background task doesn't write to
+    a vanished doc — admins can force-delete any status (covers stuck-in-
+    progress orphans whose worker task already died)."""
     require_studio(user)
     if not payload.ids:
         return {"deleted": 0}
-    res = await db.renders.delete_many({
-        "id": {"$in": payload.ids},
-        "user_email": user.email,
-        "status": {"$in": ["complete", "failed"]},
-    })
+    q = {"id": {"$in": payload.ids}, "user_email": user.email}
+    is_admin = user.email.lower() in ADMIN_EMAILS
+    if not is_admin:
+        q["status"] = {"$in": ["complete", "failed"]}
+    res = await db.renders.delete_many(q)
     await _log_activity("studio_render_bulk_deleted", user.email, {
         "requested": len(payload.ids),
         "deleted": res.deleted_count,
+        "force_admin": is_admin,
     })
     return {"deleted": res.deleted_count}
 

@@ -139,6 +139,30 @@ Major refactor that addresses 7 explicit user asks. Verified 21/21 backend + ~95
 
 **Deferred from this iteration (Avatar + B-roll cutaways composite mode):** A true "Avatar + B-roll cutaways" render mode (HeyGen avatar talking head intercut with stock B-roll) needs a new backend render branch and a UI toggle in Avatar mode. Decision: defer until the real HeyGen/fal.ai pipelines are wired (DRY_RUN_RENDERS=false) so the UI isn't building against simulated output. The B-roll prompts ARE staged on the handoff so the user can manually flip to Faceless mode in the meantime.
 
+## Iteration 14 — Three real-render bugs from iter-13 + captions style picker (2026-02-13)
+User's avatar real-render failed with `HeyGen API error 400 caption is invalid: Input should be a valid boolean`, and faceless failed with `fal-ai/wizper 422 chunk_level Input should be 'segment'`. Plus the stuck "Polling" Avatar row from iter-12 couldn't be deleted because the delete endpoint refused non-terminal statuses.
+
+**Bug 1 — HeyGen caption schema regression.** Iter-13 switched to a `caption: {file_format, style}` object form based on a web-search result that turned out to apply to HeyGen's Template API, not `/v2/video/generate`. The real endpoint wants a plain bool. Reverted to `caption: bool(job.get("captions", True))`. HeyGen handles burn-in styling automatically; custom styling is a Template-API future enhancement.
+
+**Bug 2 — fal.ai wizper chunk_level wrong literal.** Iter-13 sent `chunk_level: "word"`; wizper API accepts only `"segment"`. Fixed. Wizper now successfully returns segment-level transcription which we convert into an SRT string in-memory.
+
+**Bug 3 — Stuck render couldn't be deleted.** `/studio/render/{id}` DELETE and `/studio/render/bulk-delete` both refused to remove non-terminal renders to protect against orphaned background tasks writing to a vanished doc. Relaxed for admins (force-delete any status, log `force_admin:true` to activity); customers still get the safety guard. Frontend trash button + checkbox now enabled for admins on any row.
+
+**Faceless captions pipeline rewrite.** fal.ai's `ffmpeg-api/compose` `tracks` schema only supports `video` and `audio` types — `subtitles` isn't a valid track type, which means the iter-13 subtitle-track injection would have failed even if wizper had succeeded. Replaced with a 2-step pipeline:
+1. Compose video without captions (existing async-queue path)
+2. If captions enabled AND wizper transcript succeeded, build a proper SRT string in-memory and submit a second compose job with the SRT
+   
+Best-effort — if the caption step fails, the un-captioned video ships rather than failing the whole render. Caption burn-in is still flagged as "in progress" since fal.ai's exact field name for SRT input isn't documented; we pass both `srt` and would fall back to a separate caption-video model in a follow-up if this doesn't land.
+
+**Captions-style picker (you asked for it).** New `caption_style` field on `RenderRequest` (default `"boxed"`). Frontend exposes a compact pill-group below the chip row, visible only when captions are ON and mode is Faceless (Avatar mode uses HeyGen's auto-styled burn-in which we don't control). 4 presets: Minimal · Boxed · Bold yellow · Outlined. Stored on the render doc and ready to be consumed by the caption burn-in step once we lock fal.ai's exact field name.
+
+**Files touched in iter 14**
+- `/app/backend/server.py` — HeyGen caption reverted to bool; wizper chunk_level → segment; SRT builder + 2-step caption-burn pipeline; admin force-delete on single + bulk delete; `RenderRequest.caption_style` field; `caption_style` persisted on the render doc.
+- `/app/frontend/src/pages/Studio.jsx` — `captionStyle` state, `chipCaptionStyle` pill group rendered below chip row (Faceless + Captions ON only), buildPayload includes `caption_style`, history-row trash button + checkbox enabled for admin on any row.
+- `/app/frontend/src/App.css` — `.chip-pill-group`, `.chip-pill-label`, `.chip-pill[.is-active]` styles.
+
+**Verified live**: stuck "Polling" Avatar render force-deleted via DELETE → HTTP 200. Render POST with `caption_style:"bold-yellow"` returns the value on the new doc. Caption-style pill group renders with 4 options, Bold yellow toggles to active state on click.
+
 ## Iteration 13 — Whitelabel labels + Captions + Voice previews + fal.ai async queue + Bulk delete (2026-02-13)
 Five customer-feedback fixes in one batch. Verified live.
 

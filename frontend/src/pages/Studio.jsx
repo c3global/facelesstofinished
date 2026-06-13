@@ -109,6 +109,7 @@ export default function Studio() {
   // Settings
   const [aspect, setAspect] = useState("9_16");
   const [captions, setCaptions] = useState(true);
+  const [captionStyle, setCaptionStyle] = useState("boxed");
   const captionsTouched = useRef(false);
   useEffect(() => {
     if (!captionsTouched.current) setCaptions(aspect === "9_16");
@@ -153,8 +154,9 @@ export default function Studio() {
   const selectAllVisible = (rows) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
+      const isAdminLocal = !!user?.isAdmin;
       for (const r of rows) {
-        if (r.status === "complete" || r.status === "failed") next.add(r.id);
+        if (isAdminLocal || r.status === "complete" || r.status === "failed") next.add(r.id);
       }
       return next;
     });
@@ -253,6 +255,7 @@ export default function Studio() {
     script,
     aspect,
     captions,
+    caption_style: captionStyle,
     avatar_id: mode === MODES.AVATAR ? avatar?.id : null,
     voice_id: mode === MODES.AVATAR ? voice?.id : null,
     tts_voice_id: mode === MODES.FACELESS ? ttsVoice?.id : null,
@@ -458,6 +461,33 @@ export default function Studio() {
       <ChevronDown size={14} className="chip-caret" />
     </button>
   );
+  // Caption-style picker — only meaningful when captions are ON and we're in
+  // Faceless mode (Avatar mode uses HeyGen's auto-styled burn-in which we
+  // don't control). Rendered as a compact pill-group rather than a modal so
+  // the user can A/B styles without 3 extra clicks.
+  const captionStyles = [
+    { id: "minimal", label: "Minimal" },
+    { id: "boxed", label: "Boxed" },
+    { id: "bold-yellow", label: "Bold yellow" },
+    { id: "outlined", label: "Outlined" },
+  ];
+  const chipCaptionStyle =
+    captions && mode === MODES.FACELESS ? (
+      <div className="chip-pill-group" data-testid="caption-style-group">
+        <span className="chip-pill-label">Style</span>
+        {captionStyles.map((s) => (
+          <button
+            key={s.id}
+            type="button"
+            className={`chip-pill ${captionStyle === s.id ? "is-active" : ""}`}
+            data-testid={`caption-style-${s.id}`}
+            onClick={() => setCaptionStyle(s.id)}
+          >
+            {s.label}
+          </button>
+        ))}
+      </div>
+    ) : null;
   const brollChipLabel = {
     ai: "B-Roll · AI",
     pexels: "B-Roll · Pexels",
@@ -569,6 +599,7 @@ export default function Studio() {
           <>{chipTtsVoice}{chipBroll}{chipAspect}{chipCaptions}</>
         )}
       </div>
+      {chipCaptionStyle}
 
       {/* Faceless: Bulk prompts + scene list */}
       {mode === MODES.FACELESS && (
@@ -804,7 +835,10 @@ export default function Studio() {
         ) : (
           <div className="history-list">
             {history.map((r) => {
-              const selectable = r.status === "complete" || r.status === "failed";
+              // Admin can force-delete any status (covers stuck orphans).
+              // Customers can only act on completed/failed rows.
+              const terminal = r.status === "complete" || r.status === "failed";
+              const selectable = isAdmin || terminal;
               const isChecked = selectedIds.has(r.id);
               return (
               <div
@@ -860,8 +894,9 @@ export default function Studio() {
                     className="icon-btn is-danger"
                     data-testid={`history-delete-${r.id}`}
                     onClick={() => deleteRender(r.id)}
-                    disabled={r.status !== "complete" && r.status !== "failed"}
+                    disabled={!isAdmin && !terminal}
                     aria-label="Delete"
+                    title={!terminal && isAdmin ? "Force-delete stuck render" : "Delete"}
                   >
                     <Trash2 size={14} />
                   </button>
