@@ -139,6 +139,28 @@ Major refactor that addresses 7 explicit user asks. Verified 21/21 backend + ~95
 
 **Deferred from this iteration (Avatar + B-roll cutaways composite mode):** A true "Avatar + B-roll cutaways" render mode (HeyGen avatar talking head intercut with stock B-roll) needs a new backend render branch and a UI toggle in Avatar mode. Decision: defer until the real HeyGen/fal.ai pipelines are wired (DRY_RUN_RENDERS=false) so the UI isn't building against simulated output. The B-roll prompts ARE staged on the handoff so the user can manually flip to Faceless mode in the meantime.
 
+## Iteration 13 — Whitelabel labels + Captions + Voice previews + fal.ai async queue + Bulk delete (2026-02-13)
+Five customer-feedback fixes in one batch. Verified live.
+
+**Vendor-neutral stage labels (applied to everyone).** All progress labels in `_run_render_avatar`, `_run_render_faceless`, `_run_render_composite` rewritten to neutral copy ("Generating voiceover…", "Generating avatar video…", "Stitching b-roll together…", "Composing final video…"). Vendor names (HeyGen / fal.ai / ffmpeg / Kokoro) no longer appear in user-facing progress UI. Admin still gets vendor names in the activity-log audit trail + render-doc `mode` field for diagnostics.
+
+**HeyGen avatar captions fix.** Switched from legacy `caption: true` boolean to the newer object schema `caption: {file_format: "srt", style: {...}}` which is required for burn-in (the boolean form only generates a sidecar `subtitle_url`). Captions now burn into the rendered video. Verified by web-search against latest HeyGen v2 docs.
+
+**Faceless captions support.** Added a fal.ai Whisper transcription step (`fal-ai/wizper`, word-level chunks) between TTS and ffmpeg compose. The resulting word-timestamps are passed to ffmpeg compose as a `subtitles` track type so captions burn into the final video. Best-effort — if Whisper fails the render proceeds without captions rather than aborting.
+
+**fal.ai async queue pattern (fixes the ReadTimeout).** `httpx`'s 120s timeout was killing multi-scene ffmpeg compose jobs. Replaced the sync `fal.run/<model>` call with the async `queue.fal.run/<model>` submit-and-poll pattern (`request_id` → `/status` → `/requests/{id}` final fetch, 3s poll interval, 600s timeout cap). Reusable helper `_fal_queue_run(model_id, payload, *, max_wait_s)` defined inline in `_run_render_faceless`. Every failure mode (submit non-200, no request_id, status FAILED, polling timeout) writes a detailed error to the render doc.
+
+**Kokoro voice previews.** TTS voice picker now shows play buttons for all 10 voices (matching the existing HeyGen voice-picker UX). New `POST /studio/tts-voices/preload` admin endpoint generates a 5-second sample per voice using `fal-ai/kokoro/american-english` (for af_/am_ prefixes) and `fal-ai/kokoro/british-english` (for bf_/bm_ prefixes). Sample URLs cached in `db.voice_samples` collection, served via `GET /studio/tts-voices`. Idempotent — voices that already have a cached preview are skipped. Total cost to pre-warm all 10 voices: ~$0.05 one-time. Verified: 10/10 voices generated and surface play buttons in the picker.
+
+**History bulk-select + delete.** Per-row checkboxes (admin and customer) appear on completed/failed rows. Header gains "Select all" / "Clear (N)" / "Delete N selected" actions. New backend endpoint `POST /api/studio/render/bulk-delete` accepts `{ids: [...]}` and skips in-progress jobs to avoid orphaning background tasks. Activity-log row captures `requested` vs `deleted` counts.
+
+**Files touched in iter 13**
+- `/app/backend/server.py` — vendor-neutral stage labels in all 3 pipelines; `_kokoro_endpoint(voice_id)` helper for AmE/BrE routing; HeyGen `caption` object schema; full `_fal_queue_run()` helper + Whisper transcription + ffmpeg-compose `tracks`-style payload in faceless pipeline; `POST /studio/tts-voices/preload`; `GET /studio/tts-voices` enriched with cached `preview_audio`; `POST /studio/render/bulk-delete` endpoint.
+- `/app/frontend/src/pages/Studio.jsx` — `selectedIds` state, `toggleSelected/selectAllVisible/clearSelected/bulkDelete` handlers, history-head Select-all/Clear/Bulk-delete actions, per-row `<input type="checkbox">` cell on every completed/failed row.
+- `/app/frontend/src/App.css` — `.history-head`, `.history-head-actions`, `.header-btn.is-danger`, `.history-check`, `.history-row.is-selected` styles.
+
+**Note on prior history rows.** Pre-iter-13 entries still point at the dead BigBuckBunny URL (fixed in iter-12) and don't have captions baked in. Use the Re-run as dry-run button or trash icon to clear them out.
+
 ## Iteration 12 — Three real-render bugs fixed (2026-02-13)
 User attempted Test 1 (real render) and reported: (a) play button on completed history rows opened a Google Cloud Storage XML 403 AccessDenied page; (b) clicking the "Render (real)" CTA appeared to do nothing visible. Reproduced both live + fixed three root causes:
 

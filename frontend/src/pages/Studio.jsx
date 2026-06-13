@@ -139,6 +139,38 @@ export default function Studio() {
   const [useReal, setUseReal] = useState(false);
   const [confirmReal, setConfirmReal] = useState(null);  // {dollars} when open
   const [toast, setToast] = useState("");
+  // Per-row selection for bulk-delete in the Recent renders list.
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const toggleSelected = (id) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+  const clearSelected = () => setSelectedIds(new Set());
+  const selectAllVisible = (rows) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      for (const r of rows) {
+        if (r.status === "complete" || r.status === "failed") next.add(r.id);
+      }
+      return next;
+    });
+  };
+  const bulkDelete = async () => {
+    if (selectedIds.size === 0) return;
+    const ids = Array.from(selectedIds);
+    try {
+      const r = await apiClient.post("/studio/render/bulk-delete", { ids });
+      setHistory((h) => h.filter((row) => !selectedIds.has(row.id)));
+      clearSelected();
+      setToast(`Deleted ${r.data.deleted} render${r.data.deleted === 1 ? "" : "s"}.`);
+    } catch (e) {
+      setRenderErr(e?.response?.data?.detail || "Bulk delete failed.");
+    }
+  };
 
   // Scrolls the active render-card into view + briefly highlights so admin
   // notices when a render kicks off — fixes the "I clicked but nothing
@@ -732,13 +764,67 @@ export default function Studio() {
 
       {/* History */}
       <div className="history-block" data-testid="history-block">
-        <div className="history-head">Recent renders</div>
+        <div className="history-head">
+          <span>Recent renders</span>
+          {history.length > 0 && (
+            <div className="history-head-actions">
+              <button
+                type="button"
+                className="header-btn"
+                data-testid="history-select-all"
+                onClick={() => selectAllVisible(history)}
+              >
+                Select all
+              </button>
+              {selectedIds.size > 0 && (
+                <>
+                  <button
+                    type="button"
+                    className="header-btn"
+                    data-testid="history-clear-selection"
+                    onClick={clearSelected}
+                  >
+                    Clear ({selectedIds.size})
+                  </button>
+                  <button
+                    type="button"
+                    className="header-btn is-danger"
+                    data-testid="history-bulk-delete"
+                    onClick={bulkDelete}
+                  >
+                    <Trash2 size={13} /> Delete {selectedIds.size} selected
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+        </div>
         {history.length === 0 ? (
           <div className="history-empty" data-testid="history-empty">No renders yet. Your finished videos will appear here.</div>
         ) : (
           <div className="history-list">
-            {history.map((r) => (
-              <div className="history-row" key={r.id} data-testid={`history-row-${r.id}`}>
+            {history.map((r) => {
+              const selectable = r.status === "complete" || r.status === "failed";
+              const isChecked = selectedIds.has(r.id);
+              return (
+              <div
+                className={`history-row ${isChecked ? "is-selected" : ""}`}
+                key={r.id}
+                data-testid={`history-row-${r.id}`}
+              >
+                <label
+                  className="history-check"
+                  data-testid={`history-check-${r.id}`}
+                  aria-label="Select render"
+                  style={{ visibility: selectable ? "visible" : "hidden" }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={isChecked}
+                    disabled={!selectable}
+                    onChange={() => toggleSelected(r.id)}
+                  />
+                </label>
                 <div className="history-meta">
                   <span className={`history-chip is-${r.mode}`}>{modeChipLabel(r.mode)}</span>
                   <span className={`history-chip is-${r.status === "complete" ? "complete" : r.status === "failed" ? "failed" : "progress"}`}>
@@ -781,7 +867,8 @@ export default function Studio() {
                   </button>
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

@@ -308,10 +308,76 @@ KOKORO_VOICES = [
 ]
 
 
+# Kokoro voice ID prefix → fal.ai submodel mapping. af_/am_ are American
+# English, bf_/bm_ British English. Sending a British voice to the American
+# endpoint returns a 400 — confirmed via the iter-13 preload run where 4/10
+# voices failed before the per-prefix routing was added.
+def _kokoro_endpoint(voice_id: str) -> str:
+    prefix = (voice_id or "")[:2].lower()
+    if prefix in ("bf", "bm"):
+        return "fal-ai/kokoro/british-english"
+    return "fal-ai/kokoro/american-english"
+
+
 @api.get("/studio/tts-voices")
 async def studio_tts_voices(user: AuthUser = Depends(current_user)):
     require_studio(user)
-    return {"voices": KOKORO_VOICES}
+    # Hydrate from the voice_samples cache so the picker can show previews
+    cached = {
+        doc["voice_id"]: doc.get("audio_url")
+        async for doc in db.voice_samples.find({"engine": "kokoro"})
+    }
+    out = []
+    for v in KOKORO_VOICES:
+        out.append({**v, "preview_audio": cached.get(v["id"])})
+    return {"voices": out}
+
+
+@api.post("/studio/tts-voices/preload")
+async def studio_tts_voices_preload(user: AuthUser = Depends(current_user)):
+    """Admin-only: generate a 5-second preview clip for each Kokoro voice
+    and cache the result URL in `db.voice_samples`. Idempotent — voices that
+    already have a cached preview are skipped. Costs ~$0.05 total for all 10
+    voices, one-time per deployment."""
+    require_studio(user)
+    if user.email.lower() not in ADMIN_EMAILS:
+        raise HTTPException(status_code=403, detail="Admin only")
+    if not FAL_API_KEY:
+        raise HTTPException(status_code=500, detail="fal.ai key missing")
+    fal_headers = {"Authorization": f"Key {FAL_API_KEY}", "Content-Type": "application/json"}
+    sample_text = "Hello, this is a quick preview of how my voice sounds when narrating your videos."
+
+    existing = {doc["voice_id"] async for doc in db.voice_samples.find({"engine": "kokoro"})}
+    to_generate = [v for v in KOKORO_VOICES if v["id"] not in existing]
+
+    async def gen_one(voice):
+        async with httpx.AsyncClient(timeout=60) as client:
+            r = await client.post(
+                f"https://fal.run/{_kokoro_endpoint(voice['id'])}",
+                headers=fal_headers,
+                json={"prompt": sample_text, "voice": voice["id"]},
+            )
+            if r.status_code != 200:
+                return voice["id"], None
+            audio_url = r.json().get("audio_url") or r.json().get("audio", {}).get("url")
+            if audio_url:
+                await db.voice_samples.update_one(
+                    {"engine": "kokoro", "voice_id": voice["id"]},
+                    {"$set": {
+                        "audio_url": audio_url,
+                        "generated_at": datetime.now(timezone.utc).isoformat(),
+                    }},
+                    upsert=True,
+                )
+            return voice["id"], audio_url
+
+    results = await asyncio.gather(*[gen_one(v) for v in to_generate])
+    return {
+        "generated": len([r for r in results if r[1]]),
+        "skipped": len(KOKORO_VOICES) - len(to_generate),
+        "failed": len([r for r in results if not r[1]]),
+        "voice_ids": [r[0] for r in results if r[1]],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -515,9 +581,9 @@ async def _run_render_avatar(job: dict):
     actual_cost_cents = 0
 
     await _walk_stages(job_id, [
-        ("voiceover", 25, "Synthesizing voice on HeyGen…"),
-        ("avatar", 55, "Generating talking-head video…"),
-        ("polling", 85, "Polling HeyGen for final asset…"),
+        ("voiceover", 25, "Generating voiceover…"),
+        ("avatar", 55, "Generating avatar video…"),
+        ("polling", 85, "Finalizing video…"),
     ], dry_run)
 
     if dry_run:
@@ -537,8 +603,22 @@ async def _run_render_avatar(job: dict):
             }],
             "dimension": {"width": 1080 if job["aspect"] == "16_9" else 720,
                           "height": 1920 if job["aspect"] == "9_16" else 1080},
-            "caption": job.get("captions", True),
         }
+        # Captions: send a caption-object with an explicit burn-in style so
+        # HeyGen renders subtitles INTO the video (not just a sidecar SRT).
+        # Sending bool true also works for legacy plans — the object form is
+        # required for newer HeyGen accounts to actually burn captions in.
+        if job.get("captions", True):
+            body["caption"] = {
+                "file_format": "srt",
+                "style": {
+                    "font_size": 48,
+                    "color": "#FFFFFF",
+                    "background_color": "#000000",
+                    "alignment": "center",
+                    "position": "bottom",
+                },
+            }
         r = await client.post(
             "https://api.heygen.com/v2/video/generate",
             headers={"X-Api-Key": HEYGEN_API_KEY, "Accept": "application/json"},
@@ -601,9 +681,9 @@ async def _run_render_faceless(job: dict):
     actual_cost_cents = 0
 
     await _walk_stages(job_id, [
-        ("voiceover", 20, "Generating voiceover on Kokoro…"),
-        ("visuals", 55, f"Rendering {max(1, len(scenes))} scenes on Flux…"),
-        ("composing", 85, "Stitching scenes with ffmpeg…"),
+        ("voiceover", 20, "Generating voiceover…"),
+        ("visuals", 55, f"Generating {max(1, len(scenes))} scene visuals…"),
+        ("composing", 85, "Stitching b-roll together…"),
     ], dry_run)
 
     if dry_run:
@@ -615,12 +695,90 @@ async def _run_render_faceless(job: dict):
         return
 
     fal_headers = {"Authorization": f"Key {FAL_API_KEY}", "Content-Type": "application/json"}
+
+    async def _fal_queue_run(model_id: str, payload: dict, *, max_wait_s: int = 600) -> Optional[dict]:
+        """Submit a job to fal.ai's queue endpoint and poll for completion.
+        Returns the final response JSON, or None on failure (job already
+        finalized with a descriptive error). Replaces the synchronous
+        `fal.run/<model>` call which times out at 120s on long compose jobs.
+        """
+        async with httpx.AsyncClient(timeout=30) as qclient:
+            sub = await qclient.post(f"https://queue.fal.run/{model_id}", headers=fal_headers, json=payload)
+            if sub.status_code not in (200, 202):
+                await db.renders.update_one(
+                    {"id": job_id},
+                    {"$set": {
+                        "status": "failed",
+                        "error": f"fal.ai {model_id} submit error {sub.status_code}: {sub.text[:300]}",
+                        "actual_cost_cents": actual_cost_cents,
+                        "completed_at": datetime.now(timezone.utc).isoformat(),
+                    }},
+                )
+                return None
+            req_id = sub.json().get("request_id")
+            if not req_id:
+                await db.renders.update_one(
+                    {"id": job_id},
+                    {"$set": {
+                        "status": "failed",
+                        "error": f"fal.ai {model_id} returned no request_id",
+                        "actual_cost_cents": actual_cost_cents,
+                        "completed_at": datetime.now(timezone.utc).isoformat(),
+                    }},
+                )
+                return None
+            status_url = f"https://queue.fal.run/{model_id}/requests/{req_id}/status"
+            result_url = f"https://queue.fal.run/{model_id}/requests/{req_id}"
+            deadline = asyncio.get_event_loop().time() + max_wait_s
+            while asyncio.get_event_loop().time() < deadline:
+                await asyncio.sleep(3)
+                stat = await qclient.get(status_url, headers=fal_headers)
+                if stat.status_code != 200:
+                    continue
+                st = stat.json().get("status", "")
+                if st == "COMPLETED":
+                    res = await qclient.get(result_url, headers=fal_headers)
+                    if res.status_code != 200:
+                        await db.renders.update_one(
+                            {"id": job_id},
+                            {"$set": {
+                                "status": "failed",
+                                "error": f"fal.ai {model_id} fetch result {res.status_code}: {res.text[:300]}",
+                                "actual_cost_cents": actual_cost_cents,
+                                "completed_at": datetime.now(timezone.utc).isoformat(),
+                            }},
+                        )
+                        return None
+                    return res.json()
+                if st == "FAILED":
+                    err = stat.json()
+                    await db.renders.update_one(
+                        {"id": job_id},
+                        {"$set": {
+                            "status": "failed",
+                            "error": f"fal.ai {model_id} returned FAILED: {str(err)[:300]}",
+                            "actual_cost_cents": actual_cost_cents,
+                            "completed_at": datetime.now(timezone.utc).isoformat(),
+                        }},
+                    )
+                    return None
+            await db.renders.update_one(
+                {"id": job_id},
+                {"$set": {
+                    "status": "failed",
+                    "error": f"fal.ai {model_id} polling timed out after {max_wait_s}s",
+                    "actual_cost_cents": actual_cost_cents,
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                }},
+            )
+            return None
+
+    # 1) Kokoro TTS — single call (fast enough to keep synchronous)
     async with httpx.AsyncClient(timeout=120) as client:
-        # 1) Kokoro TTS — single call for the whole narration
         tts_r = await client.post(
-            "https://fal.run/fal-ai/kokoro",
+            f"https://fal.run/{_kokoro_endpoint(job.get('tts_voice_id') or 'af_heart')}",
             headers=fal_headers,
-            json={"text": job["script"], "voice": job.get("tts_voice_id") or "af_heart"},
+            json={"prompt": job["script"], "voice": job.get("tts_voice_id") or "af_heart"},
         )
         if tts_r.status_code != 200:
             await db.renders.update_one(
@@ -634,9 +792,9 @@ async def _run_render_faceless(job: dict):
             )
             return
         audio_url = tts_r.json().get("audio_url") or tts_r.json().get("audio", {}).get("url")
-        actual_cost_cents += int((len(job["script"]) / 1000.0) * 0.5)
+        actual_cost_cents += int((len(job["script"]) / 1000.0) * 5)
 
-        # 2) Flux per-scene images (parallel when broll_source == "ai")
+        # 2) Flux per-scene images (parallel) — short jobs, sync is fine
         image_urls = []
         if (job.get("broll_source") or "ai") == "ai":
             async def gen_image(prompt):
@@ -650,33 +808,62 @@ async def _run_render_faceless(job: dict):
             actual_cost_cents += len(scenes) * 4
         # else: use scene["url"] already populated by Pexels/Pixabay picker
 
-        # 3) Compose — fal.ai ffmpeg endpoint (real impl would be more
-        # detailed; this is the scaffold so flipping dry_run False executes a
-        # working — if minimal — composition).
-        clips = []
-        for i, s in enumerate(scenes):
-            url = image_urls[i] if image_urls else s.get("url")
-            if url:
-                clips.append({"url": url, "duration": s.get("duration", 4)})
-        compose_r = await client.post(
-            "https://fal.run/fal-ai/ffmpeg-api/compose",
-            headers=fal_headers,
-            json={"clips": clips, "audio_url": audio_url, "captions": job.get("captions", True)},
-        )
-        actual_cost_cents += 2
-        if compose_r.status_code != 200:
-            await db.renders.update_one(
-                {"id": job_id},
-                {"$set": {
-                    "status": "failed",
-                    "error": f"fal.ai ffmpeg compose error {compose_r.status_code}: {compose_r.text[:300]}",
-                    "actual_cost_cents": actual_cost_cents,
-                    "completed_at": datetime.now(timezone.utc).isoformat(),
-                }},
+    # 3) Optional captions — transcribe TTS audio with Whisper for subtitle
+    # track. Best-effort — if Whisper fails, render without captions rather
+    # than failing the whole job.
+    subtitles = None
+    if job.get("captions", True) and audio_url:
+        try:
+            wres = await _fal_queue_run(
+                "fal-ai/wizper",
+                {"audio_url": audio_url, "task": "transcribe", "chunk_level": "word"},
+                max_wait_s=180,
             )
-            return
-        out_url = compose_r.json().get("video_url")
-        await _finalize(job_id, ok=True, url=out_url, actual_cost_cents=actual_cost_cents)
+            if wres and wres.get("chunks"):
+                subtitles = [
+                    {"text": c.get("text", "").strip(),
+                     "start_time": c.get("timestamp", [0, 0])[0],
+                     "end_time": c.get("timestamp", [0, 0])[1]}
+                    for c in wres["chunks"] if c.get("text", "").strip()
+                ]
+                actual_cost_cents += 1  # whisper-class ~$0.01
+        except Exception:
+            subtitles = None  # best-effort; continue without captions
+
+    # 4) Compose — fal.ai ffmpeg async queue (the synchronous fal.run/.../compose
+    # was hitting a 120s ReadTimeout on multi-scene jobs).
+    tracks = []
+    if scenes:
+        # Build the video track from per-scene clips, each ~4s by default
+        per_dur = max(2, int(_estimate_duration_seconds(job["script"]) / max(1, len(scenes))))
+        keyframes = []
+        cursor = 0.0
+        for i, s in enumerate(scenes):
+            url = image_urls[i] if image_urls and i < len(image_urls) else s.get("url")
+            if not url:
+                continue
+            keyframes.append({"url": url, "timestamp": cursor, "duration": per_dur})
+            cursor += per_dur
+        if keyframes:
+            tracks.append({"id": "video", "type": "video", "keyframes": keyframes})
+    if audio_url:
+        tracks.append({"id": "audio", "type": "audio", "keyframes": [{"url": audio_url, "timestamp": 0}]})
+    if subtitles:
+        tracks.append({"id": "captions", "type": "subtitles", "keyframes": [
+            {"text": s["text"], "timestamp": s["start_time"], "duration": max(0.1, s["end_time"] - s["start_time"])}
+            for s in subtitles
+        ]})
+
+    compose_res = await _fal_queue_run(
+        "fal-ai/ffmpeg-api/compose",
+        {"tracks": tracks},
+        max_wait_s=600,
+    )
+    actual_cost_cents += 2
+    if not compose_res:
+        return  # _fal_queue_run already finalized the job with an error
+    out_url = compose_res.get("video_url") or (compose_res.get("video") or {}).get("url")
+    await _finalize(job_id, ok=True, url=out_url, actual_cost_cents=actual_cost_cents)
 
 
 # ---------------------------------------------------------------------------
@@ -690,12 +877,11 @@ async def _run_render_composite(job: dict):
     duration_s = _estimate_duration_seconds(job["script"])
     interval_s = max(1, int(job.get("broll_cutaway_interval_s", 12)))
     cutaway_count = max(1, int(duration_s / interval_s))
-    actual_cost_cents = 0
 
     await _walk_stages(job_id, [
-        ("avatar", 25, "Rendering HeyGen talking-head…"),
-        ("cutaways", 55, f"Generating {cutaway_count} B-roll cutaways…"),
-        ("composing", 85, "Interleaving avatar + B-roll on ffmpeg…"),
+        ("avatar", 25, "Generating avatar video…"),
+        ("cutaways", 55, f"Generating {cutaway_count} b-roll cutaways…"),
+        ("composing", 85, "Composing final video…"),
     ], dry_run)
 
     if dry_run:
@@ -711,6 +897,7 @@ async def _run_render_composite(job: dict):
         {"$set": {
             "status": "failed",
             "error": "Composite real-render not implemented yet — keep dry_run on for composite mode.",
+            "actual_cost_cents": 0,
             "completed_at": datetime.now(timezone.utc).isoformat(),
         }},
     )
@@ -846,6 +1033,30 @@ async def studio_render_delete(job_id: str, user: AuthUser = Depends(current_use
     await db.renders.delete_one({"id": job_id, "user_email": user.email})
     await _log_activity("studio_render_deleted", user.email, {"job_id": job_id})
     return {"ok": True}
+
+
+class BulkDeleteRequest(BaseModel):
+    ids: list[str]
+
+
+@api.post("/studio/render/bulk-delete")
+async def studio_render_bulk_delete(payload: BulkDeleteRequest, user: AuthUser = Depends(current_user)):
+    """Delete multiple completed/failed renders in one shot. In-progress
+    renders are silently skipped to avoid orphaning background tasks."""
+    require_studio(user)
+    if not payload.ids:
+        return {"deleted": 0}
+    res = await db.renders.delete_many({
+        "id": {"$in": payload.ids},
+        "user_email": user.email,
+        "status": {"$in": ["complete", "failed"]},
+    })
+    await _log_activity("studio_render_bulk_deleted", user.email, {
+        "requested": len(payload.ids),
+        "deleted": res.deleted_count,
+    })
+    return {"deleted": res.deleted_count}
+
 
 
 # ---------------------------------------------------------------------------

@@ -1920,3 +1920,60 @@
   cursor: not-allowed;
 }
 
+
+/* =====================================================================
+   Recent renders — bulk selection
+   ===================================================================== */
+.history-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.history-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.header-btn.is-danger {
+  color: #FCA5A5;
+  border-color: color-mix(in srgb, #EF4444 50%, transparent);
+}
+.header-btn.is-danger:hover {
+  background: color-mix(in srgb, #EF4444 14%, transparent);
+}
+.history-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  flex-shrink: 0;
+}
+.history-check input[type="checkbox"] {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid var(--border-soft);
+  border-radius: 4px;
+  background: var(--surface-soft);
+  cursor: pointer;
+  display: inline-grid;
+  place-items: center;
+}
+.history-check input[type="checkbox"]:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.history-check input[type="checkbox"]:checked::after {
+  content: "";
+  width: 9px;
+  height: 5px;
+  border-left: 2px solid #fff;
+  border-bottom: 2px solid #fff;
+  transform: rotate(-45deg) translate(0, -1px);
+}
+.history-row.is-selected {
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border-soft));
+}
+
