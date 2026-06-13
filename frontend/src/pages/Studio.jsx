@@ -263,6 +263,18 @@ export default function Studio() {
   const rerenderAsDryRun = async (sourceDoc) => {
     if (!sourceDoc) return;
     setRenderErr("");
+    // Visual reset so admin sees the click registered even if the new render
+    // walks stages faster than the eye can track. We replace progress/label
+    // immediately rather than waiting for the new doc to come back from POST.
+    setRender({
+      ...sourceDoc,
+      id: null,
+      status: "queued",
+      progress: 0,
+      progress_label: "Re-firing as dry-run…",
+      result_url: null,
+      error: null,
+    });
     try {
       const body = {
         mode: sourceDoc.mode,

@@ -139,6 +139,40 @@ Major refactor that addresses 7 explicit user asks. Verified 21/21 backend + ~95
 
 **Deferred from this iteration (Avatar + B-roll cutaways composite mode):** A true "Avatar + B-roll cutaways" render mode (HeyGen avatar talking head intercut with stock B-roll) needs a new backend render branch and a UI toggle in Avatar mode. Decision: defer until the real HeyGen/fal.ai pipelines are wired (DRY_RUN_RENDERS=false) so the UI isn't building against simulated output. The B-roll prompts ARE staged on the handoff so the user can manually flip to Faceless mode in the meantime.
 
+## Iteration 11 — Live UI smoke + Re-run as dry-run (2026-02-12)
+User cleared all 5 deferred-handoff items visually, then requested one polish-only addition before starting real-render testing on their side.
+
+**Verified live via `/app/test_reports/iteration_11.json`:** 100% PASS on all UI surfaces. Zero bugs found.
+
+**Avatar dry-run live UI walk:** chip-avatar → first avatar-card → chip-voice → first voice-row → script fill → generate-btn. Progress 5% (Queued) → 25% (Synthesizing voice on HeyGen) → 100% (Done) in ~2.5s. render-video plays BigBuckBunny.mp4. History row added.
+
+**Faceless dry-run live UI walk:** mode-faceless → chip-tts-voice → first voice-row → bulk-prompts ("sunset over the ocean\\ncity at night") → script fill → both scenes set to source=ai → generate-btn. Walks voiceover→visuals→composing in ~2.8s with scenes_n=2 stored.
+
+**Composite dry-run via curl:** composite mode is not exposed in the mode-toggle UI (admin-curl reachable only). `POST /api/studio/render {mode:'composite', script:'…', aspect:'9_16', avatar_id:'TEST', voice_id:'TEST'}` completes with `result_url=SAMPLE_VIDEO_URL`, `actual_cost_cents=0`, and lands in `/api/studio/history`.
+
+**`ADMIN_EMAILS` env explicit.** Made `ADMIN_EMAILS=drcharitycampbell@gmail.com` explicit in `/app/backend/.env` (was previously defaulting in code). `/auth/me` still returns `isAdmin:true` for the admin user after the env-pull was made explicit.
+
+**"Re-run as dry-run" admin-only button** (`/app/frontend/src/pages/Studio.jsx`):
+- New `rerenderAsDryRun(sourceDoc)` handler rebuilds the full render payload from a source doc and POSTs to `/studio/render` with `dry_run:true` forced. Same cost-cap path, no special endpoint.
+- Wired on the **active render card** (`[data-testid='render-card-rerun-dryrun']`) as a `<RotateCw />` + "Re-run as dry-run" pill button. Visible only when `isAdmin && (render.status === 'complete' || render.status === 'failed')`.
+- Wired on **every completed/failed history row** (`[data-testid^='history-rerun-dryrun-']`) as a `<RotateCw />` icon button. History payload may be trimmed, so the handler first does `GET /studio/render/{id}` to fetch the full doc, then re-fires.
+- **Visual reset**: when the re-run button is clicked, the render-card state is immediately set to `{status:'queued', progress:0, progress_label:'Re-firing as dry-run…'}` so the admin sees the click registered even if the new render walks stages faster than the eye can track (caught by code review in iter 11).
+- Customer (non-admin) UI gating: confirmed via code review — both buttons wrapped in `{isAdmin && …}`.
+- Backend gating: confirmed via code review of `server.py:711` — the admin gate only restricts `dry_run:FALSE` overrides. `dry_run:TRUE` from any user falls through to the env default. So the re-run button is safe to expose to admins without backend coupling.
+
+**Seed data:** 5 dry-run renders created during iter 11 testing (composite via curl, avatar live UI, avatar active-card re-run, avatar history-row re-run, faceless live UI). All `actual_cost_cents=0`.
+
+**Files touched in iter 11**
+- `/app/backend/.env` — `ADMIN_EMAILS=drcharitycampbell@gmail.com` explicit.
+- `/app/frontend/src/pages/Studio.jsx` — `RotateCw` import; `rerenderAsDryRun(sourceDoc)` handler with visual reset; active-card re-run button (admin-gated); history-row re-run icon button (admin-gated) with `GET /studio/render/{id}` round-trip to fetch full doc before re-firing.
+
+**Carried-over open items (all explicitly deferred per user instruction)**
+- Real `_run_render_composite` orchestration (deferred per user: composite real-render stays off until Avatar + Faceless real-renders validated independently)
+- `server.py` refactor into `/app/backend/renders/{avatar,faceless,composite}.py` (deferred per user: premature until feature set stabilises)
+- `JSON.stringify(payload)` useEffect dep in `AdminRenderControl.jsx` (deferred per user: minor cleanup)
+- Cross-origin Netlify `/auth-me` deployment (held — other dev will handle when ready to flip live URL)
+- Admin panel + legacy Resources port (held — those stay on Netlify side)
+
 ## Iteration 10 — Cost guards + DRY_RUN render pipelines + admin-only render controls + Sprint promote (2026-02-12)
 Verified live via `/app/test_reports/iteration_10.json` — 13/13 backend pytest PASS, all live-tested UI surfaces PASS, zero bugs found.
 
