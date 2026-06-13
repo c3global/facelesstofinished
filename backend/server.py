@@ -602,7 +602,10 @@ async def _run_render_avatar(job: dict):
         await _finalize(job_id, ok=False, url=None, actual_cost_cents=0)
         return
     async with httpx.AsyncClient(timeout=60) as client:
-        # 1) Submit
+        # 1) Submit. NOTE on captions: HeyGen v2 `/video/generate` requires a
+        # BOOLEAN here — sending a {file_format, style} object returns 400
+        # `caption is invalid: Input should be a valid boolean`. Custom
+        # caption styling lives on HeyGen's Template API, not this endpoint.
         body = {
             "video_inputs": [{
                 "character": {"type": "avatar", "avatar_id": job["avatar_id"], "avatar_style": "normal"},
@@ -610,22 +613,15 @@ async def _run_render_avatar(job: dict):
             }],
             "dimension": {"width": 1080 if job["aspect"] == "16_9" else 720,
                           "height": 1920 if job["aspect"] == "9_16" else 1080},
+            # `aspect_ratio` + `fit` are the newer HeyGen framing controls.
+            # `fit: "cover"` crops/zooms the avatar to fill the 9:16 frame
+            # cleanly — previously we got a tiny avatar in the centre with
+            # huge black bars top/bottom + white bars left/right because
+            # HeyGen's default behaviour is letterbox-fit a 16:9 avatar.
+            "aspect_ratio": "9:16" if job["aspect"] == "9_16" else "16:9",
+            "fit": "cover",
+            "caption": bool(job.get("captions", True)),
         }
-        # Captions: send a caption-object with an explicit burn-in style so
-        # HeyGen renders subtitles INTO the video (not just a sidecar SRT).
-        # Sending bool true also works for legacy plans — the object form is
-        # required for newer HeyGen accounts to actually burn captions in.
-        if job.get("captions", True):
-            body["caption"] = {
-                "file_format": "srt",
-                "style": {
-                    "font_size": 48,
-                    "color": "#FFFFFF",
-                    "background_color": "#000000",
-                    "alignment": "center",
-                    "position": "bottom",
-                },
-            }
         r = await client.post(
             "https://api.heygen.com/v2/video/generate",
             headers={"X-Api-Key": HEYGEN_API_KEY, "Accept": "application/json"},

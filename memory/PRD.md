@@ -139,6 +139,35 @@ Major refactor that addresses 7 explicit user asks. Verified 21/21 backend + ~95
 
 **Deferred from this iteration (Avatar + B-roll cutaways composite mode):** A true "Avatar + B-roll cutaways" render mode (HeyGen avatar talking head intercut with stock B-roll) needs a new backend render branch and a UI toggle in Avatar mode. Decision: defer until the real HeyGen/fal.ai pipelines are wired (DRY_RUN_RENDERS=false) so the UI isn't building against simulated output. The B-roll prompts ARE staged on the handoff so the user can manually flip to Faceless mode in the meantime.
 
+## Iteration 15 — Five issues from real-render attempt #2 (2026-02-13)
+User retried Avatar+Faceless real-render after iter-14. Reports:
+1. Avatar STILL failed with `caption is invalid: Input should be a valid boolean`
+2. 9:16 video came out with the avatar tiny in centre + black bars top/bottom + white bars left/right
+3. "Finalizing video… 85%" looked stuck during the long real-HeyGen wait — no animation to confirm it's still alive
+4. Faceless render timed out; the screen went blank and forced a re-login
+5. The stuck "Composing" Faceless row in history had no way to open/check its current status
+
+**Bug 1 — Caption STILL the object form (the iter-14 fix never landed).** Investigated and confirmed the `search_replace` in iter-14 didn't take — the file still contained the `{file_format, style}` caption-object form. Re-applied as a clean overwrite + verified by grep that the body now sends `"caption": bool(job.get("captions", True))`. HeyGen v2 `/video/generate` requires a literal boolean; the styled-object form belongs on HeyGen's Template API.
+
+**Bug 2 — 9:16 framing wrong.** HeyGen's default behaviour for `dimension: {width: 720, height: 1280}` on a 16:9-native talking-head avatar is to letterbox-fit, producing a small landscape clip in a portrait canvas with huge black/white bars. Fix per [latest HeyGen docs](https://developers.heygen.com/changelog): added `aspect_ratio` + `fit` controls to the request body (`aspect_ratio: "9:16"` + `fit: "cover"` for portrait; `fit: "cover"` crops/zooms the avatar to fill the frame cleanly). Kept the legacy `dimension` field for backward compatibility.
+
+**Bug 3 — No "still alive" animation during long stages.** The render-bar-fill was a static width transition; when the backend held at progress=85 for 30-60s while polling HeyGen, the bar visually froze. Fix: added a CSS shimmer animation (`render-bar-shimmer`) to the fill that sweeps a brighter highlight band across the bar at 1.6s cadence whenever `status !== "complete" && status !== "failed"`. Class `is-progressing` toggles on/off based on the render state.
+
+**Bug 4 — Faceless timeout blanked the screen.** Two distinct root causes:
+- `pollStatus` cleared the interval on the FIRST exception (network blip, token race, transient 5xx). Once cleared, the UI froze at the last polled state with no recovery. Hardened: tolerate up to 6 consecutive failures (~9s of retries) before giving up. On final give-up, surface a clear "Lost connection — refresh and click Resume" message instead of going blank.
+- React did not actually crash; the "blank screen" was the user's polling loop dying silently while the backend was still working. The new shimmer + Resume button cover this case end-to-end.
+
+**Bug 5 — In-progress history rows had no Open/Resume button.** Added a `<Play />` icon button (data-testid `history-resume-{id}`) visible only when the render is in a non-terminal status. Clicking it calls the new `resumeRender(jobId)` helper which fetches the latest render doc, sets it as the active render-card, scrolls into view, toasts "Resumed tracking — watch progress above.", and re-attaches `pollStatus` so the user can watch it finish.
+
+**Captions-style picker visible in Avatar mode too.** Removed the `mode === FACELESS` gate. Now visible whenever captions are ON. When in Avatar mode, an italic note clarifies that HeyGen's auto-styling is currently used; the picker is preserved so the choice persists when we wire HeyGen Template API in a future iteration.
+
+**Files touched in iter 15**
+- `/app/backend/server.py` — `_run_render_avatar` HeyGen body now correctly sends bool `caption`; added `aspect_ratio` and `fit: "cover"`.
+- `/app/frontend/src/pages/Studio.jsx` — hardened `pollStatus` with 6-failure tolerance + clear error message; new `resumeRender(jobId)` helper; Resume `<Play>` button on non-terminal history rows; `chipCaptionStyle` un-gated from FACELESS mode (with explanatory note in Avatar mode); `render-bar-fill` gets `is-progressing` class while non-terminal.
+- `/app/frontend/src/App.css` — `.render-bar-fill.is-progressing::after` shimmer keyframe; `.chip-pill-note` italic note style.
+
+**Verified live** (dry-run smoke pass): Avatar mode pill picker visible with the note. Render kicked off shows "Render started…" toast + bar shimmer animating during the in-progress state. Faceless "Composing" history row shows the new Resume button next to trash.
+
 ## Iteration 14 — Three real-render bugs from iter-13 + captions style picker (2026-02-13)
 User's avatar real-render failed with `HeyGen API error 400 caption is invalid: Input should be a valid boolean`, and faceless failed with `fal-ai/wizper 422 chunk_level Input should be 'segment'`. Plus the stuck "Polling" Avatar row from iter-12 couldn't be deleted because the delete endpoint refused non-terminal statuses.
 

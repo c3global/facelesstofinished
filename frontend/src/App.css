@@ -508,6 +508,28 @@
   background: var(--accent);
   border-radius: 999px;
   transition: width .35s ease;
+  position: relative;
+  overflow: hidden;
+}
+/* While the render is still progressing, sweep a brighter highlight band
+   across the filled portion of the bar so the user knows we're alive even
+   when the percentage hangs at 85% during long backend stages. */
+.render-bar-fill.is-progressing::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in srgb, #fff 38%, transparent) 45%,
+    color-mix(in srgb, #fff 38%, transparent) 55%,
+    transparent 100%
+  );
+  animation: render-bar-shimmer 1.6s cubic-bezier(.4,0,.6,1) infinite;
+  transform: translateX(-100%);
+}
+@keyframes render-bar-shimmer {
+  to { transform: translateX(100%); }
 }
 .render-video {
   width: 100%;
@@ -1995,6 +2017,17 @@
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+
+.chip-pill-note {
+  display: inline-block;
+  width: 100%;
+  padding-top: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  font-style: italic;
+  line-height: 1.4;
+}
+
   color: var(--muted);
   padding: 0 4px 0 6px;
 }

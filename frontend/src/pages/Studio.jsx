@@ -365,9 +365,16 @@ export default function Studio() {
 
   const pollStatus = (jobId) => {
     if (pollRef.current) clearInterval(pollRef.current);
+    // Tolerate transient errors (network blips, token-refresh races) — only
+    // give up after MAX_FAIL consecutive failures. Previously a single 5xx
+    // killed the poll loop entirely, which is why a long-running real
+    // render would silently "freeze" on the UI side at 85%.
+    let consecutiveFailures = 0;
+    const MAX_FAIL = 6;  // ~9 seconds of failures at 1.5s interval
     pollRef.current = setInterval(async () => {
       try {
         const r = await apiClient.get(`/studio/render/${jobId}`);
+        consecutiveFailures = 0;
         setRender(r.data);
         if (r.data.status === "complete" || r.data.status === "failed") {
           clearInterval(pollRef.current);
@@ -375,10 +382,32 @@ export default function Studio() {
           loadHistory();
         }
       } catch {
-        clearInterval(pollRef.current);
-        pollRef.current = null;
+        consecutiveFailures += 1;
+        if (consecutiveFailures >= MAX_FAIL) {
+          clearInterval(pollRef.current);
+          pollRef.current = null;
+          setRenderErr("Lost connection to render — refresh the page and click Resume on the row to keep tracking it.");
+        }
       }
     }, 1500);
+  };
+
+  // Resume polling on a render that's still in progress (e.g. user refreshed
+  // the page mid-render or our polling timed out due to a network blip).
+  // Loads the latest doc into the active render-card and re-attaches the
+  // poll loop so the user can watch it finish.
+  const resumeRender = async (jobId) => {
+    try {
+      const r = await apiClient.get(`/studio/render/${jobId}`);
+      setRender(r.data);
+      setToast("Resumed tracking — watch progress above.");
+      scrollToRenderCard();
+      if (r.data.status !== "complete" && r.data.status !== "failed") {
+        pollStatus(jobId);
+      }
+    } catch (e) {
+      setRenderErr(e?.response?.data?.detail || "Could not resume — render may have been deleted.");
+    }
   };
 
   const deleteRender = async (jobId) => {
@@ -472,7 +501,7 @@ export default function Studio() {
     { id: "outlined", label: "Outlined" },
   ];
   const chipCaptionStyle =
-    captions && mode === MODES.FACELESS ? (
+    captions ? (
       <div className="chip-pill-group" data-testid="caption-style-group">
         <span className="chip-pill-label">Style</span>
         {captionStyles.map((s) => (
@@ -486,6 +515,9 @@ export default function Studio() {
             {s.label}
           </button>
         ))}
+        {mode === MODES.AVATAR && (
+          <span className="chip-pill-note">Avatar mode currently uses HeyGen's auto styling — picker preserved for future Template-API support.</span>
+        )}
       </div>
     ) : null;
   const brollChipLabel = {
@@ -771,7 +803,10 @@ export default function Studio() {
             <span className="render-status-pct" data-testid="render-progress">{render.progress}%</span>
           </div>
           <div className="render-bar">
-            <div className="render-bar-fill" style={{ width: `${render.progress}%` }} />
+            <div
+              className={`render-bar-fill ${render.status === "complete" || render.status === "failed" ? "" : "is-progressing"}`}
+              style={{ width: `${render.progress}%` }}
+            />
           </div>
           {render.status === "complete" && render.result_url && (
             <video className="render-video" data-testid="render-video" src={render.result_url} controls playsInline />
@@ -867,6 +902,17 @@ export default function Studio() {
                   <span className="history-date">{fmtDate(r.created_at)}</span>
                 </div>
                 <div className="history-actions">
+                  {!terminal && (
+                    <button
+                      className="icon-btn"
+                      data-testid={`history-resume-${r.id}`}
+                      onClick={() => resumeRender(r.id)}
+                      aria-label="Resume tracking"
+                      title="Resume tracking this render"
+                    >
+                      <Play size={14} />
+                    </button>
+                  )}
                   {r.status === "complete" && r.result_url && (
                     <a className="icon-btn" href={r.result_url} target="_blank" rel="noreferrer" data-testid={`history-play-${r.id}`} aria-label="Play">
                       <Play size={14} />
