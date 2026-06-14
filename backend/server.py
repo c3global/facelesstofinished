@@ -274,9 +274,12 @@ async def studio_avatars(user: AuthUser = Depends(current_user)):
             portrait_ok = any(t in name for t in (
                 "upper body", "front", "headshot", "close", "selfie",
             ))
-            aspect = "landscape" if landscape_only and not portrait_ok else (
-                "both" if portrait_ok else "both"  # default permissive
-            )
+            if landscape_only and not portrait_ok:
+                aspect = "landscape"
+            elif portrait_ok and not landscape_only:
+                aspect = "portrait"
+            else:
+                aspect = "both"
             out.append({
                 "id": a.get("avatar_id"),
                 "name": a.get("avatar_name") or a.get("avatar_id"),
@@ -284,7 +287,7 @@ async def studio_avatars(user: AuthUser = Depends(current_user)):
                 "preview_video_url": a.get("preview_video_url"),
                 "gender": (a.get("gender") or "").lower() or "other",
                 "premium": bool(a.get("premium")),
-                "aspect": aspect,  # "both" | "landscape" — used by the picker filter
+                "aspect": aspect,  # "portrait" | "landscape" | "both" — used by the picker filter
             })
         return out
 
@@ -618,26 +621,21 @@ async def _run_render_avatar(job: dict):
         await _finalize(job_id, ok=False, url=None, actual_cost_cents=0)
         return
     async with httpx.AsyncClient(timeout=60) as client:
-        # Character config. For 9:16 portrait we crop the 16:9 source avatar
-        # by scaling 1.78× (16/9) and nudging upward so the face stays in
-        # frame — without this HeyGen letterboxes the source horizontally
-        # with huge white bars top/bottom (the iter-15 result). `fit` is not
-        # a real HeyGen v2 field — removed.
+        # Character config. HeyGen v2 handles aspect-ratio framing via the
+        # top-level `aspect_ratio` field below — `scale`/`offset` are not
+        # documented v2 fields and were removed.
         character = {
             "type": "avatar",
             "avatar_id": job["avatar_id"],
             "avatar_style": "normal",
         }
-        if job["aspect"] == "9_16":
-            character["scale"] = 1.78
-            character["offset"] = {"x": 0.0, "y": -0.12}
 
         body = {
             "video_inputs": [{
                 "character": character,
                 "voice": {"type": "text", "voice_id": job["voice_id"], "input_text": job["script"]},
             }],
-            "dimension": {"width": 1080 if job["aspect"] == "16_9" else 720,
+            "dimension": {"width": 1080 if job["aspect"] == "9_16" else 1920,
                           "height": 1920 if job["aspect"] == "9_16" else 1080},
             "aspect_ratio": "9:16" if job["aspect"] == "9_16" else "16:9",
             # HeyGen v2 /video/generate requires `caption` as a BOOLEAN.
