@@ -264,19 +264,22 @@ async def studio_avatars(user: AuthUser = Depends(current_user)):
         for a in avatars:
             name = (a.get("avatar_name") or "").lower()
             # Heuristic aspect tagging based on the pose hint in the name.
-            # HeyGen doesn't expose an explicit aspect-eligibility field on
-            # /avatars, but pose conventions are consistent enough to filter
-            # the picker meaningfully. Avatars with sit/side poses look
-            # mangled when forced into 9:16; we tag them landscape-only.
+            # HeyGen v2 `aspect_ratio: "9:16"` only sets the output canvas —
+            # it does NOT crop or zoom a 16:9 source. So sitting / side /
+            # full-body poses get rendered into a portrait canvas with
+            # huge top/bottom padding. The picker MUST filter these out.
+            # Landscape keywords VETO portrait keywords (a "sofa front" is
+            # still a sitting shot, regardless of the "front" word).
             landscape_only = any(t in name for t in (
                 " side", "sofa", "biztalk", "wide", "couch", "background",
+                "office", "sitting", "desk", "studio",
             ))
             portrait_ok = any(t in name for t in (
-                "upper body", "front", "headshot", "close", "selfie",
+                "upper body", "headshot", "close", "selfie", "portrait",
             ))
-            if landscape_only and not portrait_ok:
+            if landscape_only:
                 aspect = "landscape"
-            elif portrait_ok and not landscape_only:
+            elif portrait_ok:
                 aspect = "portrait"
             else:
                 aspect = "both"
