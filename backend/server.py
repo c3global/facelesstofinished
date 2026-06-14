@@ -600,9 +600,9 @@ SAMPLE_VIDEO_URL = "https://www.w3schools.com/html/mov_bbb.mp4"
 
 # ---------------------------------------------------------------------------
 # HeyGen Avatar pipeline (DRY_RUN scaffolding)
-# Full real-API code is written below but every external call is gated behind
-# `dry_run`. To go live, flip dry_run False on the job and the same code runs
-# unchanged.
+# Uses the HeyGen v3 /v3/videos endpoint (the v2 /video/generate endpoint
+# silently letterboxed 9:16 output because `fit` wasn't honoured). v3 supports
+# the documented `fit: "cover"` field and burn-in captions via `caption.style`.
 # ---------------------------------------------------------------------------
 async def _run_render_avatar(job: dict):
     job_id = job["id"]
@@ -619,33 +619,34 @@ async def _run_render_avatar(job: dict):
         await _finalize(job_id, ok=True, url=SAMPLE_VIDEO_URL, actual_cost_cents=0)
         return
 
-    # ---- REAL HeyGen v2 video generation flow (not executed in dry-run) ----
+    # ---- REAL HeyGen v3 video generation flow (not executed in dry-run) ----
+    # Migrated from v2 /video/generate to v3 /videos per latest HeyGen docs.
+    # v3 supports the documented `fit: "cover"` field which actually crops the
+    # source to fill the canvas (v2 silently ignored fit, producing letterboxed
+    # output). v3 also supports caption burn-in via the `caption` object — the
+    # poll response then exposes `captioned_video_url` with captions baked in.
     if not HEYGEN_API_KEY:
         await _finalize(job_id, ok=False, url=None, actual_cost_cents=0)
         return
+    captions_on = bool(job.get("captions", True))
     async with httpx.AsyncClient(timeout=60) as client:
-        # Character config. HeyGen v2 handles aspect-ratio framing via the
-        # top-level `aspect_ratio` field below — `scale`/`offset` are not
-        # documented v2 fields and were removed.
-        character = {
+        body = {
             "type": "avatar",
             "avatar_id": job["avatar_id"],
-            "avatar_style": "normal",
-        }
-
-        body = {
-            "video_inputs": [{
-                "character": character,
-                "voice": {"type": "text", "voice_id": job["voice_id"], "input_text": job["script"]},
-            }],
-            "dimension": {"width": 1080 if job["aspect"] == "9_16" else 1920,
-                          "height": 1920 if job["aspect"] == "9_16" else 1080},
+            "script": job["script"],
+            "voice_id": job["voice_id"],
             "aspect_ratio": "9:16" if job["aspect"] == "9_16" else "16:9",
-            # HeyGen v2 /video/generate requires `caption` as a BOOLEAN.
-            "caption": bool(job.get("captions", True)),
+            # `cover` scales/crops the avatar to fill the canvas — this is the
+            # documented v3 field for cropping, replacing v2's letterbox default.
+            "fit": "cover",
         }
+        if captions_on:
+            # Setting `style` (alongside file_format) burns captions IN to the
+            # rendered video; HeyGen exposes the burned version at
+            # data.captioned_video_url on the poll response.
+            body["caption"] = {"file_format": "srt", "style": "default"}
         r = await client.post(
-            "https://api.heygen.com/v2/video/generate",
+            "https://api.heygen.com/v3/videos",
             headers={"X-Api-Key": HEYGEN_API_KEY, "Accept": "application/json"},
             json=body,
         )
@@ -660,29 +661,45 @@ async def _run_render_avatar(job: dict):
                 }},
             )
             return
-        video_id = r.json()["data"]["video_id"]
-        # 2) Poll
-        for _ in range(60):  # max ~5 min
+        video_id = (r.json().get("data") or {}).get("video_id") or (r.json().get("data") or {}).get("id")
+        if not video_id:
+            await db.renders.update_one(
+                {"id": job_id},
+                {"$set": {
+                    "status": "failed",
+                    "error": f"HeyGen returned no video_id: {r.text[:300]}",
+                    "actual_cost_cents": actual_cost_cents,
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                }},
+            )
+            return
+        # 2) Poll v3 GET /v3/videos/{id} — completion implied by presence of
+        # video_url; failure implied by failure_code. Up to ~5 minutes.
+        for _ in range(60):
             await asyncio.sleep(5)
             s = await client.get(
-                f"https://api.heygen.com/v1/video_status.get?video_id={video_id}",
+                f"https://api.heygen.com/v3/videos/{video_id}",
                 headers={"X-Api-Key": HEYGEN_API_KEY},
             )
-            d = s.json().get("data", {})
-            if d.get("status") == "completed":
-                actual_cost_cents += int(round(_estimate_duration_seconds(job["script"]) / 60.0 * 30.0))
-                await _finalize(job_id, ok=True, url=d.get("video_url"), actual_cost_cents=actual_cost_cents)
-                return
-            if d.get("status") == "failed":
+            d = (s.json() or {}).get("data") or {}
+            if d.get("failure_code"):
                 await db.renders.update_one(
                     {"id": job_id},
                     {"$set": {
                         "status": "failed",
-                        "error": f"HeyGen returned status=failed: {d.get('error') or 'no detail'}",
+                        "error": f"HeyGen {d.get('failure_code')}: {d.get('failure_message') or 'no detail'}",
                         "actual_cost_cents": actual_cost_cents,
                         "completed_at": datetime.now(timezone.utc).isoformat(),
                     }},
                 )
+                return
+            # Prefer the captioned (burned-in) URL when captions were requested.
+            final_url = (
+                d.get("captioned_video_url") if captions_on else None
+            ) or d.get("video_url")
+            if final_url:
+                actual_cost_cents += int(round(_estimate_duration_seconds(job["script"]) / 60.0 * 30.0))
+                await _finalize(job_id, ok=True, url=final_url, actual_cost_cents=actual_cost_cents)
                 return
     await db.renders.update_one(
         {"id": job_id},
