@@ -3,7 +3,7 @@ import { readJob, updateJob } from './_shared/scriptJobs.mjs';
 import { buildSystemPrompt, buildShortsSystemPrompt } from './_shared/systemPrompt.mjs';
 import { recordScriptGeneration, recordShortsGeneration } from './_shared/store.mjs';
 
-const MODEL = 'claude-sonnet-4-20250514';
+const MODEL = 'claude-sonnet-4-6';
 const FLUSH_INTERVAL_MS = 600;
 
 export default async (req) => {
