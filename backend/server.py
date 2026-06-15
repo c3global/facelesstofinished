@@ -965,33 +965,60 @@ async def _run_render_faceless(job: dict):
 
     # 4) Compose — fal.ai ffmpeg-api/compose.
     #
-    # CRITICAL: fal.ai ffmpeg-api/compose expects `timestamp` and `duration`
-    # in MILLISECONDS, not seconds. We were sending seconds (e.g. duration=4
-    # for a 4-second clip), which made the worker treat clips as 4ms slivers
-    # and spin forever waiting for the audio (which was 20000ms intended but
-    # we passed `20`). That's the 600s polling timeout. All values *1000 below.
-    tracks = []
+    # Track type must MATCH the underlying media:
+    #   - "image" for Flux PNG/JPG stills (worker holds each frame for `duration`)
+    #   - "video" for Pexels/Pixabay MP4 clips (worker copies frames natively)
+    # Putting an image URL on a "video" track makes the worker grind trying to
+    # decode the PNG as a video file — that's the 10+ minute compose timeout
+    # that's been blocking faceless renders.
+    #
+    # For mixed AI+stock scenes we lay each scene on its own track at a
+    # non-overlapping timestamp so each track can be type-correct.
+    # `timestamp` + `duration` are in MILLISECONDS per fal.ai's Keyframe schema.
+    tracks: list = []
     total_video_ms = 0
-    valid_urls = [(i, u) for i, u in enumerate(image_urls) if u]
-    if valid_urls:
-        # Per-scene duration distributes the audio length across the visuals.
+    scene_meta: list = []  # (idx, url, is_video, src_kind)
+    for i, s in enumerate(scenes):
+        url = image_urls[i]
+        if not url:
+            continue
+        effective_src = s.get("source") or global_source
+        is_video = effective_src in ("pexels", "pixabay")
+        scene_meta.append((i, url, is_video, effective_src))
+
+    if scene_meta:
         target_ms = int(_estimate_duration_seconds(job["script"]) * 1000)
-        per_dur_ms = max(2000, target_ms // max(1, len(valid_urls)))
-        keyframes = []
-        cursor_ms = 0
-        for _, url in valid_urls:
-            keyframes.append({
-                "url": url,
-                "timestamp": cursor_ms,
-                "duration": per_dur_ms,
-            })
-            cursor_ms += per_dur_ms
-        # Use "image" type for stills (Flux output), "video" for picker URLs.
-        # We don't reliably know which is which scene-by-scene, so we use
-        # "video" track type for the whole thing — ffmpeg-api/compose handles
-        # both still images and video clips on a video track.
-        tracks.append({"id": "video", "type": "video", "keyframes": keyframes})
-        total_video_ms = cursor_ms
+        # Per-scene duration: even split of audio across scenes, but at
+        # least 1.5s per scene so transitions don't blur and at most 8s so
+        # the worker doesn't have to encode huge segments for tiny audio.
+        per_dur_ms = max(1500, min(8000, target_ms // max(1, len(scene_meta))))
+
+        # Bucket scenes by track type when they're homogeneous (faster encode
+        # — single track with N keyframes). Fall back to per-scene tracks
+        # when the user mixed AI + stock in a single render.
+        all_images = all(not v for _, _, v, _ in scene_meta)
+        all_videos = all(v for _, _, v, _ in scene_meta)
+
+        if all_images or all_videos:
+            ttype = "image" if all_images else "video"
+            keyframes = []
+            cursor_ms = 0
+            for _, url, _, _ in scene_meta:
+                keyframes.append({"url": url, "timestamp": cursor_ms, "duration": per_dur_ms})
+                cursor_ms += per_dur_ms
+            tracks.append({"id": "main", "type": ttype, "keyframes": keyframes})
+            total_video_ms = cursor_ms
+        else:
+            cursor_ms = 0
+            for idx, (_, url, is_video, _) in enumerate(scene_meta):
+                tracks.append({
+                    "id": f"scene-{idx}",
+                    "type": "video" if is_video else "image",
+                    "keyframes": [{"url": url, "timestamp": cursor_ms, "duration": per_dur_ms}],
+                })
+                cursor_ms += per_dur_ms
+            total_video_ms = cursor_ms
+
     if audio_url:
         audio_dur_ms = max(5000, total_video_ms or int(_estimate_duration_seconds(job["script"]) * 1000))
         tracks.append({
@@ -1057,7 +1084,7 @@ async def _run_render_faceless(job: dict):
                     "tracks": [
                         {
                             "id": "v",
-                            "type": "video",
+                            "type": "video",  # composed_url IS a video — keep "video" type here
                             "keyframes": [{
                                 "url": composed_url,
                                 "timestamp": 0,

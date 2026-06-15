@@ -35,10 +35,12 @@ export function AvatarPicker({ open, onClose, value, onPick, currentAspect = "9_
   const filtered = useMemo(() => {
     let list = avatars;
     if (tab !== "all") list = list.filter((a) => a.gender === tab);
-    // The bug: iter-15 declared aspectFilter state but never read it here,
-    // so the dropdown was visually changing without filtering. Wired now.
+    // 9:16 is strict: ONLY truly portrait-framed avatars (no "both"). "Both"
+    // is a permissive bucket that leaked sit/wide-pose avatars into 9:16
+    // and caused HeyGen's cover-crop to chop the subject's body in half.
+    // For 16:9 we keep the permissive behaviour — extra avatars are fine.
     if (aspectFilter === "9_16") {
-      list = list.filter((a) => a.aspect !== "landscape");
+      list = list.filter((a) => a.aspect === "portrait");
     } else if (aspectFilter === "16_9") {
       list = list.filter((a) => a.aspect !== "portrait");
     }

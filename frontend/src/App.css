@@ -675,6 +675,73 @@
   text-transform: uppercase;
 }
 
+/* ---------- Inline video player modal (history Play) ---------- */
+.player-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 6, 22, 0.82);
+  backdrop-filter: blur(8px);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  animation: player-modal-fade-in 0.18s ease-out;
+}
+@keyframes player-modal-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.player-modal {
+  position: relative;
+  background: #000;
+  border-radius: var(--radius-md);
+  box-shadow: 0 30px 80px -20px rgba(0, 0, 0, 0.7);
+  border: 1px solid rgba(150, 120, 240, 0.25);
+  overflow: hidden;
+  animation: player-modal-pop 0.22s cubic-bezier(0.2, 1, 0.4, 1);
+}
+@keyframes player-modal-pop {
+  from { transform: scale(0.92); opacity: 0; }
+  to   { transform: scale(1);    opacity: 1; }
+}
+.player-modal.is-landscape {
+  width: min(85vw, 960px);
+  aspect-ratio: 16 / 9;
+}
+.player-modal.is-portrait {
+  height: min(85vh, 720px);
+  aspect-ratio: 9 / 16;
+}
+.player-modal video {
+  width: 100%;
+  height: 100%;
+  display: block;
+  background: #000;
+}
+.player-modal-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(20, 16, 40, 0.78);
+  color: rgba(230, 220, 255, 0.92);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition: background 0.15s, transform 0.15s;
+}
+.player-modal-close:hover {
+  background: rgba(40, 30, 70, 0.95);
+  transform: scale(1.08);
+}
+
 /* ---------- Recent renders ---------- */
 .history-block {
   padding-top: 28px;

@@ -153,6 +153,10 @@ export default function Studio() {
   const { user } = useAuth();
   const isAdmin = !!user?.isAdmin;
   const [toast, setToast] = useState("");
+  // History "play" opens an inline modal. Opening the raw HeyGen/fal CDN
+  // URL in a new tab shows a blank file2.heygen.ai page (signed URL + the
+  // browser can't render the bare MP4 inline). Keeping playback in-app.
+  const [playerModal, setPlayerModal] = useState(null);  // {url, aspect} | null
   // Per-row selection for bulk-delete in the Recent renders list.
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const toggleSelected = (id) => {
@@ -919,9 +923,15 @@ export default function Studio() {
                     </button>
                   )}
                   {r.status === "complete" && r.result_url && (
-                    <a className="icon-btn" href={r.result_url} target="_blank" rel="noreferrer" data-testid={`history-play-${r.id}`} aria-label="Play">
+                    <button
+                      className="icon-btn"
+                      onClick={() => setPlayerModal({ url: r.result_url, aspect: r.aspect })}
+                      data-testid={`history-play-${r.id}`}
+                      aria-label="Play"
+                      title="Play"
+                    >
                       <Play size={14} />
-                    </a>
+                    </button>
                   )}
                   {(r.status === "complete" || r.status === "failed") && (
                     <button
@@ -988,6 +998,37 @@ export default function Studio() {
           if (stockModal.idx >= 0) setScenePick(stockModal.idx, r);
         }}
       />
+
+      {/* Inline player modal — replaces the broken "open URL in new tab" path. */}
+      {playerModal && (
+        <div
+          className="player-modal-backdrop"
+          data-testid="player-modal-backdrop"
+          onClick={() => setPlayerModal(null)}
+        >
+          <div
+            className={`player-modal ${playerModal.aspect === "9_16" ? "is-portrait" : "is-landscape"}`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              className="player-modal-close"
+              data-testid="player-modal-close"
+              onClick={() => setPlayerModal(null)}
+              aria-label="Close"
+            >
+              ×
+            </button>
+            <video
+              data-testid="player-modal-video"
+              src={playerModal.url}
+              controls
+              autoPlay
+              playsInline
+            />
+          </div>
+        </div>
+      )}
 
       <Toast message={toast} onDismiss={() => setToast("")} />
     </main>
