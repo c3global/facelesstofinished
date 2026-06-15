@@ -809,7 +809,7 @@ export default function Studio() {
             />
           </div>
           {render.status === "complete" && render.result_url && (
-            <video className="render-video" data-testid="render-video" src={render.result_url} controls playsInline />
+            <video className={`render-video ${render.aspect === "9_16" ? "is-portrait" : ""}`} data-testid="render-video" src={render.result_url} controls playsInline />
           )}
           {render.status === "failed" && (
             <p style={{ color: "var(--danger)", margin: 0 }}>Render failed: {render.error || "unknown error"}</p>

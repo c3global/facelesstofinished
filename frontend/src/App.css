@@ -538,6 +538,14 @@
   max-height: 480px;
 }
 
+.render-video.is-portrait {
+  width: auto;
+  max-width: 270px;
+  max-height: 480px;
+  margin: 0 auto;
+  display: block;
+}
+
 /* ---------- Recent renders ---------- */
 .history-block {
   padding-top: 28px;
