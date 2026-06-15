@@ -38,23 +38,68 @@ export async function generateScript({
     throw err;
   }
 
-  if (!res.body) {
-    const text = await res.text();
-    return text;
+  let jobId;
+  try {
+    const payload = await res.json();
+    jobId = payload?.jobId;
+  } catch {
+    /* fall through */
+  }
+  if (!jobId) {
+    const err = new Error('no_job_id');
+    err.code = 'generate_failed';
+    throw err;
   }
 
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let text = '';
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    const chunk = decoder.decode(value, { stream: true });
-    text += chunk;
-    if (onChunk) onChunk(chunk, text);
+  const POLL_INTERVAL_MS = 1500;
+  const MAX_POLLS = 600;
+  let prevText = '';
+  let missCount = 0;
+
+  for (let i = 0; i < MAX_POLLS; i += 1) {
+    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+    let pollRes;
+    try {
+      pollRes = await fetch(`/api/script-job?id=${encodeURIComponent(jobId)}`, {
+        credentials: 'include',
+      });
+    } catch {
+      continue;
+    }
+    if (pollRes.status === 404) {
+      missCount += 1;
+      if (missCount > 4) {
+        const err = new Error('job_lost');
+        err.code = 'generate_failed';
+        throw err;
+      }
+      continue;
+    }
+    if (!pollRes.ok) continue;
+    let job;
+    try {
+      job = await pollRes.json();
+    } catch {
+      continue;
+    }
+    const text = job.text || '';
+    if (text.length > prevText.length) {
+      const chunk = text.slice(prevText.length);
+      if (onChunk) onChunk(chunk, text);
+      prevText = text;
+    }
+    if (job.status === 'complete') return text;
+    if (job.status === 'failed') {
+      const err = new Error(job.error || 'generation_failed');
+      err.code = 'generate_failed';
+      err.detail = job.error || null;
+      throw err;
+    }
   }
-  text += decoder.decode();
-  return text;
+
+  const err = new Error('generation_timeout');
+  err.code = 'generate_failed';
+  throw err;
 }
 
 export async function repurposeAsShort({ sourceScript, platform, angle, onChunk }) {
