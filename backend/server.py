@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import secrets
@@ -54,15 +55,17 @@ PIXABAY_API_KEY = os.environ.get("PIXABAY_API_KEY", "")
 JWT_SECRET = os.environ.get("JWT_SECRET", "dev-secret-change-me")
 NETLIFY_AUTH_URL = os.environ.get("NETLIFY_AUTH_URL", "")
 DEV_BYPASS_EMAIL = os.environ.get("DEV_BYPASS_EMAIL", "").strip().lower()
-DRY_RUN_RENDERS = os.environ.get("DRY_RUN_RENDERS", "true").lower() == "true"
 ADMIN_EMAILS = {
     e.strip().lower()
     for e in os.environ.get("ADMIN_EMAILS", "drcharitycampbell@gmail.com").split(",")
     if e.strip()
 }
-# Hard cap — any render whose estimated cost exceeds this in cents is rejected.
-# Composite renders need the headroom; single-mode renders won't hit it.
-RENDER_COST_CAP_CENTS = int(os.environ.get("RENDER_COST_CAP_CENTS", "150"))
+# Silent runaway-cost circuit-breaker. NOT customer-facing — exists to catch
+# pathological inputs (malformed scripts, scene counts, etc.) before they hit
+# a paid API. When this fires, customers see a generic "Render configuration
+# is too large. Please contact support." Log loudly so we can investigate &
+# raise the threshold.
+RENDER_COST_CIRCUIT_BREAKER_CENTS = int(os.environ.get("RENDER_COST_CAP_CENTS", "500"))
 
 KNOWN_ENTITLEMENTS = ["base", "shorts", "studio"]
 JWT_ALG = "HS256"
@@ -117,10 +120,6 @@ class RenderRequest(BaseModel):
     # outline). Stored on the doc; consumed by the optional caption-burn-in
     # step at the end of the faceless pipeline.
     caption_style: str = "boxed"
-    # Admin-only override. When None, falls back to the env default. When False
-    # but caller is not an admin, the request is rejected (customers MUST run
-    # against the env default — they can't elect to dry-run their own renders).
-    dry_run: Optional[bool] = None
 
 
 # ---------------------------------------------------------------------------
@@ -164,7 +163,7 @@ def require_studio(user: AuthUser) -> None:
 # ---------------------------------------------------------------------------
 @api.get("/health")
 async def health():
-    return {"ok": True, "dry_run": DRY_RUN_RENDERS}
+    return {"ok": True}
 
 
 @api.post("/auth/check")
@@ -214,7 +213,6 @@ async def auth_me(user: AuthUser = Depends(current_user)):
         "email": user.email,
         "entitlements": user.entitlements,
         "isAdmin": user.email.lower() in ADMIN_EMAILS,
-        "dryRunDefault": DRY_RUN_RENDERS,
     }
 
 
@@ -492,14 +490,7 @@ async def _log_activity(typ: str, email: str, detail: dict):
 
 
 async def _run_render(job_id: str):
-    """Dispatch to the per-mode render pipeline.
-
-    Each pipeline reads its own `dry_run` flag off the job doc — when True
-    (default for dev/preview) every external API call is stubbed and the
-    pipeline writes a sample MP4 + a $0.00 actual cost. When False the real
-    HeyGen / fal.ai calls fire and actual_cost_cents is accumulated as the
-    pipeline runs.
-    """
+    """Dispatch to the per-mode render pipeline."""
     job = await db.renders.find_one({"id": job_id})
     if not job:
         return
@@ -570,11 +561,11 @@ def estimate_render_cost_cents(payload: RenderRequest) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Stage walker shared by all pipelines. Sleeps shorter in dry-run.
+# Stage walker shared by all pipelines.
 # ---------------------------------------------------------------------------
-async def _walk_stages(job_id: str, stages, dry_run: bool):
+async def _walk_stages(job_id: str, stages):
     for status, progress, label in stages:
-        await asyncio.sleep(1.0 if dry_run else 4.0)
+        await asyncio.sleep(4.0)
         await db.renders.update_one(
             {"id": job_id},
             {"$set": {"status": status, "progress": progress, "progress_label": label}},
@@ -595,112 +586,170 @@ def _finalize(job_id: str, *, ok: bool, url: Optional[str], actual_cost_cents: i
     )
 
 
-SAMPLE_VIDEO_URL = "https://www.w3schools.com/html/mov_bbb.mp4"
-
-
 # ---------------------------------------------------------------------------
-# HeyGen Avatar pipeline (DRY_RUN scaffolding)
-# Uses the HeyGen v3 /v3/videos endpoint (the v2 /video/generate endpoint
-# silently letterboxed 9:16 output because `fit` wasn't honoured). v3 supports
-# the documented `fit: "cover"` field and burn-in captions via `caption.style`.
+# HeyGen Avatar pipeline — real renders only.
+# Uses the HeyGen v3 /v3/videos endpoint with the documented `fit: "cover"`
+# field and burn-in captions via `caption.style`.
 # ---------------------------------------------------------------------------
 async def _run_render_avatar(job: dict):
     job_id = job["id"]
-    dry_run = job.get("dry_run", True)
     actual_cost_cents = 0
 
-    await _walk_stages(job_id, [
-        ("voiceover", 25, "Generating voiceover…"),
-        ("avatar", 55, "Generating avatar video…"),
-        ("polling", 85, "Finalizing video…"),
-    ], dry_run)
-
-    if dry_run:
-        await _finalize(job_id, ok=True, url=SAMPLE_VIDEO_URL, actual_cost_cents=0)
-        return
-
-    # ---- REAL HeyGen v3 video generation flow (not executed in dry-run) ----
-    # Migrated from v2 /video/generate to v3 /videos per latest HeyGen docs.
-    # v3 supports the documented `fit: "cover"` field which actually crops the
-    # source to fill the canvas (v2 silently ignored fit, producing letterboxed
-    # output). v3 also supports caption burn-in via the `caption` object — the
-    # poll response then exposes `captioned_video_url` with captions baked in.
     if not HEYGEN_API_KEY:
         await _finalize(job_id, ok=False, url=None, actual_cost_cents=0)
         return
     captions_on = bool(job.get("captions", True))
+
+    # ---- Stage 1/3: voiceover ----
+    await db.renders.update_one(
+        {"id": job_id},
+        {"$set": {"status": "voiceover", "progress": 20, "progress_label": "Preparing voiceover…"}},
+    )
+    await asyncio.sleep(1.5)
+
+    # ---- Stage 2/3: submit to HeyGen. Try v3 first (cleaner crop + caption
+    # burn-in for Avatar IV/V); on the explicit "does not support Avatar IV"
+    # error, transparently fall back to the legacy v2 endpoint (Avatar III
+    # avatars). The customer never sees the fallback. ----
+    await db.renders.update_one(
+        {"id": job_id},
+        {"$set": {"status": "avatar", "progress": 45, "progress_label": "Generating avatar video…"}},
+    )
+
+    video_id = None
+    used_endpoint = "v3"
     async with httpx.AsyncClient(timeout=60) as client:
-        body = {
+        v3_body = {
             "type": "avatar",
             "avatar_id": job["avatar_id"],
             "script": job["script"],
             "voice_id": job["voice_id"],
             "aspect_ratio": "9:16" if job["aspect"] == "9_16" else "16:9",
-            # `cover` scales/crops the avatar to fill the canvas — this is the
-            # documented v3 field for cropping, replacing v2's letterbox default.
             "fit": "cover",
         }
         if captions_on:
-            # Setting `style` (alongside file_format) burns captions IN to the
-            # rendered video; HeyGen exposes the burned version at
-            # data.captioned_video_url on the poll response.
-            body["caption"] = {"file_format": "srt", "style": "default"}
+            v3_body["caption"] = {"file_format": "srt", "style": "default"}
         r = await client.post(
             "https://api.heygen.com/v3/videos",
             headers={"X-Api-Key": HEYGEN_API_KEY, "Accept": "application/json"},
-            json=body,
+            json=v3_body,
         )
-        if r.status_code != 200:
-            await db.renders.update_one(
-                {"id": job_id},
-                {"$set": {
-                    "status": "failed",
-                    "error": f"HeyGen API error {r.status_code}: {r.text[:300]}",
-                    "actual_cost_cents": actual_cost_cents,
-                    "completed_at": datetime.now(timezone.utc).isoformat(),
-                }},
-            )
-            return
-        video_id = (r.json().get("data") or {}).get("video_id") or (r.json().get("data") or {}).get("id")
+        if r.status_code == 200:
+            d = (r.json() or {}).get("data") or {}
+            video_id = d.get("video_id") or d.get("id")
+
+        # Fall back to v2 on Avatar IV incompatibility, or any other v3 error.
         if not video_id:
-            await db.renders.update_one(
-                {"id": job_id},
-                {"$set": {
-                    "status": "failed",
-                    "error": f"HeyGen returned no video_id: {r.text[:300]}",
-                    "actual_cost_cents": actual_cost_cents,
-                    "completed_at": datetime.now(timezone.utc).isoformat(),
-                }},
+            v3_err_text = r.text if r is not None else ""
+            v2_body = {
+                "video_inputs": [{
+                    "character": {
+                        "type": "avatar",
+                        "avatar_id": job["avatar_id"],
+                        "avatar_style": "normal",
+                    },
+                    "voice": {
+                        "type": "text",
+                        "voice_id": job["voice_id"],
+                        "input_text": job["script"],
+                    },
+                }],
+                "dimension": {
+                    "width": 1080 if job["aspect"] == "9_16" else 1920,
+                    "height": 1920 if job["aspect"] == "9_16" else 1080,
+                },
+                "aspect_ratio": "9:16" if job["aspect"] == "9_16" else "16:9",
+                "caption": captions_on,
+            }
+            r2 = await client.post(
+                "https://api.heygen.com/v2/video/generate",
+                headers={"X-Api-Key": HEYGEN_API_KEY, "Accept": "application/json"},
+                json=v2_body,
             )
-            return
-        # 2) Poll v3 GET /v3/videos/{id} — completion implied by presence of
-        # video_url; failure implied by failure_code. Up to ~5 minutes.
-        for _ in range(60):
-            await asyncio.sleep(5)
-            s = await client.get(
-                f"https://api.heygen.com/v3/videos/{video_id}",
-                headers={"X-Api-Key": HEYGEN_API_KEY},
-            )
-            d = (s.json() or {}).get("data") or {}
-            if d.get("failure_code"):
+            if r2.status_code != 200:
                 await db.renders.update_one(
                     {"id": job_id},
                     {"$set": {
                         "status": "failed",
-                        "error": f"HeyGen {d.get('failure_code')}: {d.get('failure_message') or 'no detail'}",
+                        "error": (
+                            f"HeyGen submit failed. v3: {r.status_code} {v3_err_text[:200]} "
+                            f"| v2: {r2.status_code} {r2.text[:200]}"
+                        ),
                         "actual_cost_cents": actual_cost_cents,
                         "completed_at": datetime.now(timezone.utc).isoformat(),
                     }},
                 )
                 return
-            # Prefer the captioned (burned-in) URL when captions were requested.
-            final_url = (
-                d.get("captioned_video_url") if captions_on else None
-            ) or d.get("video_url")
-            if final_url:
-                actual_cost_cents += int(round(_estimate_duration_seconds(job["script"]) / 60.0 * 30.0))
-                await _finalize(job_id, ok=True, url=final_url, actual_cost_cents=actual_cost_cents)
+            video_id = ((r2.json() or {}).get("data") or {}).get("video_id")
+            used_endpoint = "v2"
+            if not video_id:
+                await db.renders.update_one(
+                    {"id": job_id},
+                    {"$set": {
+                        "status": "failed",
+                        "error": f"HeyGen v2 returned no video_id: {r2.text[:300]}",
+                        "actual_cost_cents": actual_cost_cents,
+                        "completed_at": datetime.now(timezone.utc).isoformat(),
+                    }},
+                )
                 return
+
+        # ---- Stage 3/3: poll ----
+        for tick in range(60):
+            await asyncio.sleep(5)
+            # Animate the in-flight progress so it doesn't feel stuck during
+            # the long HeyGen render wait. Walks 50→85% across the poll window.
+            progress_now = min(85, 50 + tick)
+            label_now = ("Polishing avatar…" if tick > 6
+                         else "Rendering avatar frames…" if tick > 2
+                         else "Finalizing voiceover…")
+            await db.renders.update_one(
+                {"id": job_id},
+                {"$set": {"progress": progress_now, "progress_label": label_now}},
+            )
+            if used_endpoint == "v3":
+                s = await client.get(
+                    f"https://api.heygen.com/v3/videos/{video_id}",
+                    headers={"X-Api-Key": HEYGEN_API_KEY},
+                )
+                d = (s.json() or {}).get("data") or {}
+                if d.get("failure_code"):
+                    await db.renders.update_one(
+                        {"id": job_id},
+                        {"$set": {
+                            "status": "failed",
+                            "error": f"HeyGen {d.get('failure_code')}: {d.get('failure_message') or 'no detail'}",
+                            "actual_cost_cents": actual_cost_cents,
+                            "completed_at": datetime.now(timezone.utc).isoformat(),
+                        }},
+                    )
+                    return
+                final_url = (d.get("captioned_video_url") if captions_on else None) or d.get("video_url")
+                if final_url:
+                    actual_cost_cents += int(round(_estimate_duration_seconds(job["script"]) / 60.0 * 30.0))
+                    await _finalize(job_id, ok=True, url=final_url, actual_cost_cents=actual_cost_cents)
+                    return
+            else:  # v2 polling
+                s = await client.get(
+                    f"https://api.heygen.com/v1/video_status.get?video_id={video_id}",
+                    headers={"X-Api-Key": HEYGEN_API_KEY},
+                )
+                d = (s.json() or {}).get("data") or {}
+                if d.get("status") == "completed":
+                    actual_cost_cents += int(round(_estimate_duration_seconds(job["script"]) / 60.0 * 30.0))
+                    await _finalize(job_id, ok=True, url=d.get("video_url"), actual_cost_cents=actual_cost_cents)
+                    return
+                if d.get("status") == "failed":
+                    await db.renders.update_one(
+                        {"id": job_id},
+                        {"$set": {
+                            "status": "failed",
+                            "error": f"HeyGen returned status=failed: {d.get('error') or 'no detail'}",
+                            "actual_cost_cents": actual_cost_cents,
+                            "completed_at": datetime.now(timezone.utc).isoformat(),
+                        }},
+                    )
+                    return
     await db.renders.update_one(
         {"id": job_id},
         {"$set": {
@@ -713,24 +762,21 @@ async def _run_render_avatar(job: dict):
 
 
 # ---------------------------------------------------------------------------
-# fal.ai Faceless pipeline (DRY_RUN scaffolding)
+# fal.ai Faceless pipeline — real renders only.
 # Real flow: Kokoro TTS → Flux per-scene images → ffmpeg compose.
 # ---------------------------------------------------------------------------
 async def _run_render_faceless(job: dict):
     job_id = job["id"]
-    dry_run = job.get("dry_run", True)
     scenes = job.get("scenes") or []
     actual_cost_cents = 0
+    n_scenes = max(1, len(scenes))
 
-    await _walk_stages(job_id, [
-        ("voiceover", 20, "Generating voiceover…"),
-        ("visuals", 55, f"Generating {max(1, len(scenes))} scene visuals…"),
-        ("composing", 85, "Stitching b-roll together…"),
-    ], dry_run)
-
-    if dry_run:
-        await _finalize(job_id, ok=True, url=SAMPLE_VIDEO_URL, actual_cost_cents=0)
-        return
+    # ---- Stage 1/4: voiceover ----
+    await db.renders.update_one(
+        {"id": job_id},
+        {"$set": {"status": "voiceover", "progress": 10, "progress_label": "Preparing voiceover…"}},
+    )
+    await asyncio.sleep(0.8)
 
     if not FAL_API_KEY:
         await _finalize(job_id, ok=False, url=None, actual_cost_cents=0)
@@ -738,12 +784,14 @@ async def _run_render_faceless(job: dict):
 
     fal_headers = {"Authorization": f"Key {FAL_API_KEY}", "Content-Type": "application/json"}
 
+    async def _set_progress(progress: int, label: str, status: Optional[str] = None):
+        update = {"progress": progress, "progress_label": label}
+        if status:
+            update["status"] = status
+        await db.renders.update_one({"id": job_id}, {"$set": update})
+
     async def _fal_queue_run(model_id: str, payload: dict, *, max_wait_s: int = 600) -> Optional[dict]:
-        """Submit a job to fal.ai's queue endpoint and poll for completion.
-        Returns the final response JSON, or None on failure (job already
-        finalized with a descriptive error). Replaces the synchronous
-        `fal.run/<model>` call which times out at 120s on long compose jobs.
-        """
+        """Submit a job to fal.ai's queue endpoint and poll for completion."""
         async with httpx.AsyncClient(timeout=30) as qclient:
             sub = await qclient.post(f"https://queue.fal.run/{model_id}", headers=fal_headers, json=payload)
             if sub.status_code not in (200, 202):
@@ -751,7 +799,7 @@ async def _run_render_faceless(job: dict):
                     {"id": job_id},
                     {"$set": {
                         "status": "failed",
-                        "error": f"fal.ai {model_id} submit error {sub.status_code}: {sub.text[:300]}",
+                        "error": f"Compose submit error {sub.status_code}: {sub.text[:300]}",
                         "actual_cost_cents": actual_cost_cents,
                         "completed_at": datetime.now(timezone.utc).isoformat(),
                     }},
@@ -763,7 +811,7 @@ async def _run_render_faceless(job: dict):
                     {"id": job_id},
                     {"$set": {
                         "status": "failed",
-                        "error": f"fal.ai {model_id} returned no request_id",
+                        "error": "Compose returned no request_id",
                         "actual_cost_cents": actual_cost_cents,
                         "completed_at": datetime.now(timezone.utc).isoformat(),
                     }},
@@ -785,7 +833,7 @@ async def _run_render_faceless(job: dict):
                             {"id": job_id},
                             {"$set": {
                                 "status": "failed",
-                                "error": f"fal.ai {model_id} fetch result {res.status_code}: {res.text[:300]}",
+                                "error": f"Compose fetch error {res.status_code}: {res.text[:300]}",
                                 "actual_cost_cents": actual_cost_cents,
                                 "completed_at": datetime.now(timezone.utc).isoformat(),
                             }},
@@ -798,7 +846,7 @@ async def _run_render_faceless(job: dict):
                         {"id": job_id},
                         {"$set": {
                             "status": "failed",
-                            "error": f"fal.ai {model_id} returned FAILED: {str(err)[:300]}",
+                            "error": f"Compose returned FAILED: {str(err)[:300]}",
                             "actual_cost_cents": actual_cost_cents,
                             "completed_at": datetime.now(timezone.utc).isoformat(),
                         }},
@@ -808,14 +856,15 @@ async def _run_render_faceless(job: dict):
                 {"id": job_id},
                 {"$set": {
                     "status": "failed",
-                    "error": f"fal.ai {model_id} polling timed out after {max_wait_s}s",
+                    "error": f"Compose polling timed out after {max_wait_s}s",
                     "actual_cost_cents": actual_cost_cents,
                     "completed_at": datetime.now(timezone.utc).isoformat(),
                 }},
             )
             return None
 
-    # 1) Kokoro TTS — single call (fast enough to keep synchronous)
+    # 1) Kokoro TTS — single call
+    await _set_progress(20, "Generating voiceover with Kokoro TTS…")
     async with httpx.AsyncClient(timeout=120) as client:
         tts_r = await client.post(
             f"https://fal.run/{_kokoro_endpoint(job.get('tts_voice_id') or 'af_heart')}",
@@ -827,36 +876,69 @@ async def _run_render_faceless(job: dict):
                 {"id": job_id},
                 {"$set": {
                     "status": "failed",
-                    "error": f"fal.ai Kokoro TTS error {tts_r.status_code}: {tts_r.text[:300]}",
+                    "error": f"Voiceover error {tts_r.status_code}: {tts_r.text[:300]}",
                     "actual_cost_cents": actual_cost_cents,
                     "completed_at": datetime.now(timezone.utc).isoformat(),
                 }},
             )
             return
-        audio_url = tts_r.json().get("audio_url") or tts_r.json().get("audio", {}).get("url")
+        tts_json = tts_r.json()
+        audio_url = tts_json.get("audio_url") or (tts_json.get("audio") or {}).get("url")
         actual_cost_cents += int((len(job["script"]) / 1000.0) * 5)
 
-        # 2) Flux per-scene images (parallel) — short jobs, sync is fine
-        image_urls = []
-        if (job.get("broll_source") or "ai") == "ai":
-            async def gen_image(prompt):
-                ir = await client.post(
-                    "https://fal.run/fal-ai/flux-pro/v1.1",
-                    headers=fal_headers,
-                    json={"prompt": prompt, "image_size": "portrait_16_9" if job["aspect"] == "9_16" else "landscape_16_9"},
-                )
-                return ir.json().get("images", [{}])[0].get("url") if ir.status_code == 200 else None
-            image_urls = await asyncio.gather(*[gen_image(s.get("prompt", "")) for s in scenes])
-            actual_cost_cents += len(scenes) * 4
-        # else: use scene["url"] already populated by Pexels/Pixabay picker
+        # 2) Per-scene visuals. AI scenes use Flux 1.1 Pro; stock scenes use
+        # their pre-picked URL. We surface per-scene progress so the user
+        # knows exactly which scene is rendering.
+        await _set_progress(30, f"Generating scene visuals (0 of {n_scenes})…", status="visuals")
+        image_urls: list = [None] * len(scenes)
 
-    # 3) Optional captions for faceless — transcribe TTS audio with Whisper
-    # to get segment-level timestamps, then burn captions in via a dedicated
-    # caption-video step AFTER compose (fal.ai's ffmpeg-api/compose tracks
-    # schema only supports video+audio, not subtitle tracks, so we have to
-    # do this as a 2-step pipeline).
+        async def gen_image(idx: int, prompt: str):
+            ir = await client.post(
+                "https://fal.run/fal-ai/flux-pro/v1.1",
+                headers=fal_headers,
+                json={
+                    "prompt": prompt,
+                    "image_size": "portrait_16_9" if job["aspect"] == "9_16" else "landscape_16_9",
+                },
+            )
+            if ir.status_code != 200:
+                return None
+            data = ir.json()
+            return (data.get("images") or [{}])[0].get("url")
+
+        # Resolve URLs per scene. If broll_source==ai (or scene-level AI),
+        # call Flux; else use scene.video_url / scene.url from the picker.
+        global_source = job.get("broll_source") or "ai"
+        ai_tasks = []
+        for i, s in enumerate(scenes):
+            effective_src = s.get("source") or global_source
+            if effective_src == "ai":
+                ai_tasks.append((i, s.get("prompt", "")))
+            else:
+                image_urls[i] = s.get("video_url") or s.get("url") or s.get("thumb")
+
+        completed = 0
+        total_ai = len(ai_tasks)
+        # Fire all Flux jobs in parallel but tick progress as each one finishes.
+        async def gen_and_tick(idx: int, prompt: str):
+            nonlocal completed
+            url = await gen_image(idx, prompt)
+            image_urls[idx] = url
+            completed += 1
+            base = 30
+            span = 25  # 30 → 55%
+            pct = base + int(span * (completed / max(1, total_ai)))
+            await _set_progress(pct, f"Generating scene visuals ({completed} of {n_scenes}) · Flux 1.1 Pro")
+            return url
+
+        if ai_tasks:
+            await asyncio.gather(*[gen_and_tick(i, p) for i, p in ai_tasks])
+            actual_cost_cents += total_ai * 4
+
+    # 3) Optional caption transcript (Whisper) — best-effort
     captions_srt = None
     if job.get("captions", True) and audio_url:
+        await _set_progress(60, "Transcribing audio for captions…")
         try:
             wres = await _fal_queue_run(
                 "fal-ai/wizper",
@@ -864,7 +946,6 @@ async def _run_render_faceless(job: dict):
                 max_wait_s=180,
             )
             if wres and wres.get("chunks"):
-                # Build a simple SRT string in-memory.
                 def _fmt_srt_ts(s):
                     h = int(s // 3600)
                     m = int((s % 3600) // 60)
@@ -882,63 +963,108 @@ async def _run_render_faceless(job: dict):
         except Exception:
             captions_srt = None  # best-effort
 
-    # 4) Compose — fal.ai ffmpeg async queue. Schema rule per fal.ai docs:
-    # every keyframe MUST have `timestamp` + `duration` + `url`. Iter-13/14
-    # was sending the audio keyframe with `timestamp: 0` only — the worker
-    # accepted the submit but spun forever waiting for an audio end signal,
-    # which is the >600s polling timeout the user kept seeing.
+    # 4) Compose — fal.ai ffmpeg-api/compose.
+    #
+    # CRITICAL: fal.ai ffmpeg-api/compose expects `timestamp` and `duration`
+    # in MILLISECONDS, not seconds. We were sending seconds (e.g. duration=4
+    # for a 4-second clip), which made the worker treat clips as 4ms slivers
+    # and spin forever waiting for the audio (which was 20000ms intended but
+    # we passed `20`). That's the 600s polling timeout. All values *1000 below.
     tracks = []
-    total_video_duration = 0
-    if scenes:
-        per_dur = max(2, int(_estimate_duration_seconds(job["script"]) / max(1, len(scenes))))
+    total_video_ms = 0
+    valid_urls = [(i, u) for i, u in enumerate(image_urls) if u]
+    if valid_urls:
+        # Per-scene duration distributes the audio length across the visuals.
+        target_ms = int(_estimate_duration_seconds(job["script"]) * 1000)
+        per_dur_ms = max(2000, target_ms // max(1, len(valid_urls)))
         keyframes = []
-        cursor = 0.0
-        for i, s in enumerate(scenes):
-            url = image_urls[i] if image_urls and i < len(image_urls) else s.get("url")
-            if not url:
-                continue
-            keyframes.append({"url": url, "timestamp": cursor, "duration": per_dur})
-            cursor += per_dur
-        if keyframes:
-            tracks.append({"id": "video", "type": "video", "keyframes": keyframes})
-            total_video_duration = cursor
+        cursor_ms = 0
+        for _, url in valid_urls:
+            keyframes.append({
+                "url": url,
+                "timestamp": cursor_ms,
+                "duration": per_dur_ms,
+            })
+            cursor_ms += per_dur_ms
+        # Use "image" type for stills (Flux output), "video" for picker URLs.
+        # We don't reliably know which is which scene-by-scene, so we use
+        # "video" track type for the whole thing — ffmpeg-api/compose handles
+        # both still images and video clips on a video track.
+        tracks.append({"id": "video", "type": "video", "keyframes": keyframes})
+        total_video_ms = cursor_ms
     if audio_url:
-        # Audio duration falls back to the video timeline length so the
-        # ffmpeg worker has a definite stop point. fal.ai will cut the audio
-        # if it's actually shorter; pad with silence if longer.
-        audio_duration = max(5, total_video_duration or int(_estimate_duration_seconds(job["script"])))
+        audio_dur_ms = max(5000, total_video_ms or int(_estimate_duration_seconds(job["script"]) * 1000))
         tracks.append({
             "id": "audio",
             "type": "audio",
-            "keyframes": [{"url": audio_url, "timestamp": 0, "duration": audio_duration}],
+            "keyframes": [{"url": audio_url, "timestamp": 0, "duration": audio_dur_ms}],
         })
 
-    compose_res = await _fal_queue_run(
-        "fal-ai/ffmpeg-api/compose",
-        {"tracks": tracks},
-        max_wait_s=600,
-    )
+    # Granular composing progress with sub-step labels so the UI never looks stuck.
+    await _set_progress(70, f"Stitching scene 1 of {n_scenes}…", status="composing")
+
+    # Spawn a background tick task that walks per-scene labels while compose runs.
+    stop_ticking = asyncio.Event()
+
+    async def tick_compose_progress():
+        # Walks "Stitching scene N of M…" labels at a slow cadence so the user
+        # always sees motion in the label even though we only get one final
+        # callback from fal.ai when the whole job finishes.
+        scene_idx = 1
+        progress_pct = 70
+        while not stop_ticking.is_set():
+            try:
+                await asyncio.wait_for(stop_ticking.wait(), timeout=4.0)
+                break
+            except asyncio.TimeoutError:
+                pass
+            scene_idx = min(n_scenes, scene_idx + 1)
+            progress_pct = min(90, progress_pct + 2)
+            try:
+                await _set_progress(progress_pct, f"Stitching scene {scene_idx} of {n_scenes}…")
+            except Exception:
+                pass
+
+    ticker_task = asyncio.create_task(tick_compose_progress())
+    try:
+        compose_res = await _fal_queue_run(
+            "fal-ai/ffmpeg-api/compose",
+            {"tracks": tracks},
+            max_wait_s=600,
+        )
+    finally:
+        stop_ticking.set()
+        try:
+            await asyncio.wait_for(ticker_task, timeout=1.0)
+        except Exception:
+            pass
+
     actual_cost_cents += 2
     if not compose_res:
         return  # _fal_queue_run already finalized the job with an error
     composed_url = compose_res.get("video_url") or (compose_res.get("video") or {}).get("url")
 
-    # 5) Optional caption burn-in. We've prepared the SRT — upload it as a
-    # data URL and run ffmpeg-api with a -vf subtitles= filter via the
-    # "filter-video" or "caption-video" endpoint. Best-effort: if the caption
-    # step fails, ship the un-captioned video rather than failing the whole job.
+    # 5) Optional caption burn-in. Best-effort 2nd compose pass with SRT.
     out_url = composed_url
     if captions_srt and composed_url:
+        await _set_progress(92, "Burning in captions…")
         try:
+            # Single video keyframe spanning the full composed clip — duration
+            # in MILLISECONDS to match the compose schema fix above.
             cap_res = await _fal_queue_run(
                 "fal-ai/ffmpeg-api/compose",
                 {
                     "tracks": [
-                        {"id": "v", "type": "video", "keyframes": [{"url": composed_url, "timestamp": 0}]},
+                        {
+                            "id": "v",
+                            "type": "video",
+                            "keyframes": [{
+                                "url": composed_url,
+                                "timestamp": 0,
+                                "duration": max(5000, total_video_ms or 20000),
+                            }],
+                        },
                     ],
-                    # Most fal.ai ffmpeg endpoints honour an `srt_url` or
-                    # `srt` literal — pass both shapes since the exact field
-                    # name isn't documented; the API ignores unknown keys.
                     "srt": captions_srt,
                 },
                 max_wait_s=300,
@@ -954,13 +1080,12 @@ async def _run_render_faceless(job: dict):
 
 
 # ---------------------------------------------------------------------------
-# Composite Avatar + B-roll cutaways pipeline (DRY_RUN scaffolding)
+# Composite Avatar + B-roll cutaways pipeline — real renders only.
 # Real flow: render HeyGen talking-head as base track + Flux B-roll cutaways
 # every N seconds + ffmpeg overlay.
 # ---------------------------------------------------------------------------
 async def _run_render_composite(job: dict):
     job_id = job["id"]
-    dry_run = job.get("dry_run", True)
     duration_s = _estimate_duration_seconds(job["script"])
     interval_s = max(1, int(job.get("broll_cutaway_interval_s", 12)))
     cutaway_count = max(1, int(duration_s / interval_s))
@@ -969,21 +1094,16 @@ async def _run_render_composite(job: dict):
         ("avatar", 25, "Generating avatar video…"),
         ("cutaways", 55, f"Generating {cutaway_count} b-roll cutaways…"),
         ("composing", 85, "Composing final video…"),
-    ], dry_run)
-
-    if dry_run:
-        await _finalize(job_id, ok=True, url=SAMPLE_VIDEO_URL, actual_cost_cents=0)
-        return
+    ])
 
     # Real path: render HeyGen talking-head as base track, generate
     # cutaway_count Flux B-roll images, then call ffmpeg overlay endpoint
-    # with cutaway timestamps. Not yet implemented — flip dry_run off only
-    # AFTER this branch is filled in. Until then surface a clear error.
+    # with cutaway timestamps. Not yet implemented — surface a clear error.
     await db.renders.update_one(
         {"id": job_id},
         {"$set": {
             "status": "failed",
-            "error": "Composite real-render not implemented yet — keep dry_run on for composite mode.",
+            "error": "Composite render not implemented yet. Use Avatar or Faceless mode for now.",
             "actual_cost_cents": 0,
             "completed_at": datetime.now(timezone.utc).isoformat(),
         }},
@@ -992,19 +1112,14 @@ async def _run_render_composite(job: dict):
 
 @api.post("/studio/render/estimate")
 async def studio_render_estimate(payload: RenderRequest, user: AuthUser = Depends(current_user)):
-    """Returns the conservative cost estimate + cap for a candidate render.
-    Used by the admin 'Use real render' toggle to show '~$X.XX' live as the
-    user changes mode/aspect/script length."""
+    """Internal telemetry: conservative cost estimate (cents) for a candidate
+    render. No customer-facing cap enforcement — the silent circuit-breaker
+    lives in /studio/render and uses RENDER_COST_CIRCUIT_BREAKER_CENTS."""
     require_studio(user)
     cents = estimate_render_cost_cents(payload)
     return {
         "estimated_cost_cents": cents,
         "estimated_cost_dollars": round(cents / 100.0, 2),
-        "cap_cents": RENDER_COST_CAP_CENTS,
-        "cap_dollars": round(RENDER_COST_CAP_CENTS / 100.0, 2),
-        "exceeds_cap": cents > RENDER_COST_CAP_CENTS,
-        "dry_run_default": DRY_RUN_RENDERS,
-        "is_admin": user.email.lower() in ADMIN_EMAILS,
     }
 
 
@@ -1016,29 +1131,20 @@ async def studio_render(payload: RenderRequest, user: AuthUser = Depends(current
     if not payload.script.strip():
         raise HTTPException(status_code=400, detail="Script required")
 
-    is_admin = user.email.lower() in ADMIN_EMAILS
-    # Resolve effective dry_run:
-    # - Customers always run against the env default. We ignore any dry_run
-    #   override they try to send so a stray flag in a request body can't
-    #   turn off real renders for paying customers (or vice-versa).
-    # - Admins may override per-request; default is the env value when None.
-    if is_admin and payload.dry_run is not None:
-        effective_dry_run = payload.dry_run
-    else:
-        effective_dry_run = DRY_RUN_RENDERS
-
-    # Cost guard — applies even when dry_run is True so admins can't
-    # accidentally fire a $5 sprint by toggling dry_run off after the
-    # fact. The cap is the cents value at the top of this file.
+    # Silent runaway-cost circuit-breaker. Not customer-facing cost
+    # protection — exists to catch pathological inputs (malformed scripts,
+    # scene counts, etc.) before they hit a paid API. Plan-level usage
+    # caps live at the subscription layer (not enforced in code yet).
     estimated_cents = estimate_render_cost_cents(payload)
-    if estimated_cents > RENDER_COST_CAP_CENTS:
+    if estimated_cents > RENDER_COST_CIRCUIT_BREAKER_CENTS:
+        logging.warning(
+            "Render circuit-breaker tripped: user=%s mode=%s estimated=%s¢ threshold=%s¢ script_len=%s scenes=%s",
+            user.email, payload.mode, estimated_cents, RENDER_COST_CIRCUIT_BREAKER_CENTS,
+            len(payload.script), len(payload.scenes),
+        )
         raise HTTPException(
             status_code=400,
-            detail=(
-                f"Render rejected: estimated ${estimated_cents/100:.2f} exceeds "
-                f"hard cap of ${RENDER_COST_CAP_CENTS/100:.2f}. "
-                f"Shorten the script or pick a cheaper mode."
-            ),
+            detail="Render configuration is too large. Please contact support.",
         )
 
     job_id = str(uuid.uuid4())
@@ -1061,7 +1167,6 @@ async def studio_render(payload: RenderRequest, user: AuthUser = Depends(current
         "progress_label": "Queued…",
         "result_url": None,
         "error": None,
-        "dry_run": effective_dry_run,
         "estimated_cost_cents": estimated_cents,
         "actual_cost_cents": 0,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -1078,7 +1183,6 @@ async def studio_render(payload: RenderRequest, user: AuthUser = Depends(current
         "tts_voice_id": payload.tts_voice_id,
         "broll_source": payload.broll_source,
         "scene_count": len(payload.scenes),
-        "dry_run": effective_dry_run,
         "estimated_cost_cents": estimated_cents,
     })
 

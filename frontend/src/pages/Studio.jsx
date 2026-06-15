@@ -9,13 +9,12 @@ import {
   CaptionsPicker,
   StockPicker,
 } from "../components/Pickers";
-import AdminRenderControl, { ConfirmRealRenderModal } from "../components/AdminRenderControl";
 import Toast from "../components/Toast";
 
 const MODES = { AVATAR: "avatar", FACELESS: "faceless" };
 const MAX_SCENES = 12;
 const SOURCE_HINT = {
-  ai:      "An image will be generated from your prompt.",
+  ai:      "An image will be generated from your prompt with Flux 1.1 Pro by Black Forest Labs.",
   pexels:  "We'll search the Pexels stock library.",
   pixabay: "We'll search the Pixabay stock library.",
 };
@@ -27,6 +26,22 @@ function fmtDate(iso) {
   catch { return iso; }
 }
 const modeChipLabel = (m) => (m === MODES.AVATAR ? "Avatar" : "Faceless");
+
+// Translate raw backend / HeyGen errors into friendly customer-facing copy.
+// We surface script-length issues as a script suggestion (no vendor names,
+// no cost language).
+function friendlyRenderError(e) {
+  const raw = (e?.response?.data?.detail || e?.message || "").toString();
+  const lower = raw.toLowerCase();
+  if (lower.includes("script") && (lower.includes("too long") || lower.includes("character") || lower.includes("length") || lower.includes("limit"))) {
+    return "Your script is too long for an avatar video — try shortening it or splitting it into two parts.";
+  }
+  if (lower.includes("configuration is too large")) {
+    return "Render configuration is too large. Please contact support.";
+  }
+  if (!raw) return "Could not start render. Try again.";
+  return raw;
+}
 
 const SOURCE_PILL_OPTS = [
   { id: "ai", label: "AI" },
@@ -134,11 +149,9 @@ export default function Studio() {
   const [renderErr, setRenderErr] = useState("");
   const pollRef = useRef(null);
 
-  // Admin-only state — never persisted: defaults OFF every page load.
+  // Auth context (kept for entitlement gating elsewhere, not for render gating).
   const { user } = useAuth();
   const isAdmin = !!user?.isAdmin;
-  const [useReal, setUseReal] = useState(false);
-  const [confirmReal, setConfirmReal] = useState(null);  // {dollars} when open
   const [toast, setToast] = useState("");
   // Per-row selection for bulk-delete in the Recent renders list.
   const [selectedIds, setSelectedIds] = useState(() => new Set());
@@ -269,97 +282,60 @@ export default function Studio() {
   });
 
   // ---- Generate ----
-  // Admin + useReal flow: fetch a fresh estimate, open the confirm modal,
-  // then fire the render with `dry_run: false` after the modal's 1s-delayed
-  // confirm button is clicked. Customers (and admins with useReal=false)
-  // simply fire the render — the backend handles the rest with the env
-  // default dry_run.
-  const fireRender = async (dryRunOverride) => {
+  // Production behavior: every render is real. No dry-run, no admin gate,
+  // no confirm modal. The backend's silent circuit-breaker rejects only
+  // pathological payloads; everything else fires the real pipeline.
+  const fireRender = async (body) => {
     setRenderErr("");
     try {
-      const body = buildPayload();
-      if (dryRunOverride !== undefined) body.dry_run = dryRunOverride;
       const r = await apiClient.post("/studio/render", body);
       setRender(r.data);
-      setToast(
-        body.dry_run === false
-          ? "Real render started — scroll up to watch progress."
-          : "Render started…"
-      );
+      setToast("Render started…");
       scrollToRenderCard();
       pollStatus(r.data.id);
     } catch (e) {
-      setRenderErr(e?.response?.data?.detail || "Could not start render. Try again.");
+      setRenderErr(friendlyRenderError(e));
     }
   };
 
-  const generate = async () => {
-    if (!isAdmin || !useReal) {
-      // Customer path — backend handles dry_run from env default.
-      fireRender(undefined);
-      return;
-    }
-    // Admin "Use real render" path — re-fetch estimate then open confirm modal.
-    try {
-      const estR = await apiClient.post("/studio/render/estimate", buildPayload());
-      if (estR.data.exceeds_cap) {
-        setRenderErr(`Estimated $${estR.data.estimated_cost_dollars.toFixed(2)} exceeds the $${estR.data.cap_dollars.toFixed(2)} hard cap.`);
-        return;
-      }
-      setConfirmReal({ dollars: estR.data.estimated_cost_dollars.toFixed(2) });
-    } catch (e) {
-      setRenderErr(e?.response?.data?.detail || "Could not estimate cost.");
-    }
-  };
+  const generate = () => fireRender(buildPayload());
 
-  // Admin QA helper: re-fire the SAME render payload but force dry_run=true.
-  // Useful for sanity-checking pipeline plumbing without spending real credits
-  // — e.g. after a real render finishes, click "Re-run as dry-run" to verify
-  // the same stages walk through without burning more API budget.
-  const rerenderAsDryRun = async (sourceDoc) => {
+  // Re-fire the SAME render payload (same script, avatar, voice, scenes).
+  // Smoother UX than rebuilding the form when iterating on a render.
+  const regenerate = async (sourceDoc) => {
     if (!sourceDoc) return;
     setRenderErr("");
-    // Visual reset so admin sees the click registered even if the new render
-    // walks stages faster than the eye can track. We replace progress/label
-    // immediately rather than waiting for the new doc to come back from POST.
+    // Visual reset so the click registers immediately.
     setRender({
       ...sourceDoc,
       id: null,
       status: "queued",
       progress: 0,
-      progress_label: "Re-firing as dry-run…",
+      progress_label: "Regenerating…",
       result_url: null,
       error: null,
     });
+    const body = {
+      mode: sourceDoc.mode,
+      script: sourceDoc.script,
+      aspect: sourceDoc.aspect,
+      captions: sourceDoc.captions,
+      caption_style: sourceDoc.caption_style,
+      avatar_id: sourceDoc.avatar_id,
+      voice_id: sourceDoc.voice_id,
+      tts_voice_id: sourceDoc.tts_voice_id,
+      broll_source: sourceDoc.broll_source,
+      scenes: sourceDoc.scenes || [],
+      broll_cutaway_interval_s: sourceDoc.broll_cutaway_interval_s ?? 12,
+    };
     try {
-      const body = {
-        mode: sourceDoc.mode,
-        script: sourceDoc.script,
-        aspect: sourceDoc.aspect,
-        captions: sourceDoc.captions,
-        avatar_id: sourceDoc.avatar_id,
-        voice_id: sourceDoc.voice_id,
-        tts_voice_id: sourceDoc.tts_voice_id,
-        broll_source: sourceDoc.broll_source,
-        scenes: sourceDoc.scenes || [],
-        broll_cutaway_interval_s: sourceDoc.broll_cutaway_interval_s ?? 12,
-        dry_run: true,
-      };
       const r = await apiClient.post("/studio/render", body);
       setRender(r.data);
-      setToast("Re-firing as dry-run — scroll up to watch.");
+      setToast("Regenerating — scroll up to watch.");
       scrollToRenderCard();
       pollStatus(r.data.id);
-      setTimeout(
-        () =>
-          document.querySelector('[data-testid="render-card"]')?.scrollIntoView({
-            behavior: "smooth",
-            block: "start",
-          }),
-        100
-      );
     } catch (e) {
-      setRenderErr(e?.response?.data?.detail || "Could not re-render.");
+      setRenderErr(friendlyRenderError(e));
     }
   };
 
@@ -491,9 +467,9 @@ export default function Studio() {
     </button>
   );
   // Caption-style picker — only meaningful when captions are ON and we're in
-  // Faceless mode (Avatar mode uses HeyGen's auto-styled burn-in which we
-  // don't control). Rendered as a compact pill-group rather than a modal so
-  // the user can A/B styles without 3 extra clicks.
+  // Faceless mode only — Avatar mode uses HeyGen's auto-styled burn-in
+  // which the user can't currently override, so we hide the picker entirely
+  // there to keep the UI clean.
   const captionStyles = [
     { id: "minimal", label: "Minimal" },
     { id: "boxed", label: "Boxed" },
@@ -501,7 +477,7 @@ export default function Studio() {
     { id: "outlined", label: "Outlined" },
   ];
   const chipCaptionStyle =
-    captions ? (
+    captions && mode === MODES.FACELESS ? (
       <div className="chip-pill-group" data-testid="caption-style-group">
         <span className="chip-pill-label">Style</span>
         {captionStyles.map((s) => (
@@ -515,9 +491,6 @@ export default function Studio() {
             {s.label}
           </button>
         ))}
-        {mode === MODES.AVATAR && (
-          <span className="chip-pill-note">Avatar mode currently uses HeyGen's auto styling — picker preserved for future Template-API support.</span>
-        )}
       </div>
     ) : null;
   const brollChipLabel = {
@@ -746,7 +719,25 @@ export default function Studio() {
                       {SOURCE_SHORT[s.source]}
                     </span>
                   )}
-                  {s.pick?.thumb && <img src={s.pick.thumb} alt="" />}
+                  {s.pick?.thumb ? (
+                    <img src={s.pick.thumb} alt="" />
+                  ) : (
+                    <div className="storyboard-thumb-placeholder" data-source={s.source || "none"} aria-hidden="true">
+                      {s.source === "ai" ? (
+                        <>
+                          <Sparkles size={22} />
+                          <span className="storyboard-thumb-engine">Flux 1.1 Pro</span>
+                        </>
+                      ) : s.source === "pexels" || s.source === "pixabay" ? (
+                        <>
+                          <Film size={22} />
+                          <span className="storyboard-thumb-engine">{s.source === "pexels" ? "Pexels search" : "Pixabay search"}</span>
+                        </>
+                      ) : (
+                        <span className="storyboard-thumb-engine">No source</span>
+                      )}
+                    </div>
+                  )}
                 </div>
                 <div className="storyboard-meta">
                   <div className="storyboard-prompt">{s.prompt}</div>
@@ -760,15 +751,6 @@ export default function Studio() {
         </div>
       )}
 
-      {/* Admin-only: dry-run override + live cost estimate */}
-      {isAdmin && (
-        <AdminRenderControl
-          payload={buildPayload()}
-          useReal={useReal}
-          setUseReal={setUseReal}
-        />
-      )}
-
       {/* Generate */}
       <div className="cta-block">
         <button
@@ -777,7 +759,7 @@ export default function Studio() {
           disabled={!canGenerate || (render && render.status !== "complete" && render.status !== "failed")}
           onClick={generate}
         >
-          {isAdmin && useReal ? "Render (real)" : "Render your video"}
+          Render your video
         </button>
         {!canGenerate && (
           <p className="cta-hint" data-testid="cta-hint">
@@ -796,6 +778,27 @@ export default function Studio() {
       {/* Active render */}
       {render && (
         <div className="render-card" data-testid="render-card">
+          {/* Video-forming skeleton — shown while render is in progress.
+             Replaces the boring static bar with a real container that
+             visually conveys "your video is taking shape." */}
+          {render.status !== "complete" && render.status !== "failed" && (
+            <div
+              className={`render-skeleton ${render.aspect === "9_16" ? "is-portrait" : "is-landscape"}`}
+              data-testid="render-skeleton"
+            >
+              <div className="render-skeleton-stripes" aria-hidden="true" />
+              <div className="render-skeleton-glow" aria-hidden="true" />
+              <div className="render-skeleton-center">
+                <div className="render-skeleton-play" aria-hidden="true">
+                  <Play size={28} />
+                </div>
+                <div className="render-skeleton-label" data-testid="render-skeleton-label">
+                  {render.progress_label || "Building your video…"}
+                </div>
+                <div className="render-skeleton-pct">{render.progress}%</div>
+              </div>
+            </div>
+          )}
           <div className="render-status">
             <span className="render-status-label" data-testid="render-status-label">
               {render.progress_label || render.status}
@@ -812,17 +815,19 @@ export default function Studio() {
             <video className={`render-video ${render.aspect === "9_16" ? "is-portrait" : ""}`} data-testid="render-video" src={render.result_url} controls playsInline />
           )}
           {render.status === "failed" && (
-            <p style={{ color: "var(--danger)", margin: 0 }}>Render failed: {render.error || "unknown error"}</p>
+            <p style={{ color: "var(--danger)", margin: 0 }}>
+              Render failed: {friendlyRenderError({ response: { data: { detail: render.error } } })}
+            </p>
           )}
-          {isAdmin && (render.status === "complete" || render.status === "failed") && (
+          {(render.status === "complete" || render.status === "failed") && (
             <button
               type="button"
               className="header-btn"
-              data-testid="render-card-rerun-dryrun"
-              onClick={() => rerenderAsDryRun(render)}
+              data-testid="render-card-regenerate"
+              onClick={() => regenerate(render)}
               style={{ alignSelf: "flex-start" }}
             >
-              <RotateCw size={13} /> Re-run as dry-run
+              <RotateCw size={13} /> Regenerate
             </button>
           )}
         </div>
@@ -918,20 +923,20 @@ export default function Studio() {
                       <Play size={14} />
                     </a>
                   )}
-                  {isAdmin && (r.status === "complete" || r.status === "failed") && (
+                  {(r.status === "complete" || r.status === "failed") && (
                     <button
                       className="icon-btn"
-                      data-testid={`history-rerun-dryrun-${r.id}`}
+                      data-testid={`history-regenerate-${r.id}`}
                       onClick={async () => {
                         try {
                           const full = await apiClient.get(`/studio/render/${r.id}`);
-                          rerenderAsDryRun(full.data);
+                          regenerate(full.data);
                         } catch (e) {
-                          setRenderErr(e?.response?.data?.detail || "Could not load source render.");
+                          setRenderErr(friendlyRenderError(e));
                         }
                       }}
-                      aria-label="Re-run as dry-run"
-                      title="Re-run as dry-run"
+                      aria-label="Regenerate"
+                      title="Regenerate with same settings"
                     >
                       <RotateCw size={14} />
                     </button>
@@ -983,18 +988,6 @@ export default function Studio() {
           if (stockModal.idx >= 0) setScenePick(stockModal.idx, r);
         }}
       />
-
-      {/* Admin: confirm-real-render modal */}
-      {confirmReal && (
-        <ConfirmRealRenderModal
-          estimateDollars={confirmReal.dollars}
-          onCancel={() => setConfirmReal(null)}
-          onConfirm={() => {
-            setConfirmReal(null);
-            fireRender(false);
-          }}
-        />
-      )}
 
       <Toast message={toast} onDismiss={() => setToast("")} />
     </main>
