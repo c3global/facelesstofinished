@@ -1057,7 +1057,7 @@ async def _run_render_faceless(job: dict):
         compose_res = await _fal_queue_run(
             "fal-ai/ffmpeg-api/compose",
             {"tracks": tracks},
-            max_wait_s=600,
+            max_wait_s=900,  # 15 minutes — covers slow Pexels CDN fetches + heavy compose jobs
         )
     finally:
         stop_ticking.set()
@@ -1094,7 +1094,7 @@ async def _run_render_faceless(job: dict):
                     ],
                     "srt": captions_srt,
                 },
-                max_wait_s=300,
+                max_wait_s=600,  # caption burn-in is single-file, fast
             )
             if cap_res:
                 cap_url = cap_res.get("video_url") or (cap_res.get("video") or {}).get("url")

@@ -148,6 +148,9 @@ export default function Studio() {
   const [history, setHistory] = useState([]);
   const [renderErr, setRenderErr] = useState("");
   const pollRef = useRef(null);
+  // Separate ref for the background history-list poll so it can run while
+  // pollRef is focused on the latest in-flight render.
+  const historyPollRef = useRef(null);
 
   // Auth context (kept for entitlement gating elsewhere, not for render gating).
   const { user } = useAuth();
@@ -241,11 +244,42 @@ export default function Studio() {
     });
   }, [sceneLines, sceneOverrides, brollSource]);
 
-  // ---- Load history on mount ----
+  // ---- Load history on mount + background poll while any in-flight ----
+  // Background poll lets the user fire multiple renders concurrently:
+  // the active render-card focuses the latest one, while previous in-flight
+  // renders continue to update their progress in the history list.
   useEffect(() => {
     loadHistory();
-    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+      if (historyPollRef.current) clearInterval(historyPollRef.current);
+    };
   }, []);
+
+  // Background history poll — kicks in whenever ANY history row is in-flight
+  // (not "complete" / "failed"). Re-fetches the whole list every 3s.
+  useEffect(() => {
+    const anyInFlight = history.some(
+      (r) => r.status && r.status !== "complete" && r.status !== "failed"
+    );
+    if (!anyInFlight) {
+      if (historyPollRef.current) {
+        clearInterval(historyPollRef.current);
+        historyPollRef.current = null;
+      }
+      return;
+    }
+    if (historyPollRef.current) return;  // already polling
+    historyPollRef.current = setInterval(() => {
+      loadHistory();
+    }, 3000);
+    return () => {
+      if (historyPollRef.current) {
+        clearInterval(historyPollRef.current);
+        historyPollRef.current = null;
+      }
+    };
+  }, [history]);
 
   const loadHistory = async () => {
     try {
@@ -355,7 +389,16 @@ export default function Studio() {
       try {
         const r = await apiClient.get(`/studio/render/${jobId}`);
         consecutiveFailures = 0;
-        setRender(r.data);
+        // Race guard: when user fires a new render mid-flight, the active
+        // render-card is now pointing at the newer job. Don't stomp it with
+        // updates from the older poll — just refresh history (which carries
+        // the older job's progress in its row) and let this poll exit.
+        setRender((current) => {
+          if (current && current.id !== jobId) {
+            return current;  // active card belongs to a newer render
+          }
+          return r.data;
+        });
         if (r.data.status === "complete" || r.data.status === "failed") {
           clearInterval(pollRef.current);
           pollRef.current = null;
@@ -760,7 +803,7 @@ export default function Studio() {
         <button
           className="cta-btn"
           data-testid="generate-btn"
-          disabled={!canGenerate || (render && render.status !== "complete" && render.status !== "failed")}
+          disabled={!canGenerate}
           onClick={generate}
         >
           Render your video
@@ -774,6 +817,11 @@ export default function Studio() {
                 : !ttsVoice ? "Pick a voice."
                   : scenes.length === 0 ? "Add at least one B-roll prompt."
                     : "Pick a source for every scene."}
+          </p>
+        )}
+        {render && render.status !== "complete" && render.status !== "failed" && canGenerate && (
+          <p className="cta-hint" data-testid="cta-concurrent-hint">
+            Tip: you can queue another render now — your current one keeps running in History.
           </p>
         )}
         {renderErr && <p className="cta-error" data-testid="cta-error">{renderErr}</p>}
@@ -910,6 +958,20 @@ export default function Studio() {
                   </span>
                   <span className="history-date">{fmtDate(r.created_at)}</span>
                 </div>
+                {!terminal && (
+                  <div className="history-row-progress" data-testid={`history-progress-${r.id}`}>
+                    <div className="history-row-progress-meta">
+                      <span className="history-row-progress-label">{r.progress_label || "Working…"}</span>
+                      <span className="history-row-progress-pct">{r.progress ?? 0}%</span>
+                    </div>
+                    <div className="history-row-bar">
+                      <div
+                        className="history-row-bar-fill is-progressing"
+                        style={{ width: `${r.progress ?? 0}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
                 <div className="history-actions">
                   {!terminal && (
                     <button
