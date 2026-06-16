@@ -139,6 +139,58 @@ Major refactor that addresses 7 explicit user asks. Verified 21/21 backend + ~95
 
 **Deferred from this iteration (Avatar + B-roll cutaways composite mode):** A true "Avatar + B-roll cutaways" render mode (HeyGen avatar talking head intercut with stock B-roll) needs a new backend render branch and a UI toggle in Avatar mode. Decision: defer until the real HeyGen/fal.ai pipelines are wired (DRY_RUN_RENDERS=false) so the UI isn't building against simulated output. The B-roll prompts ARE staged on the handoff so the user can manually flip to Faceless mode in the meantime.
 
+## Iteration 21 — AI Text-to-Video toggle + Render both aspects (2026-02-17)
+
+Two power-user features Charity asked for after iter-20 stabilised the Faceless pipeline. Tested end-to-end via testing agent (iteration_12.json): **9/9 backend pytests PASS** + **100% frontend UI flows**, zero compile errors, zero real renders triggered.
+
+**1. AI Text-to-Video engine toggle for Faceless mode.** Until now AI scenes always used Flux 1.1 Pro to generate a still image and Ken-Burns it into motion — fast and cheap, but visibly a slideshow. New `ai_engine` field on `RenderRequest` (default `"flux"`) accepts three additional premium engines, all routed through fal.ai:
+
+| Engine | fal.ai model | Per-clip cost (est.) | Duration | Aspect support |
+|---|---|---|---|---|
+| `flux` (default) | `fal-ai/flux-pro/v1.1` + ken-burns | ~$0.04 | flexible | 9:16 / 16:9 |
+| `kling` | `fal-ai/kling-video/v2.1/master/text-to-video` | ~$0.50 | "5" or "10" | 9:16 / 16:9 / 1:1 |
+| `veo3` | `fal-ai/veo3.1/fast` | ~$1.00 | "4s" / "6s" / "8s" | 9:16 / 16:9 |
+| `pika` | `fal-ai/pika/v2.1/text-to-video` | ~$0.40 | int seconds (5 / 10) | many |
+
+`T2V_ENGINES` dict in `server.py` is the single source of truth — each entry exposes a `build_payload(prompt, aspect, dur_s)` lambda so the schema differences between engines (string vs int duration, "s"-suffix vs plain) are abstracted away. New helpers:
+
+- `_fal_t2v_generate(engine, prompt, aspect, duration_ms)` — submits to `queue.fal.run/{model}` and polls `status_url` / `response_url` from the submit response (same correct pattern from iter-17). Returns raw video URL or None on failure.
+- `_make_t2v_clip(prompt, aspect, duration_ms, engine, scene_idx)` — calls the above, then pipes the result through the existing `_trim_stock_video` so the clip lands at exactly the per-scene duration in the timeline (loop-extends short clips, crops to target aspect).
+
+`_run_render_faceless` dispatches per-scene at the normalize stage: AI scenes with `engine="flux"` keep the old Flux+kenburns path; AI scenes with `engine in T2V_ENGINES` skip Flux entirely (no entry in `ai_tasks`) and instead call `_make_t2v_clip` inside `normalize_scene` once the per-scene duration is known. Stock scenes (pexels/pixabay) ignore `ai_engine` entirely. The cost estimator `estimate_render_cost_cents` updated to multiply the per-clip engine cost by the AI scene count so the silent $5 circuit breaker correctly rejects a 12-scene Veo render (~$12) before it's queued.
+
+**Frontend AIEnginePicker.** New `AIEnginePicker` modal in `Pickers.jsx` mirrors the existing chip-modal pattern. Four picker cards, each with a name, friendly hint, and (admin-only) approximate per-scene cost. The customer-facing copy follows Charity's guideline: **no dollar amounts in the user-visible UI**, only quality/speed descriptors ("Premium cinematic motion. Best for action, characters, complex scenes."). Admins see the rough cost line below the description so she can keep an eye on spend without exposing pricing to customers when the app eventually ships to her course buyers.
+
+New `chip-ai-engine` chip rendered in the chip row, but **conditionally visible**: only when at least one scene is AI-sourced (`broll_source == "ai" || "mix"` OR any per-scene override is `"ai"`). Pure stock renders hide it entirely since the engine choice has no effect there. Default label is "Engine · Flux + Motion"; flips to "Engine · Kling 2.1" / "Engine · Veo 3.1" / "Engine · Pika 2.1" on selection.
+
+**2. "Render both aspects" one-click shortcut.** New endpoint `POST /api/studio/render/both-aspects` accepts a standard `RenderRequest` payload, creates two render docs (one forced to `9_16`, one to `16_9`), runs the cost ceiling check on each independently, and kicks off both as parallel background tasks. Returns `{jobs: [job_9_16, job_16_9]}`. Activity log gets a `batch: "both-aspects"` detail key so admin telemetry can group the pair.
+
+Frontend `renderBothAspects` handler wired to a new secondary CTA below the main "Render your video" button (`[data-testid='generate-both-aspects-btn']`, dashed border, accent on hover). On click: hits the new endpoint, sets the focus render to the 9:16 job, inserts both job docs at the top of history immediately so both progress bars show in the active-grid without waiting for the next polling tick, toasts "Two renders queued — 9:16 + 16:9.", scrolls to the render card. The existing concurrent-render polling (iter-19's active-grid) handles the second progress bar with no additional plumbing.
+
+**3. Bulletproofed Scripts.jsx setState-during-render pattern.** Earlier iterations used `useRef` + `setState during render` to reset `collapsedSections` on output id change — a documented React idiom, but a newer experimental ESLint rule (`react-hooks/set-state-in-effect`, not in plugin v4.6.2 we ship) periodically caused CRA to throw `Definition for rule ... was not found` and red-screen the entire app. Replaced with a standard `useEffect` keyed on `output?.id`. One-frame flicker risk is acceptable — collapse state is purely visual.
+
+**Files touched in iter 21**
+- `/app/backend/server.py` — `RenderRequest.ai_engine` field; `T2V_ENGINES` dict + `_fal_t2v_generate` + `_make_t2v_clip` helpers; `_run_render_faceless` dispatches t2v scenes at normalize time + persists `ai_engine`; `estimate_render_cost_cents` engine-aware; new `POST /studio/render/both-aspects` endpoint with per-aspect cost ceiling + activity log entry. Lines: 2263 (was 2037).
+- `/app/frontend/src/components/Pickers.jsx` — new exported `AIEnginePicker` component with 4 options + admin-only cost line.
+- `/app/frontend/src/pages/Studio.jsx` — `aiEngine` state (default "flux"); `anyAiScene` useMemo gates `chipAiEngine` visibility; `chipAiEngine` wired into chip-row only in Faceless mode; `AIEnginePicker` mounted; `buildPayload` includes `ai_engine`; new `renderBothAspects` handler; secondary CTA `generate-both-aspects-btn` below main render button; AIEnginePicker + Cpu icon imports added.
+- `/app/frontend/src/pages/Scripts.jsx` — `setState during render` pattern replaced with `useEffect` keyed on `output?.id` (bulletproofed against the ESLint experimental rule).
+- `/app/frontend/src/App.css` — `.cta-btn-secondary` styles (dashed border, accent on hover, disabled state).
+- `/app/backend/tests/test_studio_v18_ai_engine.py` — NEW (9 pytests: auth + estimate × 4 engines + both-aspects shape + activity log + cleanup).
+
+**Verified live** (iteration_12.json — testing agent end-to-end, ZERO real renders):
+- Cost estimate scales correctly across engines (10c flux / 82c pika / 102c kling / 202c veo3 for same 2-AI-scene payload)
+- `/studio/render/both-aspects` returns 2 queued jobs with correct aspects, immediately force-deleted via bulk-delete (real fal.ai spend = 0)
+- Chip visibility correctly conditional (visible on broll=ai/mix, hidden on broll=pexels/pixabay)
+- AIEnginePicker modal opens with all 4 options, picker selection updates chip label
+- Secondary "Render both aspects" CTA visible + enabled when form valid; never clicked during testing
+- Scripts.jsx compiles cleanly without the previous experimental-rule red-screen
+
+**Deferred from iter 21**
+- **Composite mode** (avatar talking-head intercut with B-roll cutaways): Phase 3, requires the t2v engines to be battle-tested first since Ken-Burns slideshows make poor cutaways. Roughly: real HeyGen avatar render → transcript boundaries → cutaway windows → fal compose with audio-from-avatar + video-overlay-from-broll.
+- **Per-engine quality validation**: I have not yet personally watched a real Kling/Veo/Pika render from this app — the wiring is correct but the prompt-engineering for each engine may need tuning. Recommend Charity runs 1-2 test renders per engine with the same prompt to compare outputs and pick a default.
+- **`server.py` is now 2263 lines** — well past the 700-line guideline. The new T2V_ENGINES + helpers add ~150 lines on top of an already-large file. Split into `/app/backend/renders/{avatar,faceless,composite,t2v}.py` before adding more engines.
+- **TTS cost coefficient** (0.5c per 1k chars) is conservative and may drift at high engine costs — for a 12-scene Veo render at $1/clip ($12 total), script length is a rounding error, but for many short t2v scenes it still matters.
+
 ## Iteration 20 — Smooth stock motion + sentence-aware scene count + proportional duration (2026-02-16)
 
 Two related quality bugs Charity caught right after iter 19:
