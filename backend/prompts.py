@@ -279,11 +279,11 @@ RULES YOU NEVER BREAK:
 
 BROLL_PROMPTS_SYSTEM = """You generate short, visual B-roll search prompts from a video script.
 
-You will be given a voiceover script. Output between 4 and 8 short prompts (one per line, no numbering, no leading dash, no quotes) that together cover the script's narrative arc. Each prompt must be:
+You will be given a numbered list of script beats (one beat = one natural pause / sentence in the voiceover). Output EXACTLY one prompt per beat, in the same order. Each prompt must be:
 
 - Short (3–8 words)
 - Visually specific and shootable (e.g. "sunrise over a desert highway", "hand pouring coffee in slow motion")
 - Generic enough to find on stock libraries (Pexels/Pixabay) — no proper nouns, no real people, no copyrighted material
-- In order, following the script from start to finish
+- Aligned with the meaning of its beat (the visual the viewer should see while THAT line is being spoken)
 
-Output ONLY the prompts, one per line, nothing else."""
+Output ONLY the prompts, one per line, no numbering, no bullets, no quotes — exactly N lines for N beats."""

@@ -490,8 +490,11 @@ async def _trim_stock_video(video_url: str, aspect: str, duration_ms: int, scene
     # and pans on it, killing the actual video motion. Reported by Charity
     # ("the b-roll video clips ... aren't moving like video clips, they look
     # like still images"). The clip is already a real video; just fit it to
-    # the output frame and let it play.
+    # the output frame and let it play. `fps=30` resamples 24/25/59.94/60-fps
+    # sources to a consistent cadence — without it, mixing source framerates
+    # produces visible micro-stutter via uneven frame duplication.
     vf = (
+        f"fps=30,"
         f"scale={out_w}:{out_h}:force_original_aspect_ratio=increase,"
         f"crop={out_w}:{out_h}"
     )
@@ -507,13 +510,17 @@ async def _trim_stock_video(video_url: str, aspect: str, duration_ms: int, scene
                 f.write(r.content)
         cmd = [
             FFMPEG_BIN, "-y", "-loglevel", "error",
-            "-stream_loop", "-1",  # loop short sources so the scene fills its slot
+            "-fflags", "+genpts",        # regenerate clean PTS — fixes hitch at stream_loop seam
+            "-stream_loop", "-1",        # loop short sources so the scene fills its slot
             "-ss", "0", "-i", src,
             "-t", f"{duration_s:.2f}",
-            "-an",  # drop source audio — we use Kokoro's voiceover
+            "-an",                       # drop source audio — we use Kokoro's voiceover
             "-vf", vf,
-            "-r", "30",
-            "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+            # `-preset fast` + `-crf 21` produces visibly smoother motion on
+            # fast-moving stock content (traffic, water, sports) than the old
+            # `veryfast` no-crf path which dropped motion vectors aggressively.
+            "-c:v", "libx264", "-preset", "fast", "-crf", "21",
+            "-pix_fmt", "yuv420p",
             "-movflags", "+faststart",
             dst,
         ]
@@ -578,6 +585,81 @@ async def _auto_search_stock_url(source: str, query: str, orientation: str) -> O
                 logger.warning(f"[auto-stock] {src}/{query}: {exc}")
                 continue
     return None
+
+
+# --- Sentence-aware script splitter ----------------------------------------
+# Each "beat" is one natural pause in the voiceover (sentence or em-dash/comma
+# split for runs longer than 25 words). Used by:
+#   - `/studio/broll-prompts` to decide how many visual prompts to generate
+#   - `_run_render_faceless` to allocate per-scene video duration proportional
+#     to the words each scene's visual covers, so cuts always land on a real
+#     pause in the audio instead of mid-sentence.
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z\"'\u201c])")
+_LONG_SENTENCE_WORDS = 25
+
+
+def split_script_into_beats(script: str, *, min_beats: int = 3, max_beats: int = 12) -> list[tuple[str, int]]:
+    """Return a list of (beat_text, word_count) tuples covering the whole script.
+
+    Algorithm:
+      1. Split on `.!?` followed by a capital — that's a real sentence boundary.
+      2. Any sub-sentence >25 words gets further split on em-dash, then comma.
+      3. If we ended up with < min_beats (very short script), evenly slice the
+         words into exactly min_beats chunks so the storyboard still has variety.
+      4. If we ended up with > max_beats, repeatedly merge the shortest beat
+         into its neighbour until we hit max_beats — keeps long sentences intact.
+    """
+    text = re.sub(r"\s+", " ", (script or "").strip())
+    if not text:
+        return []
+
+    raw = _SENTENCE_SPLIT_RE.split(text)
+    beats: list[str] = []
+    for s in raw:
+        s = s.strip()
+        if not s:
+            continue
+        words = s.split()
+        if len(words) <= _LONG_SENTENCE_WORDS:
+            beats.append(s)
+            continue
+        # Long run-on — try em-dash, then comma. Drop fragments shorter than 3 words.
+        parts = re.split(r"\s*[—–-]{1,2}\s*", s)
+        if len(parts) == 1:
+            parts = re.split(r",\s+", s)
+        sub = [p.strip() for p in parts if p.strip() and len(p.split()) >= 3]
+        beats.extend(sub if sub else [s])
+
+    # Empty (no terminating punctuation) — treat the whole thing as one beat.
+    if not beats:
+        beats = [text]
+
+    words = text.split()
+    total_words = len(words)
+
+    # Pad up to min_beats by evenly slicing words.
+    if len(beats) < min_beats and total_words >= min_beats:
+        chunk = total_words // min_beats
+        beats = []
+        for i in range(min_beats):
+            start = i * chunk
+            end = total_words if i == min_beats - 1 else (i + 1) * chunk
+            beats.append(" ".join(words[start:end]))
+
+    # Trim down to max_beats by merging the shortest beat into its neighbour.
+    while len(beats) > max_beats:
+        sizes = [len(b.split()) for b in beats]
+        min_idx = min(range(len(sizes)), key=lambda i: sizes[i])
+        if min_idx == 0:
+            beats[0] = beats[0] + " " + beats[1]
+            del beats[1]
+        else:
+            beats[min_idx - 1] = beats[min_idx - 1] + " " + beats[min_idx]
+            del beats[min_idx]
+
+    return [(b, max(1, len(b.split()))) for b in beats]
+
+
 
 
 @api.get("/studio/tts-voices")
@@ -1230,11 +1312,41 @@ async def _run_render_faceless(job: dict):
         )
         return
 
-    # Per-scene duration: split audio length evenly, distribute rounding to last
-    # scene so the video covers the audio EXACTLY (no end-frame freeze).
+    # Per-scene duration: distribute audio length proportional to each scene's
+    # `weight` (= word count of the script sentence the scene visually covers).
+    # That way cuts land on natural voiceover pauses instead of mid-sentence.
+    # Falls back to equal split if the request has no weights (older client,
+    # or the user manually edited scenes and dropped the auto-gen weights).
     n_surviving = len(surviving)
-    per_dur_ms = audio_dur_ms // n_surviving
-    last_dur_ms = audio_dur_ms - per_dur_ms * (n_surviving - 1)
+    raw_weights: list[int] = []
+    for idx, _url in surviving:
+        s = scenes[idx]
+        try:
+            w = int(s.get("weight") or 0)
+        except (TypeError, ValueError):
+            w = 0
+        raw_weights.append(max(0, w))
+    total_w = sum(raw_weights)
+    if total_w <= 0:
+        # No weights provided — equal split.
+        per_dur_ms_list = [audio_dur_ms // n_surviving] * n_surviving
+        per_dur_ms_list[-1] = audio_dur_ms - sum(per_dur_ms_list[:-1])
+    else:
+        per_dur_ms_list = []
+        accum = 0
+        for i, w in enumerate(raw_weights):
+            if i == n_surviving - 1:
+                per_dur_ms_list.append(audio_dur_ms - accum)
+            else:
+                slot = (audio_dur_ms * w) // total_w
+                # Minimum 1.0s per scene so a single-word "beat" doesn't flash by.
+                slot = max(1000, slot)
+                per_dur_ms_list.append(slot)
+                accum += slot
+        # Sanity: durations must sum to audio_dur_ms — fix drift if any.
+        diff = audio_dur_ms - sum(per_dur_ms_list)
+        if diff != 0:
+            per_dur_ms_list[-1] += diff
 
     # --- 4) Normalize ALL scenes to per-scene MP4s of the exact length.
     # AI Flux images → Ken Burns'd MP4. Stock clips → trimmed-and-scaled MP4.
@@ -1245,14 +1357,14 @@ async def _run_render_faceless(job: dict):
     await _set_progress(55, "Adding motion to scenes…")
 
     async def normalize_scene(slot: int, idx: int, url: str):
-        this_dur = last_dur_ms if slot == n_surviving - 1 else per_dur_ms
+        this_dur = per_dur_ms_list[slot]
         kind = scene_kind[idx]
         if kind == "ai":
             mp4 = await _make_kenburns_mp4(url, job["aspect"], this_dur, idx)
         else:
             mp4 = await _trim_stock_video(url, job["aspect"], this_dur, idx)
         if mp4:
-            return (idx, mp4, "video")
+            return (idx, mp4, "video", this_dur)
         # ffmpeg/upload failed — drop the scene so we keep the track uniform.
         return None
 
@@ -1272,21 +1384,18 @@ async def _run_render_faceless(job: dict):
         )
         return
     n_surviving = len(kburns_results)
-    # Recompute per-scene durations against the surviving set so the video
-    # still covers the full audio cleanly.
-    per_dur_ms = audio_dur_ms // n_surviving
-    last_dur_ms = audio_dur_ms - per_dur_ms * (n_surviving - 1)
 
     await _set_progress(70, f"Stitching {n_surviving} scenes…", status="composing")
 
     # --- 5) Build compose payload. fal.ai's ffmpeg-compose allows AT MOST one
     # video track. Every scene is now a video (stock MP4 or ken-burns'd Flux
     # image), so they all live in a single video track as sequential keyframes.
-    # `timestamp` + `duration` are in MILLISECONDS per the schema. ---
+    # `timestamp` + `duration` are in MILLISECONDS per the schema. Per-scene
+    # duration is whatever the normalize step actually produced — which itself
+    # tracks the weighted-by-script-beat allocation computed earlier. ---
     visual_keyframes: list = []
     cursor_ms = 0
-    for slot, (idx, url, _kind) in enumerate(kburns_results):
-        this_dur = last_dur_ms if slot == n_surviving - 1 else per_dur_ms
+    for slot, (_idx, url, _kind, this_dur) in enumerate(kburns_results):
         visual_keyframes.append({"url": url, "timestamp": cursor_ms, "duration": this_dur})
         cursor_ms += this_dur
 
@@ -1559,21 +1668,43 @@ async def studio_broll_prompts(payload: BrollPromptsRequest, user: AuthUser = De
     if not payload.script.strip():
         raise HTTPException(status_code=400, detail="Script required")
 
-    text = await _claude_complete(
-        BROLL_PROMPTS_SYSTEM,
-        f"Script:\n\n{payload.script.strip()}",
+    # Split the script into natural beats FIRST so we get a deterministic
+    # scene count + per-scene word weights. Claude only handles wording each
+    # beat into a stock-friendly prompt — not deciding how many to generate.
+    beats = split_script_into_beats(payload.script, min_beats=3, max_beats=12)
+    if not beats:
+        return {"prompts": [], "scenes": []}
+
+    numbered = "\n".join(f"{i+1}. {text}" for i, (text, _) in enumerate(beats))
+    user_msg = (
+        f"Generate exactly {len(beats)} B-roll search prompts — one per beat below, in order. "
+        f"The viewer sees prompt #N while beat #N is being spoken.\n\n"
+        f"Beats:\n{numbered}"
     )
+    text = await _claude_complete(BROLL_PROMPTS_SYSTEM, user_msg)
+
     # Parse: one per line, drop blanks, strip bullets/quotes/numbering
-    out = []
+    out: list[str] = []
     for raw in text.splitlines():
         line = raw.strip()
         if not line:
             continue
-        # Strip leading "1.", "-", "*", numerals, and surrounding quotes
         line = line.lstrip("0123456789. -*•").strip().strip('"\u201c\u201d').strip()
         if line:
             out.append(line)
-    return {"prompts": out[:12]}
+
+    # Pair prompts with beat weights (word counts). If Claude returned fewer
+    # prompts than beats, fall back to the beat text itself for the missing
+    # slots — better to ship a less-polished prompt than to drop a scene.
+    scenes: list[dict] = []
+    for i, (beat_text, weight) in enumerate(beats):
+        prompt = out[i] if i < len(out) else beat_text[:60]
+        scenes.append({"prompt": prompt, "weight": weight})
+
+    return {
+        "prompts": [s["prompt"] for s in scenes],
+        "scenes": scenes,
+    }
 
 
 # --- Script Engine: async job pattern ---------------------------------------

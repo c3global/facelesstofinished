@@ -230,16 +230,31 @@ export default function Studio() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sceneLines.length]);
 
-  // The fully-resolved scenes (line + effective source + pick)
+  // Most-recently-generated per-scene weight (word count from the script
+  // sentence each prompt covers). Captured when "Generate from script" runs.
+  // Used to allocate proportional video duration per scene so cuts land on
+  // natural pauses. Reset to all-1s if the user manually edits scene count.
+  const autoWeightsRef = useRef([]);
+  const autoPromptsRef = useRef([]);
+
+  // The fully-resolved scenes (line + effective source + pick + weight)
   const scenes = useMemo(() => {
+    // Only use stored weights when the current prompt list matches what the
+    // auto-generator produced (same length AND same contents — if the user
+    // edited any line the mapping is no longer safe).
+    const stored = autoPromptsRef.current;
+    const weightsAlign =
+      stored.length === sceneLines.length &&
+      stored.every((p, i) => p === sceneLines[i]);
     return sceneLines.map((prompt, i) => {
       const ov = sceneOverrides[i] || {};
-      // When global is "mix" we leave source undefined unless overridden.
       const effective = ov.source ?? (brollSource === "mix" ? null : brollSource);
+      const weight = weightsAlign ? autoWeightsRef.current[i] : null;
       return {
         prompt,
         source: effective,
         pick: ov.pick || null,
+        ...(weight ? { weight } : {}),
       };
     });
   }, [sceneLines, sceneOverrides, brollSource]);
@@ -316,6 +331,10 @@ export default function Studio() {
       prompt: s.prompt,
       video_url: s.pick?.video_url || null,
       thumb: s.pick?.thumb || null,
+      // Weight = word count of the script sentence this scene covers.
+      // Backend uses it for proportional per-scene duration so cuts land on
+      // natural voiceover pauses. Omitted when scenes were hand-edited.
+      ...(s.weight ? { weight: s.weight } : {}),
     })) : [],
   });
 
@@ -443,15 +462,24 @@ export default function Studio() {
   };
 
   // ---- Generate B-roll prompts from script via Claude ----
+  // Backend splits the script into natural sentence beats first (3-12 of
+  // them), then asks Claude for exactly one prompt per beat. We store the
+  // per-scene weight (= word count of each beat) so the render pipeline can
+  // give each scene a duration PROPORTIONAL to its sentence length —
+  // visuals change exactly when the voiceover pauses.
   const generatePromptsFromScript = async () => {
     if (!script.trim()) return;
     setPromptsErr("");
     setGeneratingPrompts(true);
     try {
       const r = await apiClient.post("/studio/broll-prompts", { script });
-      const lines = (r.data.prompts || []).slice(0, 12);
+      const sceneObjs = (r.data.scenes || []).slice(0, 12);
+      const lines = sceneObjs.map((s) => s.prompt);
+      const weights = sceneObjs.map((s) => s.weight || 1);
       setBulkPrompts(lines.join("\n"));
       setSceneOverrides(lines.map(() => ({})));
+      autoPromptsRef.current = lines;
+      autoWeightsRef.current = weights;
     } catch (e) {
       setPromptsErr(e?.response?.data?.detail || "Could not generate prompts. Try again.");
     } finally {
@@ -636,7 +664,10 @@ export default function Studio() {
                 {generatingPrompts ? "Generating…" : "Generate from script"}
               </button>
               <span className="scene-section-count" data-testid="scene-count">
-                <strong>{sceneLines.length}</strong> {sceneLines.length === 1 ? "scene" : "scenes"} · up to {MAX_SCENES}
+                <strong>{sceneLines.length}</strong> {sceneLines.length === 1 ? "scene" : "scenes"}
+                {scenes.length > 0 && scenes.every((s) => s.weight)
+                  ? " · auto-paced from script"
+                  : ` · up to ${MAX_SCENES}`}
               </span>
             </div>
           </div>

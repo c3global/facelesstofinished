@@ -139,6 +139,56 @@ Major refactor that addresses 7 explicit user asks. Verified 21/21 backend + ~95
 
 **Deferred from this iteration (Avatar + B-roll cutaways composite mode):** A true "Avatar + B-roll cutaways" render mode (HeyGen avatar talking head intercut with stock B-roll) needs a new backend render branch and a UI toggle in Avatar mode. Decision: defer until the real HeyGen/fal.ai pipelines are wired (DRY_RUN_RENDERS=false) so the UI isn't building against simulated output. The B-roll prompts ARE staged on the handoff so the user can manually flip to Faceless mode in the meantime.
 
+## Iteration 20 — Smooth stock motion + sentence-aware scene count + proportional duration (2026-02-16)
+
+Two related quality bugs Charity caught right after iter 19:
+
+**Bug A — Stock clips played smoothly but with visible micro-stutter.** Three stacked issues in my iter-18 `_trim_stock_video`:
+1. `-preset veryfast` with no `-crf` → encoder skimped on motion vectors, fast-moving footage looked juddery.
+2. `-r 30` instead of `fps=30` filter → mixed-fps sources (24/25/59.94/60) got uneven frame drops.
+3. `-stream_loop -1` without `-fflags +genpts` → looped clips hitched at the loop seam from clobbered timestamps.
+
+Fix: `-preset fast -crf 21` (still <2s/scene), `fps=30` as a proper filter stage, and `+genpts` for clean monotonic timestamps. Verified live: scene 1 of the test render shows 8/8 unique frames over 8 seconds with steady file-size progression — smooth motion confirmed.
+
+**Bug B — Voiceover and B-roll out of sync, especially on short scripts.** A 55-word script (`~22s` of audio) was getting cut into 8 equal `~2.75s` slices. Scene boundaries landed mid-sentence; visuals flickered by faster than the speaker could describe them. Two root causes:
+1. The Claude prompt for `/studio/broll-prompts` said "between 4 and 8 prompts" with no relationship to script length.
+2. The render pipeline's per-scene duration was a flat `audio_dur / n_scenes` — no concept of which sentence each visual covered.
+
+**Fix in two parts.** First, a new `split_script_into_beats()` helper in `backend/server.py`:
+- Splits the script on real sentence boundaries (`.!?` followed by a capital).
+- Any sub-sentence >25 words gets further split on em-dash, then comma.
+- Clamps to min 3 (so even single-sentence scripts get visual variety), max 12 (per user request, bumped from 10).
+- Pads short scripts via even word-slicing, trims long scripts by merging the shortest neighbour.
+- Returns `[(beat_text, word_count), ...]`. Word count becomes the scene's **weight**.
+
+Then `/studio/broll-prompts` runs the splitter first and sends Claude a numbered beat list with "generate exactly N prompts, one per beat in order" instructions. Response now returns both `prompts` (back-compat) and `scenes: [{prompt, weight}]`. Frontend stores the weights in `autoWeightsRef` and passes each scene's weight through the render payload.
+
+Finally, `_run_render_faceless` uses the weights for proportional duration: `scene_duration_ms = audio_dur_ms * (this_weight / total_weight)`, with a 1-second floor so a single-word beat can't flash by, and final-scene absorption of any rounding drift so the video covers the audio to the exact millisecond. Falls back to equal split when weights are absent (older clients, manual scene editing).
+
+**Verified live.** Charity's exact 55-word script renders as **4 scenes**:
+| Beat | Sentence | Weight (words) | Allocated duration |
+|-|-|-|-|
+| 1 | "Before you open a single app or write a single word, you need to see the whole weekend mapped out." | 20 | 7.37s |
+| 2 | "Day One is your creation day." | 6 | 2.21s |
+| 3 | "You'll spend the morning on topics and scripts — that's your thinking work, your heavy cognitive lifting." | 17 | 6.27s |
+| 4 | "Then the afternoon shifts to recording all five voiceovers back to back." | 12 | 4.42s |
+
+Sum = 20.27s, matching the Kokoro WAV exactly. Every visual cut now lands on a real sentence boundary in the voiceover.
+
+**Scene-count scaling sanity-checked across script lengths** (independent test):
+- 9 words → 3 scenes (min floor, even split)
+- 55 words → 4 scenes (perfect sentence alignment)
+- 72 words → 8 scenes (one per sentence)
+- 165 words → 12 scenes (capped at max-bumped-to-12, with shortest-neighbour merging)
+
+**UI hint.** The scene-count label flips from `4 scenes · up to 12` to `4 scenes · auto-paced from script` whenever the current prompts came from "Generate from script" and haven't been hand-edited. Resets to the static label as soon as the user changes a line so they don't get a stale promise.
+
+**Files touched in iter 20**
+- `/app/backend/server.py` — new `split_script_into_beats()` helper; `/studio/broll-prompts` now beat-driven; `_trim_stock_video` ffmpeg flags upgraded (`-preset fast -crf 21`, `fps=30` filter, `+genpts`); `_run_render_faceless` per-scene duration uses scene weights with floor + drift-correction.
+- `/app/backend/prompts.py` — `BROLL_PROMPTS_SYSTEM` rewritten to take a numbered beat list and produce exactly N prompts in order.
+- `/app/frontend/src/pages/Studio.jsx` — `generatePromptsFromScript` stores weights in `autoWeightsRef`; `scenes` useMemo attaches `weight` per scene when the prompt list matches the auto-gen; `buildPayload` forwards weights; scene-count chip shows "auto-paced from script" when weights are intact.
+
+
 ## Iteration 19 — Pixabay thumbs, stock motion regression, concurrent-render visibility (2026-02-16)
 
 Three issues she found within hours of iter 18 shipping. All three were genuine regressions/blind spots in iter 18 that I should have caught before declaring victory:
