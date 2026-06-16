@@ -139,6 +139,41 @@ Major refactor that addresses 7 explicit user asks. Verified 21/21 backend + ~95
 
 **Deferred from this iteration (Avatar + B-roll cutaways composite mode):** A true "Avatar + B-roll cutaways" render mode (HeyGen avatar talking head intercut with stock B-roll) needs a new backend render branch and a UI toggle in Avatar mode. Decision: defer until the real HeyGen/fal.ai pipelines are wired (DRY_RUN_RENDERS=false) so the UI isn't building against simulated output. The B-roll prompts ARE staged on the handoff so the user can manually flip to Faceless mode in the meantime.
 
+## Iteration 18 — Faceless renders actually produce a watchable video (2026-02-16)
+
+**The complaint.** Charity's mix render (8 scenes: 2 AI Flux + 3 Pexels + 3 Pixabay) came out as a 33-second slideshow showing **one frozen frame for the whole video**. No cuts. No motion. No captions. She'd been told it worked because iter 17 only verified "the returned file is a valid MP4" — without ever actually downloading and watching the output. Lesson: file-extension checks are not testing.
+
+**Root causes found and fixed** (every one of these was breaking output):
+
+1. **Stock scenes without pre-picked clips got silently dropped.** The pipeline only looked at `scene.video_url`; if absent, the scene was skipped. So 6 of her 8 scenes were thrown away — the static frame she saw was just one of the 2 AI scenes (8000ms each), held by fal's worker for the rest of the audio duration. Fix: new `_auto_search_stock_url(source, query, orientation)` helper that hits Pexels/Pixabay search APIs when no clip is pre-picked. `source="mix"` tries Pexels first, falls back to Pixabay. Runs in parallel with Flux generation via `asyncio.gather`.
+2. **fal.ai's ffmpeg-compose IGNORES the keyframe `duration` for video keyframes** — it plays each source video at its native length and chains them sequentially. That's why Pexels-heavy renders produced 100+ second videos for 16-second voiceovers. The schema docs don't mention this. Fix: pre-trim every stock clip locally with ffmpeg to the exact per-scene duration, then upload to fal storage and pass the trimmed URL to compose.
+3. **AI Flux scenes had no motion at all** (Flux outputs are static PNGs). Even when scenes did cut, the result was a slideshow. Fix: new `_make_kenburns_mp4(image_url, aspect, duration_ms, scene_idx)` helper that downloads the Flux image, runs ffmpeg `zoompan` filter to produce a short MP4 with subtle zoom + drift, uploads to fal storage. Five motion presets cycle through the scenes (zoom in, zoom in + pan right, zoom in + pan up, zoom in + pan left, zoom out) so consecutive scenes feel cinematic instead of identical.
+4. **fal compose rejects multiple video tracks** ("Multiple video tracks are not supported" — discovered during testing). Fix: collapse every scene into a single video track with N sequential keyframes. Since every scene is now a pre-rendered MP4 (ken-burns for AI, trimmed-and-scaled for stock), the track is uniformly type=`video`.
+5. **Duration math was guessing.** Old code used `_estimate_duration_seconds(script)` (~150 wpm) which drifted by 1-3s vs the actual Kokoro WAV. Result: audio + video out of sync at the end. Fix: new `_probe_audio_duration_s(audio_url)` helper that downloads the Kokoro WAV and reads its true duration via Python's stdlib `wave` module. Per-scene durations now split the audio length exactly, with the last scene absorbing any remainder so the video covers the voiceover to the millisecond.
+6. **Captions removed entirely (per user request).** Whisper transcription + 2nd compose pass deleted from `_run_render_faceless`. HeyGen `caption` field stripped from both v3 and v2 bodies in `_run_render_avatar`. Captions chip + Caption-style picker hidden from the Studio UI for both modes (`Studio.jsx`). The `captions` / `caption_style` request fields remain on the model so the API contract stays stable for old history docs — backend just ignores them.
+
+**Persistent ffmpeg.** apt-installed ffmpeg gets wiped on pod restart. Switched to `imageio-ffmpeg` (pip-installable, bundles a static ffmpeg binary inside the Python venv). Added `imageio-ffmpeg==0.6.0` and `fal-client==1.0.0` to `requirements.txt` so the next fresh pod has them by default.
+
+**Verified live with frame-by-frame inspection.** All 5 combinations tested end-to-end against the real preview, MP4s downloaded, frames sampled at scene midpoints, and content uniqueness confirmed:
+
+| Combo | Aspect | Dur | Frames @ midpoints | Result |
+|-|-|-|-|-|
+| Avatar (Bryan_IT, no captions) | 16:9 | 8s | n/a (single talking head) | ✅ complete in 105s, URL no longer ends in `caption.mp4` |
+| Faceless all AI Flux + Ken Burns | 16:9 | 10.07s | 12/12 unique (within-scene motion) | ✅ complete in 25s |
+| Faceless all Pexels (auto-search) | 9:16 | 9.60s | 6/6 unique | ✅ complete in 30s |
+| Faceless all Pixabay (auto-search) | 16:9 | 9.00s | 6/6 unique | ✅ complete in 25s |
+| Faceless MIX (AI + Pexels + Pixabay, auto-search) | 9:16 | 10.00s | 11/12 unique | ✅ complete in 35s |
+
+**Files touched in iter 18**
+- `/app/backend/server.py` — `_probe_audio_duration_s` (new), `_auto_search_stock_url` (new), `_make_kenburns_mp4` (new), `_trim_stock_video` (new), `_run_render_faceless` (heavily refactored), `_run_render_avatar` (caption logic removed), `_fal_queue_run` (uses `status_url`/`response_url` from submit response).
+- `/app/backend/requirements.txt` — added `fal-client==1.0.0` and `imageio-ffmpeg==0.6.0`.
+- `/app/frontend/src/pages/Studio.jsx` — Captions chip + Caption-style picker removed from chip-row JSX; `captions` forced to `false`; `CaptionsPicker` + `Captions` icon imports dropped.
+
+**Known limitations carried into iter 19**
+- Stock auto-search uses the first match — no thumbnail preview. The user might land on a clip she doesn't love. Mitigation: she can still pre-pick clips via the existing StockPicker modal; auto-search only triggers when the scene has no `video_url`.
+- Ken Burns is intentionally subtle (zoom 1.0→1.18 over 1.7s). If she finds it too gentle we can dial it up.
+- Avatar mode captions are GONE per her request even though HeyGen's burn-in was actually working. Re-add behind a toggle in a later iteration if requested.
+
 ## Iteration 17 — THE faceless smoking-gun fix (2026-02-16)
 **Bug found.** Every Faceless render Charity has ever attempted has timed out at the "Stitching" stage. The stated root cause kept moving (millisecond conversion, track types, 600s vs 900s timeouts, Pexels resolution) but none of those changes actually fixed it. After her latest round of 3 consecutive timeouts (2026-06-15 22:20, 22:45, 23:06), I forked a new session, plugged in a fresh fal.ai API key (her previous one had been revoked between iter-16 and now — 401 "No user found for Key ID and Secret" on every call), and ran a real test against the live preview.
 

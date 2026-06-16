@@ -1,12 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { UserCircle2, Mic, Ratio, Captions, Film, ChevronDown, Play, Trash2, Sparkles, Wand2, Loader2, RotateCw } from "lucide-react";
+import { UserCircle2, Mic, Ratio, Film, ChevronDown, Play, Trash2, Sparkles, Wand2, Loader2, RotateCw } from "lucide-react";
 import { apiClient, useAuth } from "../App";
 import {
   AvatarPicker,
   VoicePicker,
   BRollSourcePicker,
   AspectPicker,
-  CaptionsPicker,
   StockPicker,
 } from "../components/Pickers";
 import Toast from "../components/Toast";
@@ -123,12 +122,12 @@ export default function Studio() {
 
   // Settings
   const [aspect, setAspect] = useState("9_16");
-  const [captions, setCaptions] = useState(true);
-  const [captionStyle, setCaptionStyle] = useState("boxed");
-  const captionsTouched = useRef(false);
-  useEffect(() => {
-    if (!captionsTouched.current) setCaptions(aspect === "9_16");
-  }, [aspect]);
+  // Captions intentionally hidden in this iteration — backend ignores both
+  // `captions` and `caption_style`, but we keep the state so the payload
+  // contract stays stable for older history docs. Captions UI is reinstated
+  // in a future pass once HeyGen + fal pipelines burn them in reliably.
+  const captions = false;
+  const captionStyle = "boxed";
 
   // Avatar mode picks
   const [avatar, setAvatar] = useState(null);
@@ -228,6 +227,7 @@ export default function Studio() {
       const next = sceneLines.map((_, i) => prev[i] || {});
       return next;
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sceneLines.length]);
 
   // The fully-resolved scenes (line + effective source + pick)
@@ -506,40 +506,6 @@ export default function Studio() {
       <ChevronDown size={14} className="chip-caret" />
     </button>
   );
-  const chipCaptions = (
-    <button className="chip is-set" data-testid="chip-captions" onClick={() => setModal("captions")}>
-      <span className="chip-icon"><Captions size={14} /></span>
-      <span className="chip-label">{captions ? "Captions ON" : "Captions OFF"}</span>
-      <ChevronDown size={14} className="chip-caret" />
-    </button>
-  );
-  // Caption-style picker — only meaningful when captions are ON and we're in
-  // Faceless mode only — Avatar mode uses HeyGen's auto-styled burn-in
-  // which the user can't currently override, so we hide the picker entirely
-  // there to keep the UI clean.
-  const captionStyles = [
-    { id: "minimal", label: "Minimal" },
-    { id: "boxed", label: "Boxed" },
-    { id: "bold-yellow", label: "Bold yellow" },
-    { id: "outlined", label: "Outlined" },
-  ];
-  const chipCaptionStyle =
-    captions && mode === MODES.FACELESS ? (
-      <div className="chip-pill-group" data-testid="caption-style-group">
-        <span className="chip-pill-label">Style</span>
-        {captionStyles.map((s) => (
-          <button
-            key={s.id}
-            type="button"
-            className={`chip-pill ${captionStyle === s.id ? "is-active" : ""}`}
-            data-testid={`caption-style-${s.id}`}
-            onClick={() => setCaptionStyle(s.id)}
-          >
-            {s.label}
-          </button>
-        ))}
-      </div>
-    ) : null;
   const brollChipLabel = {
     ai: "B-Roll · AI",
     pexels: "B-Roll · Pexels",
@@ -646,12 +612,11 @@ export default function Studio() {
       {/* Chip row */}
       <div className="chip-row" data-testid="chip-row">
         {mode === MODES.AVATAR ? (
-          <>{chipAvatar}{chipVoice}{chipAspect}{chipCaptions}</>
+          <>{chipAvatar}{chipVoice}{chipAspect}</>
         ) : (
-          <>{chipTtsVoice}{chipBroll}{chipAspect}{chipCaptions}</>
+          <>{chipTtsVoice}{chipBroll}{chipAspect}</>
         )}
       </div>
-      {chipCaptionStyle}
 
       {/* Faceless: Bulk prompts + scene list */}
       {mode === MODES.FACELESS && (
@@ -1046,7 +1011,6 @@ export default function Studio() {
         }}
       />
       <AspectPicker open={modal === "aspect"} onClose={closeModal} value={aspect} onPick={setAspect} />
-      <CaptionsPicker open={modal === "captions"} onClose={closeModal} value={captions} onPick={(v) => { captionsTouched.current = true; setCaptions(v); }} />
       <StockPicker
         open={stockModal.open}
         sceneIdx={stockModal.idx}
