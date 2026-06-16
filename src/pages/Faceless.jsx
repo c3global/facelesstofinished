@@ -258,13 +258,51 @@ function Engine({ session, onLogout }) {
   const [batchItems, setBatchItems] = useState(null);
   const [expandedIdx, setExpandedIdx] = useState(0);
   const [shake, setShake] = useState(false);
+  // Per-card collapse state for long-form sections. Holds the set of collapsed card keys.
+  const [collapsedCards, setCollapsedCards] = useState(() => new Set());
   const inputRef = useRef(null);
+  const prevBatchLenRef = useRef(0);
 
   const entitlements = session.entitlements || [];
   const hasShorts = entitlements.includes('shorts');
   const sections = parseSections(raw);
   const activeCards = mode === 'shorts' ? CARDS_SHORTS : CARDS_LONG;
   const platformAccent = PLATFORM_META[platform]?.accent || '#FF0033';
+
+  const visibleCardKeys = activeCards
+    .filter((c) => sections[c.key])
+    .map((c) => c.key);
+  const allCollapsed =
+    visibleCardKeys.length > 0 && visibleCardKeys.every((k) => collapsedCards.has(k));
+
+  const toggleCardCollapse = (key) => {
+    setCollapsedCards((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+  const collapseAll = () => setCollapsedCards(new Set(visibleCardKeys));
+  const expandAll = () => setCollapsedCards(new Set());
+
+  const scrollToId = (id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const NAV_OFFSET = 64;
+    const top = el.getBoundingClientRect().top + window.scrollY - NAV_OFFSET;
+    window.scrollTo({ top, behavior: 'smooth' });
+  };
+
+  // Auto-scroll to the shorts section the moment new shorts get generated.
+  useEffect(() => {
+    const len = batchItems?.length || 0;
+    if (len > 0 && prevBatchLenRef.current === 0) {
+      // Defer one frame so the section is in the DOM before scrolling.
+      requestAnimationFrame(() => scrollToId('shorts-output'));
+    }
+    prevBatchLenRef.current = len;
+  }, [batchItems]);
 
   const switchMode = (next) => {
     if (next === mode) return;
@@ -599,8 +637,26 @@ function Engine({ session, onLogout }) {
           )}
         </section>
 
+        {(raw || (batchItems && batchItems.length > 0)) && (
+          <ResultsNav
+            hasScript={!!raw}
+            hasShorts={!!(batchItems && batchItems.length > 0)}
+            shortsCount={batchItems?.length || 0}
+            shortsAllDone={!!batchItems?.every((it) => it.status === 'done')}
+            fullText={fullText}
+            batchItems={batchItems}
+            mode={mode}
+            allCollapsed={allCollapsed}
+            onCollapseAll={collapseAll}
+            onExpandAll={expandAll}
+            canCollapse={mode === 'long' && visibleCardKeys.length > 0}
+            onJumpScript={() => scrollToId('script-output')}
+            onJumpShorts={() => scrollToId('shorts-output')}
+          />
+        )}
+
         {raw && mode === 'shorts' && (
-          <section className="output">
+          <section className="output" id="script-output">
             <ShortsWorkflow sections={sections} platform={platform} />
             <div className="output-actions">
               <CopyButton text={fullText} label="Copy Full Package" primary />
@@ -612,7 +668,7 @@ function Engine({ session, onLogout }) {
         )}
 
         {raw && mode === 'long' && (
-          <section className="output">
+          <section className="output" id="script-output">
             <RepurposeCTA
                 hasShorts={hasShorts}
                 open={repurposeOpen}
@@ -635,6 +691,8 @@ function Engine({ session, onLogout }) {
                   accent={card.accent}
                   body={section.body}
                   large={card.large}
+                  collapsed={collapsedCards.has(card.key)}
+                  onToggle={() => toggleCardCollapse(card.key)}
                 />
               );
             })}
@@ -653,7 +711,7 @@ function Engine({ session, onLogout }) {
         )}
 
         {batchItems && batchItems.length > 0 && (
-          <section className="output batched-output">
+          <section className="output batched-output" id="shorts-output">
             <header className="batched-header">
               <h3>
                 {batchItems[0].id?.startsWith('rp-')
@@ -701,17 +759,98 @@ function Toggle({ label, checked, onChange }) {
   );
 }
 
-function Card({ title, accent, body, large }) {
+function Card({ title, accent, body, large, collapsed, onToggle }) {
+  const isCollapsible = typeof onToggle === 'function';
   return (
-    <article className="card" style={{ borderLeftColor: accent, '--card-accent': accent }}>
+    <article
+      className={`card ${collapsed ? 'is-collapsed' : ''}`}
+      style={{ borderLeftColor: accent, '--card-accent': accent }}
+    >
       <header className="card-header">
-        <h2 className="card-title" style={{ color: accent }}>{title}</h2>
+        {isCollapsible ? (
+          <button
+            type="button"
+            className="card-collapse-toggle"
+            onClick={onToggle}
+            aria-expanded={!collapsed}
+            aria-label={collapsed ? `Expand ${title}` : `Collapse ${title}`}
+          >
+            <span className={`card-chevron ${collapsed ? 'is-collapsed' : ''}`} aria-hidden="true">
+              ▾
+            </span>
+            <h2 className="card-title" style={{ color: accent }}>{title}</h2>
+          </button>
+        ) : (
+          <h2 className="card-title" style={{ color: accent }}>{title}</h2>
+        )}
         <CopyButton text={body} label="Copy" />
       </header>
-      <div className={`card-body ${large ? 'card-body-large' : ''}`}>
-        <Markdown text={body} />
-      </div>
+      {!collapsed && (
+        <div className={`card-body ${large ? 'card-body-large' : ''}`}>
+          <Markdown text={body} />
+        </div>
+      )}
     </article>
+  );
+}
+
+function ResultsNav({
+  hasScript,
+  hasShorts,
+  shortsCount,
+  shortsAllDone,
+  fullText,
+  batchItems,
+  mode,
+  allCollapsed,
+  onCollapseAll,
+  onExpandAll,
+  canCollapse,
+  onJumpScript,
+  onJumpShorts,
+}) {
+  const allShortsText =
+    batchItems && shortsAllDone
+      ? batchItems
+          .map((it) => `# ${it.label?.toUpperCase() || it.id}\n\n${it.raw || ''}`)
+          .join('\n\n---\n\n')
+      : '';
+
+  const statusParts = [];
+  if (hasScript) statusParts.push(mode === 'shorts' ? 'Short ready' : 'Script ready');
+  if (hasShorts) statusParts.push(`${shortsCount} Shorts`);
+
+  return (
+    <div className="results-nav" role="toolbar" aria-label="Results navigation">
+      <div className="results-nav-status">{statusParts.join(' · ')}</div>
+      <div className="results-nav-actions">
+        {hasScript && (
+          <button type="button" className="results-nav-btn" onClick={onJumpScript}>
+            Jump to Script ↓
+          </button>
+        )}
+        {hasShorts && (
+          <button type="button" className="results-nav-btn" onClick={onJumpShorts}>
+            Jump to Shorts ↓
+          </button>
+        )}
+        {hasScript && (
+          <CopyButton text={fullText} label="Copy Script" />
+        )}
+        {hasShorts && shortsAllDone && (
+          <CopyButton text={allShortsText} label={`Copy All ${shortsCount} Shorts`} />
+        )}
+        {canCollapse && (
+          <button
+            type="button"
+            className="results-nav-btn results-nav-btn-ghost"
+            onClick={allCollapsed ? onExpandAll : onCollapseAll}
+          >
+            {allCollapsed ? 'Expand all' : 'Collapse all'}
+          </button>
+        )}
+      </div>
+    </div>
   );
 }
 

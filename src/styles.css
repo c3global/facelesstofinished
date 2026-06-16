@@ -1147,6 +1147,87 @@ html[data-theme="light"] .workflow-col-title { color: #5B5680; border-bottom-col
 .batched-sub { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
 .batched-actions { margin-top: 14px; display: flex; justify-content: center; }
 .result-expanded-copy { font-size: 12px; }
+
+/* ---------- Sticky results nav bar ---------- */
+.results-nav {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  margin: 0 -16px 18px;
+  padding: 10px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  background: var(--header-bg, rgba(15, 10, 30, 0.85));
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border-soft);
+  border-top: 1px solid var(--border-soft);
+  animation: fadeUp 0.25s ease both;
+}
+html[data-theme="light"] .results-nav {
+  background: rgba(255, 255, 255, 0.85);
+}
+.results-nav-status {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+.results-nav-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.results-nav-btn {
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border-soft);
+  background: var(--card-surface);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.results-nav-btn:hover { border-color: var(--primary); }
+.results-nav-btn-ghost { background: transparent; color: var(--muted); }
+.results-nav-btn-ghost:hover { color: var(--text); }
+@media (max-width: 640px) {
+  .results-nav { margin: 0 -8px 12px; padding: 8px 10px; }
+  .results-nav-status { display: none; }
+}
+
+/* ---------- Collapsible card ---------- */
+.card-collapse-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  flex: 1;
+}
+.card-collapse-toggle:hover .card-chevron { opacity: 1; }
+.card-chevron {
+  display: inline-block;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--muted);
+  opacity: 0.7;
+  transition: transform 0.18s ease;
+  transform: rotate(0deg);
+}
+.card-chevron.is-collapsed { transform: rotate(-90deg); }
+.card.is-collapsed { padding-bottom: 14px; }
+.card.is-collapsed .card-header { margin-bottom: 0; }
 .result-grid { display: flex; flex-direction: column; gap: 28px; }
 .result-grid-strip {
   display: flex;
