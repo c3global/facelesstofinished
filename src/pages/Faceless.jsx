@@ -663,6 +663,17 @@ function Engine({ session, onLogout }) {
                     : 'Content Sprint'}
               </h3>
               <p className="batched-sub">Tap a phone to expand it.</p>
+              {batchItems.every((it) => it.status === 'done') && (
+                <div className="batched-actions">
+                  <CopyButton
+                    text={batchItems
+                      .map((it) => `# ${it.label?.toUpperCase() || it.id}\n\n${it.raw || ''}`)
+                      .join('\n\n---\n\n')}
+                    label={`Copy All ${batchItems.length} Shorts`}
+                    primary
+                  />
+                </div>
+              )}
             </header>
             <ResultGrid items={batchItems} expandedIdx={expandedIdx} onExpand={setExpandedIdx} />
           </section>

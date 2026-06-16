@@ -53,12 +53,15 @@ function MiniResult({ item, isExpanded, onClick }) {
 }
 
 function ExpandedResult({ item }) {
-  const { raw, platform, label } = item;
+  const { raw, platform, label, status } = item;
   const sections = parseSections(raw);
   return (
     <div className="result-expanded">
       <div className="result-expanded-header">
         <span className="result-mini-chip">{label}</span>
+        {status === 'done' && raw && (
+          <CopyOnly text={raw} label="Copy this Short" className="result-expanded-copy" />
+        )}
       </div>
       <ShortsWorkflow sections={sections} platform={platform} />
     </div>
@@ -156,7 +159,7 @@ function ClickToCopyTag({ tag }) {
   );
 }
 
-function CopyOnly({ text }) {
+function CopyOnly({ text, label, className }) {
   const [copied, setCopied] = React.useState(false);
   const copy = async () => {
     try {
@@ -166,8 +169,12 @@ function CopyOnly({ text }) {
     } catch {}
   };
   return (
-    <button type="button" className="copy-btn copy-btn-mini" onClick={copy}>
-      {copied ? '✓' : 'Copy'}
+    <button
+      type="button"
+      className={`copy-btn copy-btn-mini ${className || ''}`}
+      onClick={copy}
+    >
+      {copied ? '✓ Copied' : label || 'Copy'}
     </button>
   );
 }

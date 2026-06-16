@@ -840,6 +840,7 @@ html[data-theme="light"] .repurpose-cta {
   background: linear-gradient(135deg, color-mix(in srgb, var(--primary) 6%, #FFFFFF), color-mix(in srgb, var(--red) 4%, #FFFFFF));
 }
 html[data-theme="light"] .repurpose-pill { background: #FFFFFF; }
+html[data-theme="light"] .repurpose-pill.is-on { background: var(--primary); color: #fff; border-color: var(--primary); }
 html[data-theme="light"] .multi-platform-toggle { background: #FFFFFF; }
 html[data-theme="light"] .workflow-col-title { color: #5B5680; border-bottom-color: rgba(120, 110, 170, 0.3); }
 
@@ -1144,6 +1145,8 @@ html[data-theme="light"] .workflow-col-title { color: #5B5680; border-bottom-col
   -webkit-background-clip: text; background-clip: text; color: transparent;
 }
 .batched-sub { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
+.batched-actions { margin-top: 14px; display: flex; justify-content: center; }
+.result-expanded-copy { font-size: 12px; }
 .result-grid { display: flex; flex-direction: column; gap: 28px; }
 .result-grid-strip {
   display: flex;
@@ -1200,7 +1203,7 @@ html[data-theme="light"] .workflow-col-title { color: #5B5680; border-bottom-col
   padding-top: 24px;
   animation: fadeUp 0.3s ease both;
 }
-.result-expanded-header { text-align: center; margin-bottom: 18px; }
+.result-expanded-header { display: flex; align-items: center; justify-content: center; gap: 12px; margin-bottom: 18px; }
 
 /* ---------- Cut into Shorts CTA ---------- */
 .repurpose-cta {
