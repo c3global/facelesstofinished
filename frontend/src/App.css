@@ -484,6 +484,29 @@
   display: flex; flex-direction: column; gap: 14px;
   box-shadow: var(--shadow-card);
 }
+/* Grid that holds multiple in-flight render cards side by side so the
+   user can fire several renders at once and see them all progressing. */
+.active-grid {
+  display: grid;
+  gap: 18px;
+}
+.active-grid.is-1 { grid-template-columns: 1fr; }
+.active-grid.is-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.active-grid.is-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 900px) {
+  .active-grid.is-2, .active-grid.is-3 { grid-template-columns: 1fr; }
+}
+.render-card.is-mini {
+  padding: 14px 16px;
+  gap: 10px;
+}
+.render-card.is-mini .render-skeleton { min-height: 180px; }
+.render-card.is-mini .render-skeleton-label {
+  font-size: 12px;
+}
+.render-card.is-mini .render-skeleton-pct {
+  font-size: 18px;
+}
 .render-status {
   display: flex; align-items: center; justify-content: space-between;
 }

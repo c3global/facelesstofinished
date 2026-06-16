@@ -792,63 +792,122 @@ export default function Studio() {
         {renderErr && <p className="cta-error" data-testid="cta-error">{renderErr}</p>}
       </div>
 
-      {/* Active render */}
-      {render && (
-        <div className="render-card" data-testid="render-card">
-          {/* Video-forming skeleton — shown while render is in progress.
-             Replaces the boring static bar with a real container that
-             visually conveys "your video is taking shape." */}
-          {render.status !== "complete" && render.status !== "failed" && (
-            <div
-              className={`render-skeleton ${render.aspect === "9_16" ? "is-portrait" : "is-landscape"}`}
-              data-testid="render-skeleton"
-            >
-              <div className="render-skeleton-stripes" aria-hidden="true" />
-              <div className="render-skeleton-glow" aria-hidden="true" />
-              <div className="render-skeleton-center">
-                <div className="render-skeleton-play" aria-hidden="true">
-                  <Play size={28} />
-                </div>
-                <div className="render-skeleton-label" data-testid="render-skeleton-label">
-                  {render.progress_label || "Building your video…"}
-                </div>
-                <div className="render-skeleton-pct">{render.progress}%</div>
+      {/* Active renders — shows every in-flight render so concurrent
+          renders (e.g. a 9:16 fired right after a 16:9) are both visible
+          at the same time. The most-recently-completed render shows below
+          this grid so you can play it without scrolling to History. */}
+      {(() => {
+        // Combine the freshly-submitted `render` with any other in-flight
+        // history rows. De-dupe by id (render is also in history).
+        const inflightFromHistory = history.filter(
+          (h) => h.status !== "complete" && h.status !== "failed"
+        );
+        const activeMap = new Map();
+        if (render && render.status !== "complete" && render.status !== "failed") {
+          activeMap.set(render.id, render);
+        }
+        for (const r of inflightFromHistory) {
+          if (!activeMap.has(r.id)) activeMap.set(r.id, r);
+        }
+        const activeList = Array.from(activeMap.values());
+        const terminalCurrent =
+          render && (render.status === "complete" || render.status === "failed")
+            ? render
+            : null;
+        return (
+          <>
+            {activeList.length > 0 && (
+              <div
+                className={`active-grid is-${Math.min(activeList.length, 3)}`}
+                data-testid="active-render-grid"
+              >
+                {activeList.map((r) => (
+                  <div
+                    key={r.id}
+                    className="render-card is-mini"
+                    data-testid={`active-card-${r.id}`}
+                  >
+                    <div
+                      className={`render-skeleton ${
+                        r.aspect === "9_16" ? "is-portrait" : "is-landscape"
+                      }`}
+                    >
+                      <div className="render-skeleton-stripes" aria-hidden="true" />
+                      <div className="render-skeleton-glow" aria-hidden="true" />
+                      <div className="render-skeleton-center">
+                        <div className="render-skeleton-play" aria-hidden="true">
+                          <Play size={28} />
+                        </div>
+                        <div className="render-skeleton-label">
+                          {r.progress_label || "Building your video…"}
+                        </div>
+                        <div className="render-skeleton-pct">{r.progress}%</div>
+                      </div>
+                    </div>
+                    <div className="render-status">
+                      <span className="render-status-label">
+                        {r.mode === MODES.AVATAR ? "Avatar" : "Faceless"} ·{" "}
+                        {r.aspect === "9_16" ? "9:16" : "16:9"}
+                      </span>
+                      <span className="render-status-pct">{r.progress}%</span>
+                    </div>
+                    <div className="render-bar">
+                      <div
+                        className="render-bar-fill is-progressing"
+                        style={{ width: `${r.progress}%` }}
+                      />
+                    </div>
+                  </div>
+                ))}
               </div>
-            </div>
-          )}
-          <div className="render-status">
-            <span className="render-status-label" data-testid="render-status-label">
-              {render.progress_label || render.status}
-            </span>
-            <span className="render-status-pct" data-testid="render-progress">{render.progress}%</span>
-          </div>
-          <div className="render-bar">
-            <div
-              className={`render-bar-fill ${render.status === "complete" || render.status === "failed" ? "" : "is-progressing"}`}
-              style={{ width: `${render.progress}%` }}
-            />
-          </div>
-          {render.status === "complete" && render.result_url && (
-            <video className={`render-video ${render.aspect === "9_16" ? "is-portrait" : ""}`} data-testid="render-video" src={render.result_url} controls playsInline />
-          )}
-          {render.status === "failed" && (
-            <p style={{ color: "var(--danger)", margin: 0 }}>
-              Render failed: {friendlyRenderError({ response: { data: { detail: render.error } } })}
-            </p>
-          )}
-          {(render.status === "complete" || render.status === "failed") && (
-            <button
-              type="button"
-              className="header-btn"
-              data-testid="render-card-regenerate"
-              onClick={() => regenerate(render)}
-              style={{ alignSelf: "flex-start" }}
-            >
-              <RotateCw size={13} /> Regenerate
-            </button>
-          )}
-        </div>
-      )}
+            )}
+            {terminalCurrent && (
+              <div className="render-card" data-testid="render-card">
+                <div className="render-status">
+                  <span className="render-status-label" data-testid="render-status-label">
+                    {terminalCurrent.progress_label || terminalCurrent.status}
+                  </span>
+                  <span className="render-status-pct" data-testid="render-progress">
+                    {terminalCurrent.progress}%
+                  </span>
+                </div>
+                <div className="render-bar">
+                  <div
+                    className="render-bar-fill"
+                    style={{ width: `${terminalCurrent.progress}%` }}
+                  />
+                </div>
+                {terminalCurrent.status === "complete" && terminalCurrent.result_url && (
+                  <video
+                    className={`render-video ${terminalCurrent.aspect === "9_16" ? "is-portrait" : ""}`}
+                    data-testid="render-video"
+                    src={terminalCurrent.result_url}
+                    controls
+                    playsInline
+                  />
+                )}
+                {terminalCurrent.status === "failed" && (
+                  <p style={{ color: "var(--danger)", margin: 0 }}>
+                    Render failed:{" "}
+                    {friendlyRenderError({
+                      response: { data: { detail: terminalCurrent.error } },
+                    })}
+                  </p>
+                )}
+                <button
+                  type="button"
+                  className="header-btn"
+                  data-testid="render-card-regenerate"
+                  onClick={() => regenerate(terminalCurrent)}
+                  style={{ alignSelf: "flex-start" }}
+                >
+                  <RotateCw size={13} /> Regenerate
+                </button>
+              </div>
+            )}
+          </>
+        );
+      })()}
 
       {/* History */}
       <div className="history-block" data-testid="history-block">

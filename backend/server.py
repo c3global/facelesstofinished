@@ -484,15 +484,16 @@ async def _trim_stock_video(video_url: str, aspect: str, duration_ms: int, scene
         out_w, out_h = 720, 1280
     else:
         out_w, out_h = 1280, 720
-    # Inflate by ~15% so the zoompan crop never reveals letterbox borders.
-    inflated_w = int(out_w * 1.15)
-    inflated_h = int(out_h * 1.15)
-    # scale-then-crop to fill the target frame; subtle slow zoom keeps the
-    # composition cinematic even when the source is short.
+    # Plain scale + center-crop preserves the stock clip's NATIVE motion. The
+    # earlier version stacked a `zoompan` filter on top, which is a still-image
+    # ken-burns filter — applied to a video input it freezes the first frame
+    # and pans on it, killing the actual video motion. Reported by Charity
+    # ("the b-roll video clips ... aren't moving like video clips, they look
+    # like still images"). The clip is already a real video; just fit it to
+    # the output frame and let it play.
     vf = (
-        f"scale={inflated_w}:{inflated_h}:force_original_aspect_ratio=increase,"
-        f"crop={inflated_w}:{inflated_h},"
-        f"zoompan=z='min(zoom+0.0006,1.06)':d={int(duration_s*30)}:s={out_w}x{out_h}:fps=30"
+        f"scale={out_w}:{out_h}:force_original_aspect_ratio=increase,"
+        f"crop={out_w}:{out_h}"
     )
     tmpdir = tempfile.mkdtemp(prefix="trim_")
     src = os.path.join(tmpdir, "src.mp4")
@@ -505,7 +506,9 @@ async def _trim_stock_video(video_url: str, aspect: str, duration_ms: int, scene
             with open(src, "wb") as f:
                 f.write(r.content)
         cmd = [
-            FFMPEG_BIN, "-y", "-loglevel", "error", "-ss", "0", "-i", src,
+            FFMPEG_BIN, "-y", "-loglevel", "error",
+            "-stream_loop", "-1",  # loop short sources so the scene fills its slot
+            "-ss", "0", "-i", src,
             "-t", f"{duration_s:.2f}",
             "-an",  # drop source audio — we use Kokoro's voiceover
             "-vf", vf,
@@ -691,12 +694,26 @@ async def studio_stock_search(
                 raise HTTPException(status_code=502, detail="Pixabay error")
             for v in r.json().get("hits") or []:
                 videos = v.get("videos") or {}
-                pick = videos.get("medium") or videos.get("small") or videos.get("large")
+                # Prefer `medium` for play (smaller files), but fall through to
+                # other sizes if medium is missing on a given clip.
+                pick = videos.get("medium") or videos.get("small") or videos.get("large") or videos.get("tiny")
                 if not pick:
                     continue
+                # Pixabay's API moved off Vimeo CDN — every size object now
+                # carries its own `thumbnail` URL. The old `picture_id` field
+                # is gone, which is why every Pixabay card was rendering as
+                # a blank tile until this fix.
+                thumb = pick.get("thumbnail")
+                if not thumb:
+                    # Best-effort fallback: any other size's thumbnail.
+                    for sz in ("large", "medium", "small", "tiny"):
+                        cand = (videos.get(sz) or {}).get("thumbnail")
+                        if cand:
+                            thumb = cand
+                            break
                 results.append({
                     "id": f"pix-{v.get('id')}",
-                    "thumb": f"https://i.vimeocdn.com/video/{v.get('picture_id')}_295x166.jpg" if v.get("picture_id") else None,
+                    "thumb": thumb,
                     "video_url": pick.get("url"),
                     "duration": v.get("duration"),
                     "width": pick.get("width"),
