@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { UserCircle2, Mic, Ratio, Film, ChevronDown, Play, Trash2, Sparkles, Wand2, Loader2, RotateCw } from "lucide-react";
+import { UserCircle2, Mic, Ratio, Film, ChevronDown, Play, Trash2, Sparkles, Wand2, Loader2, RotateCw, Cpu } from "lucide-react";
 import { apiClient, useAuth } from "../App";
 import {
   AvatarPicker,
@@ -7,6 +7,7 @@ import {
   BRollSourcePicker,
   AspectPicker,
   StockPicker,
+  AIEnginePicker,
 } from "../components/Pickers";
 import Toast from "../components/Toast";
 
@@ -136,6 +137,11 @@ export default function Studio() {
   // Faceless mode picks
   const [ttsVoice, setTtsVoice] = useState(null);
   const [brollSource, setBrollSource] = useState("pexels"); // global default
+  // AI text-to-video engine for AI-sourced scenes. Default "flux" keeps the
+  // existing Ken-Burns slideshow behaviour; "kling" / "veo3" / "pika" generate
+  // real motion video clips per scene. Only relevant when at least one scene
+  // is AI-sourced (broll_source = "ai" or "mix" with AI overrides).
+  const [aiEngine, setAiEngine] = useState("flux");
   // Bulk prompts model:
   // - bulkPrompts: raw textarea text
   // - sceneOverrides: per-index { source?, pick? } overrides
@@ -326,6 +332,7 @@ export default function Studio() {
     voice_id: mode === MODES.AVATAR ? voice?.id : null,
     tts_voice_id: mode === MODES.FACELESS ? ttsVoice?.id : null,
     broll_source: mode === MODES.FACELESS ? brollSource : null,
+    ai_engine: mode === MODES.FACELESS ? aiEngine : "flux",
     scenes: mode === MODES.FACELESS ? scenes.map((s) => ({
       source: s.source,
       prompt: s.prompt,
@@ -356,6 +363,34 @@ export default function Studio() {
   };
 
   const generate = () => fireRender(buildPayload());
+
+  // "Render both aspects" — fire two renders in parallel (9:16 + 16:9) using
+  // the same script, avatar/voice, scenes, and AI engine. The active-renders
+  // grid above the History list will show both progress bars side by side.
+  const renderBothAspects = async () => {
+    setRenderErr("");
+    try {
+      const r = await apiClient.post("/studio/render/both-aspects", buildPayload());
+      const jobs = r.data?.jobs || [];
+      if (jobs.length === 0) throw new Error("Empty response");
+      // Set the freshly-submitted 9:16 as the focused render (first in the
+      // returned array). The 16:9 will show up in the active-grid via the
+      // history polling loop.
+      const focus = jobs[0];
+      setRender(focus);
+      // Insert both job docs at the top of history immediately so the user
+      // sees both progress cards without waiting for the next history poll.
+      setHistory((h) => {
+        const ids = new Set(jobs.map((j) => j.id));
+        return [...jobs, ...h.filter((row) => !ids.has(row.id))];
+      });
+      setToast(`Two renders queued — 9:16 + 16:9.`);
+      scrollToRenderCard();
+      pollStatus(focus.id);
+    } catch (e) {
+      setRenderErr(friendlyRenderError(e));
+    }
+  };
 
   // Re-fire the SAME render payload (same script, avatar, voice, scenes).
   // Smoother UX than rebuilding the form when iterating on a render.
@@ -547,6 +582,30 @@ export default function Studio() {
       <ChevronDown size={14} className="chip-caret" />
     </button>
   );
+  // AI engine chip — only visible in Faceless mode AND when at least one
+  // scene is going through the AI pipeline (broll_source = "ai" or "mix",
+  // or any scene has explicit source="ai"). Hidden for pure Pexels/Pixabay
+  // renders since the engine choice has no effect there.
+  const anyAiScene = useMemo(() => {
+    if (brollSource === "ai") return true;
+    if (brollSource === "mix") {
+      return scenes.some((s) => s.source === "ai");
+    }
+    return scenes.some((s) => s.source === "ai");
+  }, [brollSource, scenes]);
+  const aiEngineLabel = {
+    flux: "Engine · Flux + Motion",
+    kling: "Engine · Kling 2.1",
+    veo3: "Engine · Veo 3.1",
+    pika: "Engine · Pika 2.1",
+  }[aiEngine] || "AI Engine";
+  const chipAiEngine = (
+    <button className="chip is-set" data-testid="chip-ai-engine" onClick={() => setModal("ai-engine")}>
+      <span className="chip-icon"><Cpu size={14} /></span>
+      <span className="chip-label">{aiEngineLabel}</span>
+      <ChevronDown size={14} className="chip-caret" />
+    </button>
+  );
 
   // ---- Source pills handled by hoisted SourcePills component ----
 
@@ -642,7 +701,7 @@ export default function Studio() {
         {mode === MODES.AVATAR ? (
           <>{chipAvatar}{chipVoice}{chipAspect}</>
         ) : (
-          <>{chipTtsVoice}{chipBroll}{chipAspect}</>
+          <>{chipTtsVoice}{chipBroll}{anyAiScene && chipAiEngine}{chipAspect}</>
         )}
       </div>
 
@@ -803,6 +862,16 @@ export default function Studio() {
           onClick={generate}
         >
           Render your video
+        </button>
+        <button
+          type="button"
+          className="cta-btn-secondary"
+          data-testid="generate-both-aspects-btn"
+          disabled={!canGenerate}
+          onClick={renderBothAspects}
+          title="Queue two parallel renders — one 9:16 and one 16:9 — with the same script and settings."
+        >
+          <Ratio size={14} /> Render both aspects (9:16 + 16:9)
         </button>
         {!canGenerate && (
           <p className="cta-hint" data-testid="cta-hint">
@@ -1101,6 +1170,13 @@ export default function Studio() {
         }}
       />
       <AspectPicker open={modal === "aspect"} onClose={closeModal} value={aspect} onPick={setAspect} />
+      <AIEnginePicker
+        open={modal === "ai-engine"}
+        onClose={closeModal}
+        value={aiEngine}
+        onPick={setAiEngine}
+        isAdmin={isAdmin}
+      />
       <StockPicker
         open={stockModal.open}
         sceneIdx={stockModal.idx}

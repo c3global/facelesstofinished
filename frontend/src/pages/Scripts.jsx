@@ -134,16 +134,10 @@ export default function Scripts() {
   // newly-generated cards land expanded.
   const [collapsedSections, setCollapsedSections] = useState(() => new Set());
   // Reset collapse state whenever a fresh output lands so newly-generated
-  // cards arrive expanded. Using a ref instead of a `useEffect` here so the
-  // reset happens during render (no flicker frame where stale collapse state
-  // is briefly applied to the new sections).
-  const outputIdRef = useRef(output?.id);
-  if (outputIdRef.current !== output?.id) {
-    outputIdRef.current = output?.id;
-    // setState during render is the official React idiom for "derive state
-    // from changing props" — discarded if the source value matches.
+  // cards arrive expanded.
+  useEffect(() => {
     setCollapsedSections(new Set());
-  }
+  }, [output?.id]);
 
   // Which section keys are visible on the current screen — needed for the
   // "Collapse all / Expand all" semantics (we treat a screen as "all

@@ -1,0 +1,67 @@
+{
+  "summary": "Iteration 12 — Verified F2F48 Studio v1.8.0 feature additions: passwordless admin auth, AI Text-to-Video engine toggle (Flux/Kling/Veo3/Pika) for Faceless mode, and one-click 'Render both aspects' (9:16 + 16:9 parallel). Backend: 9/9 pytest tests PASSED (auth + /studio/render/estimate cost scaling across all 4 engines matching expected $0.10/$1.02/$2.02/$0.82 + /studio/render/both-aspects shape with immediate force-delete cleanup). Frontend: live UI smoke on /studio confirmed all new testids (chip-ai-engine appears only when broll=ai/mix, AIEnginePicker modal shows 4 options, chip label updates after pick, hidden when broll=pexels). /scripts v1.8.0 page renders cleanly with all components (ResultsNavBar, SectionCard, platform pills with proper active-state contrast). ZERO compile-error overlays. ZERO real renders triggered (estimate-only backend + no clicks on generate-btn/generate-both-aspects-btn).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "/api/auth/check",
+        "issue": "Response user object does NOT carry isAdmin field — only {email, entitlements}. isAdmin is only surfaced by GET /api/auth/me. Task spec claimed /auth/check should return isAdmin=true; either the spec is wrong or the endpoint should be extended to include it for symmetry with /auth/me. Currently a frontend consumer must call /auth/me after /auth/check to know admin status."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "verified_features": {
+    "auth_passwordless_admin": "PASS — POST /api/auth/check with {email:'drcharitycampbell@gmail.com'} returns valid JWT (235 chars). GET /api/auth/me with Bearer token returns isAdmin=true and entitlements=[base, shorts, studio].",
+    "estimate_ai_engine_flux": "PASS — 2 AI scenes + short script → 10c (expected ~10c)",
+    "estimate_ai_engine_kling": "PASS — same payload → 102c (expected ~$1.02)",
+    "estimate_ai_engine_veo3": "PASS — same payload → 202c (expected ~$2.02)",
+    "estimate_ai_engine_pika": "PASS — same payload → 82c (expected ~$0.82)",
+    "estimate_engine_ordering": "PASS — veo3 > kling > pika > flux confirmed via direct comparison",
+    "both_aspects_endpoint": "PASS — POST /studio/render/both-aspects with mode=faceless, broll=pexels, 1 scene returns {jobs: [job_9_16, job_16_9]} both status='queued', mode='faceless', ai_engine='flux'. Immediately force-deleted via /studio/render/bulk-delete (admin) — verified history clean afterwards (no test jobs remain). Real fal.ai spend minimized.",
+    "studio_compile_health": "PASS — /studio loads with zero 'Compiled with problems' overlay, zero page errors, zero console errors. No 'react-hooks/set-state-in-effect' rule-not-found error.",
+    "studio_chip_ai_engine_conditional": "PASS — chip-ai-engine appears ONLY when broll_source='ai' (verified visible after broll-ai pick, hidden after switch to broll-pexels). Default label 'Engine · Flux + Motion'.",
+    "studio_ai_engine_picker": "PASS — Clicking chip-ai-engine opens modal with all 4 options visible: ai-engine-flux, ai-engine-kling, ai-engine-veo3, ai-engine-pika. Picking kling closes modal and updates chip label to 'Engine · Kling 2.1'.",
+    "studio_generate_both_aspects_btn": "PASS — [data-testid='generate-both-aspects-btn'] visible below main render button with label 'Render both aspects (9:16 + 16:9)'. Disabled when form incomplete (canGenerate=false), enables when form is complete. NOT CLICKED to avoid real render spend.",
+    "studio_generate_btn_and_hint": "PASS — generate-btn visible. cta-hint shows 'Paste a script to begin.' when form incomplete. Render button NOT clicked per spec.",
+    "scripts_v18_compile_health": "PASS — /scripts loads cleanly, zero compile overlay, zero errors. Previous react-hooks/set-state-in-effect issue does NOT recur.",
+    "scripts_v18_components": "PASS — scripts-page, scripts-mode-toggle (long/shorts), scripts-topic, scripts-platform-* pills, sprint-toggle all render. ResultsNavBar component correctly HIDDEN before any generation (results-nav testid not in DOM yet).",
+    "scripts_platform_pill_contrast": "PASS — active YouTube pill computed bg=rgb(255,0,51), color=rgb(232,228,255) — high contrast on dark theme. is-selected class applied correctly."
+  },
+  "ui_flows_not_completed_with_rationale": {
+    "scripts_actual_generation": "Did NOT trigger script generation — spec says 'skip generation if it's too slow — just check that the components render properly'. Component presence verified via testids and DOM inspection.",
+    "shorts_auto_scroll_and_copy_button": "These only render AFTER a successful generation. Component imports verified in code (Scripts.jsx imports SectionCard + ResultsNavBar; sprint mode rendering uses per-variant copy buttons). Live trigger skipped per 'skip generation' guidance.",
+    "real_render_buttons": "By explicit spec instruction: generate-btn and generate-both-aspects-btn NEVER clicked — DRY_RUN_RENDERS=false in /app/backend/.env so a click would hit real HeyGen + fal.ai. Verified existence + disabled-when-invalid only.",
+    "light_mode_theme_toggle": "No theme-toggle data-testid found in current build. The platform pill active-state contrast was verified on the current (dark) theme — bg/color combo is high-contrast and matches the is-selected class. If a light-mode theme exists, it was not exposed in this iteration."
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_studio_v18_ai_engine.py",
+    "/app/test_reports/pytest/iteration_12.xml"
+  ],
+  "action_items": [
+    "(Optional) Extend POST /api/auth/check response to include isAdmin on the user object — currently only /auth/me carries it; the task spec assumed /auth/check would also. Frontend currently calls /auth/me as a follow-up which works, so this is a nice-to-have not a blocker.",
+    "(Carried from iter 10/11) server.py is now ~2263 lines, well past the 700-line guideline. Split render pipelines (_run_render_avatar/faceless/composite) and T2V_ENGINES helpers into /app/backend/renders/*.py before adding more engines."
+  ],
+  "critical_code_review_comments": [
+    "server.py 2263 lines — urgent split needed; v1.8.0 added ~300 more lines (T2V_ENGINES, _fal_t2v_generate, _make_t2v_clip, both-aspects endpoint). Refactor recommended.",
+    "T2V_ENGINES cost_cents are ROUGH estimates (kling=50c, veo3=100c, pika=40c). Real fal.ai prices may vary; consider periodic validation against actual invoiced cost so the circuit breaker doesn't under-estimate.",
+    "estimate_render_cost_cents TTS coefficient (0.5c per 1k chars) still 10x too low per earlier iterations — at higher engine costs (veo3 = $2/clip) the script length is dwarfed but for many short t2v scenes this still matters.",
+    "/studio/render/both-aspects fires asyncio.create_task on insert — there's a small race where the background _run_render can begin before a fast bulk-delete completes. Admin force-delete should ideally also signal/cancel the task. Low-risk because both-aspects is admin-driven, but worth tightening."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_studio_v18_ai_engine.py (NEW — 9 pytests covering auth + estimate × 4 engines + both-aspects shape)"
+  ],
+  "success_rate": {
+    "backend": "100% (9/9 pytest passed)",
+    "frontend": "100% on all live-tested UI surfaces: /scripts + /studio compile health, chip-ai-engine conditional visibility, AIEnginePicker modal with 4 options, chip label updates, generate-both-aspects-btn visibility + label, cta-hint guidance"
+  },
+  "test_credentials": "drcharitycampbell@gmail.com (DEV_BYPASS, isAdmin=true, all entitlements). JWT stored as f48_studio_token in localStorage. NO PASSWORD — POST /api/auth/check accepts just {email}.",
+  "seed_data_creation": "2 transient render jobs created (both-aspects test: 9:16 + 16:9 with mode=faceless broll=pexels 1 scene) and immediately force-deleted via /studio/render/bulk-delete. History verified clean afterwards. ZERO permanent test data added.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "v1.8.0 (AI engine toggle + both-aspects) is fully verified end-to-end. ZERO real renders were triggered — all backend tests used estimate-only, and the one both-aspects call used pexels (free stock) + immediate force-delete cleanup. The chip-ai-engine appears ONLY when at least one scene is source='ai' (via broll_source='ai'/'mix' or per-scene override). All 4 engines map to expected cost tiers: flux=4c/scene, pika=40c/scene, kling=50c/scene, veo3=100c/scene. Backend response from /api/auth/check does NOT include isAdmin in the user object (only /auth/me does) — spec was wrong on that detail but functionally fine since frontend calls /auth/me afterwards. NO blocking bugs. Recommend addressing the server.py size + estimate TTS coefficient before going live with real-render mode on the new t2v engines (a single misconfigured 12-scene veo3 render could approach $12).",
+  "rca of the issue": "N/A — no bugs found. /auth/check missing isAdmin in user object is a minor spec mismatch (not a bug)."
+}

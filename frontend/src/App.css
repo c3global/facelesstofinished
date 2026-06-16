@@ -467,6 +467,34 @@
   box-shadow: none;
   letter-spacing: 0.08em;
 }
+/* Secondary "Render both aspects" CTA — quieter than the main red gradient
+   so it reads as a power-user shortcut, not a competing primary action. */
+.cta-btn-secondary {
+  width: 100%;
+  padding: 12px 18px;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  border: 1px dashed var(--border);
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: border-color .15s, background .15s, color .15s;
+  cursor: pointer;
+}
+.cta-btn-secondary:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: rgba(232, 192, 134, 0.06);
+  color: var(--accent);
+}
+.cta-btn-secondary:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
 .cta-hint,
 .cta-error {
   text-align: center;

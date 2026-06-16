@@ -120,6 +120,14 @@ class RenderRequest(BaseModel):
     tts_voice_id: Optional[str] = None
     broll_source: Optional[str] = None  # "ai" | "pexels" | "pixabay" | "mix"
     scenes: list[dict] = Field(default_factory=list)
+    # AI video engine for AI-sourced scenes (Faceless mode):
+    #   - "flux" → Flux 1.1 Pro static image + ken-burns motion (fast, cheap)
+    #   - "kling" → Kling 2.1 Master text-to-video (premium, cinematic)
+    #   - "veo3" → Google Veo 3.1 Fast text-to-video (Google quality)
+    #   - "pika" → Pika 2.1 text-to-video (cheaper t2v option)
+    # Stock scenes (Pexels/Pixabay) ignore this field. Default keeps existing
+    # behaviour for users who never touched the picker.
+    ai_engine: str = "flux"
     # Composite mode — interleave avatar talking-head with B-roll cutaways
     broll_cutaway_interval_s: int = 12
     # Caption styling preset (faceless mode only — HeyGen handles its own
@@ -587,6 +595,116 @@ async def _auto_search_stock_url(source: str, query: str, orientation: str) -> O
     return None
 
 
+# --- AI Text-to-Video engines (Faceless mode, optional alternative to Flux) ---
+# When a scene's effective source is "ai" AND `ai_engine != "flux"`, instead of
+# generating a static Flux image + ken-burns motion, we hit one of fal.ai's
+# native t2v models. The raw output is a 5-10s MP4 at the model's resolution;
+# we then run it through `_trim_stock_video` to crop/scale/loop to the exact
+# per-scene duration in our timeline.
+T2V_ENGINES: dict = {
+    # Kling 2.1 Master — premium cinematic, ~$0.30-0.50/clip. 5s or 10s only.
+    "kling": {
+        "model": "fal-ai/kling-video/v2.1/master/text-to-video",
+        "build_payload": lambda prompt, aspect, dur_s: {
+            "prompt": prompt,
+            "duration": "10" if dur_s > 7 else "5",
+            "aspect_ratio": "9:16" if aspect == "9_16" else "16:9",
+        },
+        "cost_cents": 50,
+        "max_wait_s": 600,
+    },
+    # Veo 3.1 Fast — Google quality at half the cost. 4/6/8s. No audio (we
+    # have Kokoro voiceover, so generate_audio is forced off).
+    "veo3": {
+        "model": "fal-ai/veo3.1/fast",
+        "build_payload": lambda prompt, aspect, dur_s: {
+            "prompt": prompt,
+            "duration": "8s" if dur_s > 6 else ("6s" if dur_s > 4 else "4s"),
+            "aspect_ratio": "9:16" if aspect == "9_16" else "16:9",
+            "resolution": "720p",
+            "generate_audio": False,
+        },
+        "cost_cents": 100,  # ~$1/clip @ 8s standard pricing
+        "max_wait_s": 900,
+    },
+    # Pika 2.1 — flat $0.40/clip, supports many aspect ratios.
+    "pika": {
+        "model": "fal-ai/pika/v2.1/text-to-video",
+        "build_payload": lambda prompt, aspect, dur_s: {
+            "prompt": prompt,
+            "duration": 10 if dur_s > 7 else 5,
+            "aspect_ratio": "9:16" if aspect == "9_16" else "16:9",
+            "resolution": "720p",
+        },
+        "cost_cents": 40,
+        "max_wait_s": 600,
+    },
+}
+
+
+async def _fal_t2v_generate(engine: str, prompt: str, aspect: str, duration_ms: int) -> Optional[str]:
+    """Submit a prompt to one of the AI text-to-video engines (Kling/Veo/Pika)
+    on fal.ai and poll for completion. Returns the raw MP4 URL or None on any
+    failure. Per-scene; the caller is expected to trim/scale/loop the result
+    to the exact duration via `_trim_stock_video`."""
+    cfg = T2V_ENGINES.get(engine)
+    if not cfg or not FAL_API_KEY:
+        return None
+    fal_headers = {"Authorization": f"Key {FAL_API_KEY}"}
+    payload = cfg["build_payload"](prompt, aspect, max(1.0, duration_ms / 1000.0))
+    model_id = cfg["model"]
+    max_wait_s = cfg["max_wait_s"]
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            sub = await client.post(
+                f"https://queue.fal.run/{model_id}",
+                headers=fal_headers,
+                json=payload,
+            )
+            if sub.status_code not in (200, 202):
+                logger.warning(f"[t2v] {engine} submit FAIL {sub.status_code}: {sub.text[:200]}")
+                return None
+            sub_body = sub.json()
+            status_url = sub_body.get("status_url")
+            result_url = sub_body.get("response_url")
+            if not status_url or not result_url:
+                logger.warning(f"[t2v] {engine} submit malformed: {str(sub_body)[:200]}")
+                return None
+            deadline = asyncio.get_event_loop().time() + max_wait_s
+            while asyncio.get_event_loop().time() < deadline:
+                await asyncio.sleep(4)
+                stat = await client.get(status_url, headers=fal_headers)
+                if stat.status_code != 200:
+                    continue
+                st = stat.json().get("status", "")
+                if st == "COMPLETED":
+                    res = await client.get(result_url, headers=fal_headers)
+                    if res.status_code != 200:
+                        return None
+                    out = res.json()
+                    return (out.get("video") or {}).get("url") or out.get("video_url")
+                if st == "FAILED":
+                    logger.warning(f"[t2v] {engine} FAILED: {stat.text[:200]}")
+                    return None
+            logger.warning(f"[t2v] {engine} polling timed out after {max_wait_s}s")
+            return None
+    except Exception as exc:
+        logger.warning(f"[t2v] {engine} exception: {type(exc).__name__}: {exc}")
+        return None
+
+
+async def _make_t2v_clip(prompt: str, aspect: str, duration_ms: int, engine: str, scene_idx: int) -> Optional[str]:
+    """Generate an AI text-to-video clip via fal.ai (Kling/Veo/Pika), then
+    crop/scale/loop the raw output to fit the exact `duration_ms` slot in our
+    timeline. Returns the trimmed fal-storage URL or None on any failure."""
+    raw_url = await _fal_t2v_generate(engine, prompt, aspect, duration_ms)
+    if not raw_url:
+        return None
+    # Pipe through the existing stock-clip normalizer — it already handles
+    # aspect crop, 30fps resample, and seamless looping for short sources.
+    return await _trim_stock_video(raw_url, aspect, duration_ms, scene_idx)
+
+
 # --- Sentence-aware script splitter ----------------------------------------
 # Each "beat" is one natural pause in the voiceover (sentence or em-dash/comma
 # split for runs longer than 25 words). Used by:
@@ -871,13 +989,25 @@ def estimate_render_cost_cents(payload: RenderRequest) -> int:
         # HeyGen $0.30/min + 5c flat overhead
         cents += duration_min * 30.0 + 5.0
     elif payload.mode == "faceless":
-        # Kokoro TTS + Flux per-scene + compose
+        # Kokoro TTS + per-scene visuals + compose
         scene_count = max(1, len(payload.scenes) or int(duration_s / 8))
         # ~$0.005 / 1k chars for Kokoro-class TTS — coefficient deliberately
         # conservative (real renders may cost less but we'd rather reject
         # a borderline payload than surprise-charge the user above the cap).
         cents += (len(payload.script) / 1000.0) * 5.0  # TTS
-        cents += scene_count * 4.0                     # Flux images
+        # Per-scene cost depends on whether AI scenes use Flux 1.1 Pro (static
+        # image + ken-burns) or one of the premium text-to-video engines.
+        engine = (payload.ai_engine or "flux").lower()
+        if engine in T2V_ENGINES:
+            # Worst case: every scene is an AI t2v clip. Real renders may mix
+            # in cheaper stock — but we estimate the ceiling for the circuit
+            # breaker so a 12-scene Veo render doesn't sneak past us.
+            ai_scenes = sum(1 for s in payload.scenes if (s.get("source") or payload.broll_source) == "ai") or scene_count
+            cents += ai_scenes * T2V_ENGINES[engine]["cost_cents"]
+            stock_scenes = max(0, scene_count - ai_scenes)
+            cents += stock_scenes * 1.0  # stock search is essentially free
+        else:
+            cents += scene_count * 4.0                     # Flux images
         cents += 2.0                                   # compose overhead
     elif payload.mode == "composite":
         # Avatar talking-head + B-roll cutaway every N seconds
@@ -1243,20 +1373,36 @@ async def _run_render_faceless(job: dict):
 
         # Resolve URLs per scene.
         #   - AI scenes  → Flux 1.1 Pro (still image; we ken-burns it later)
+        #                   OR Kling/Veo/Pika text-to-video (when job.ai_engine
+        #                   != "flux"). T2V scenes skip Flux entirely; the
+        #                   prompt is generated into a real video in the
+        #                   normalize step (where we know the per-scene
+        #                   duration).
         #   - Stock scenes (pexels / pixabay / mix) → use pre-picked clip if
         #     present; otherwise auto-search the source and take the top hit.
         global_source = job.get("broll_source") or "ai"
-        ai_tasks: list = []          # (idx, prompt) — Flux text-to-image jobs
+        ai_engine = (job.get("ai_engine") or "flux").lower()
+        is_t2v = ai_engine in T2V_ENGINES
+        ai_tasks: list = []          # (idx, prompt) — Flux text-to-image jobs (engine="flux" only)
         stock_search_tasks: list = []  # (idx, source, query, orientation) — auto-search jobs
-        scene_kind: list = ["" for _ in scenes]  # "ai" | "stock" — keep effective source per scene
+        scene_kind: list = ["" for _ in scenes]  # "ai" | "ai_t2v" | "stock"
+        scene_prompts: list = ["" for _ in scenes]  # prompt text, used by ai_t2v scenes
 
         orientation = "portrait" if job["aspect"] == "9_16" else "landscape"
         for i, s in enumerate(scenes):
             effective_src = s.get("source") or global_source
-            scene_kind[i] = "ai" if effective_src == "ai" else "stock"
             if effective_src == "ai":
-                ai_tasks.append((i, s.get("prompt", "")))
+                if is_t2v:
+                    scene_kind[i] = "ai_t2v"
+                    scene_prompts[i] = s.get("prompt") or ""
+                    # Sentinel — we have a "resolved" scene (prompt is ready);
+                    # the actual video is generated in normalize_scene.
+                    image_urls[i] = "__t2v_pending__"
+                else:
+                    scene_kind[i] = "ai"
+                    ai_tasks.append((i, s.get("prompt", "")))
             else:
+                scene_kind[i] = "stock"
                 pre_picked = s.get("video_url") or s.get("url")
                 if pre_picked:
                     image_urls[i] = pre_picked
@@ -1291,6 +1437,12 @@ async def _run_render_faceless(job: dict):
         if parallel_jobs:
             await asyncio.gather(*parallel_jobs)
             actual_cost_cents += total_ai * 4
+        # T2V scenes also accumulate cost — one premium clip per scene at the
+        # engine's per-clip rate. Tracked separately so admin telemetry shows
+        # the real spend per engine.
+        if is_t2v:
+            n_t2v = sum(1 for k in scene_kind if k == "ai_t2v")
+            actual_cost_cents += n_t2v * T2V_ENGINES[ai_engine]["cost_cents"]
 
     # --- 3) Audio duration — probe the real WAV file so video length matches
     # exactly. Falls back to the script-char estimate on probe failure. ---
@@ -1361,6 +1513,12 @@ async def _run_render_faceless(job: dict):
         kind = scene_kind[idx]
         if kind == "ai":
             mp4 = await _make_kenburns_mp4(url, job["aspect"], this_dur, idx)
+        elif kind == "ai_t2v":
+            # url is the "__t2v_pending__" sentinel — generate the real video
+            # via Kling/Veo/Pika using the stored prompt at this exact duration.
+            mp4 = await _make_t2v_clip(
+                scene_prompts[idx], job["aspect"], this_dur, ai_engine, idx,
+            )
         else:
             mp4 = await _trim_stock_video(url, job["aspect"], this_dur, idx)
         if mp4:
@@ -1529,6 +1687,7 @@ async def studio_render(payload: RenderRequest, user: AuthUser = Depends(current
         "tts_voice_id": payload.tts_voice_id,
         "broll_source": payload.broll_source,
         "scenes": payload.scenes,
+        "ai_engine": payload.ai_engine,
         "broll_cutaway_interval_s": payload.broll_cutaway_interval_s,
         "caption_style": payload.caption_style,
         "status": "queued",
@@ -1560,6 +1719,72 @@ async def studio_render(payload: RenderRequest, user: AuthUser = Depends(current
 
     doc.pop("_id", None)
     return doc
+
+
+@api.post("/studio/render/both-aspects")
+async def studio_render_both_aspects(payload: RenderRequest, user: AuthUser = Depends(current_user)):
+    """Fire TWO renders in parallel — one in 9:16 and one in 16:9 — using the
+    same script, avatar/voice, scenes, and AI engine. Returns both job docs
+    so the frontend can track them independently. Saves the user from
+    manually queueing the same render twice with the aspect toggle flipped."""
+    require_studio(user)
+    if payload.mode not in ("avatar", "faceless", "composite"):
+        raise HTTPException(status_code=400, detail="Bad mode")
+    if not payload.script.strip():
+        raise HTTPException(status_code=400, detail="Script required")
+
+    jobs = []
+    for aspect in ("9_16", "16_9"):
+        per_payload = payload.model_copy(update={"aspect": aspect})
+        estimated_cents = estimate_render_cost_cents(per_payload)
+        if estimated_cents > RENDER_COST_CIRCUIT_BREAKER_CENTS:
+            logging.warning(
+                "Both-aspects render circuit-breaker tripped: user=%s aspect=%s estimated=%s¢ threshold=%s¢",
+                user.email, aspect, estimated_cents, RENDER_COST_CIRCUIT_BREAKER_CENTS,
+            )
+            raise HTTPException(
+                status_code=400,
+                detail="Render configuration is too large. Please contact support.",
+            )
+        job_id = str(uuid.uuid4())
+        doc = {
+            "id": job_id,
+            "user_email": user.email,
+            "mode": per_payload.mode,
+            "aspect": per_payload.aspect,
+            "captions": per_payload.captions,
+            "script": per_payload.script,
+            "avatar_id": per_payload.avatar_id,
+            "voice_id": per_payload.voice_id,
+            "tts_voice_id": per_payload.tts_voice_id,
+            "broll_source": per_payload.broll_source,
+            "scenes": per_payload.scenes,
+            "ai_engine": per_payload.ai_engine,
+            "broll_cutaway_interval_s": per_payload.broll_cutaway_interval_s,
+            "caption_style": per_payload.caption_style,
+            "status": "queued",
+            "progress": 5,
+            "progress_label": "Queued…",
+            "result_url": None,
+            "error": None,
+            "estimated_cost_cents": estimated_cents,
+            "actual_cost_cents": 0,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "completed_at": None,
+        }
+        await db.renders.insert_one(doc)
+        await _log_activity("studio_render", user.email, {
+            "job_id": job_id,
+            "mode": per_payload.mode,
+            "aspect": aspect,
+            "batch": "both-aspects",
+            "scene_count": len(per_payload.scenes),
+            "estimated_cost_cents": estimated_cents,
+        })
+        asyncio.create_task(_run_render(job_id))
+        doc.pop("_id", None)
+        jobs.append(doc)
+    return {"jobs": jobs}
 
 
 @api.get("/studio/render/{job_id}")

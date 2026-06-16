@@ -385,6 +385,69 @@ export function CaptionsPicker({ open, onClose, value, onPick }) {
 }
 
 // =====================================================================
+// AI engine picker (Faceless mode only — picks the model for AI scenes)
+// =====================================================================
+export function AIEnginePicker({ open, onClose, value, onPick, isAdmin = false }) {
+  // Engine catalogue. Cost field is only shown to admins per Charity's
+  // instruction — customers see a quality/speed hint instead so the UI
+  // doesn't expose vendor pricing.
+  const options = [
+    {
+      id: "flux",
+      name: "Flux 1.1 Pro · Image + Motion",
+      hint: "Fast · low cost. AI-generated still images animated with cinematic camera moves.",
+      adminCost: "~$0.04/scene",
+      Icon: Sparkles,
+    },
+    {
+      id: "kling",
+      name: "Kling 2.1 Master · Cinematic AI Video",
+      hint: "Premium cinematic motion. Best for action, characters, and complex scenes.",
+      adminCost: "~$0.50/scene",
+      Icon: Film,
+    },
+    {
+      id: "veo3",
+      name: "Google Veo 3.1 Fast · AI Video",
+      hint: "Google's highest fidelity. Best for realistic people, dialogue, and product shots.",
+      adminCost: "~$1.00/scene",
+      Icon: Film,
+    },
+    {
+      id: "pika",
+      name: "Pika 2.1 · AI Video",
+      hint: "Stylized AI video. Great for whimsical, dreamy, fashion-style content.",
+      adminCost: "~$0.40/scene",
+      Icon: Film,
+    },
+  ];
+  return (
+    <Modal open={open} onClose={onClose} title="AI engine for AI scenes" testId="ai-engine-modal">
+      <div className="source-grid" data-testid="ai-engine-grid">
+        {options.map((o) => (
+          <button
+            key={o.id}
+            className={`source-card ${value === o.id ? "is-selected" : ""}`}
+            data-testid={`ai-engine-${o.id}`}
+            onClick={() => { onPick(o.id); onClose(); }}
+          >
+            <div className="source-icon"><o.Icon size={22} /></div>
+            <div className="source-name">{o.name}</div>
+            <div className="source-desc">{o.hint}</div>
+            {isAdmin && (
+              <div className="source-desc" style={{ marginTop: 6, fontSize: 11, opacity: 0.6 }}>
+                {o.adminCost}
+              </div>
+            )}
+          </button>
+        ))}
+      </div>
+    </Modal>
+  );
+}
+
+
+// =====================================================================
 // Stock search modal (per-scene)
 // =====================================================================
 export function StockPicker({ open, onClose, sceneIdx, defaultSource, query: defaultQuery, aspect, onPick }) {
