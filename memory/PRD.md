@@ -139,6 +139,33 @@ Major refactor that addresses 7 explicit user asks. Verified 21/21 backend + ~95
 
 **Deferred from this iteration (Avatar + B-roll cutaways composite mode):** A true "Avatar + B-roll cutaways" render mode (HeyGen avatar talking head intercut with stock B-roll) needs a new backend render branch and a UI toggle in Avatar mode. Decision: defer until the real HeyGen/fal.ai pipelines are wired (DRY_RUN_RENDERS=false) so the UI isn't building against simulated output. The B-roll prompts ARE staged on the handoff so the user can manually flip to Faceless mode in the meantime.
 
+## Iteration 17 — THE faceless smoking-gun fix (2026-02-16)
+**Bug found.** Every Faceless render Charity has ever attempted has timed out at the "Stitching" stage. The stated root cause kept moving (millisecond conversion, track types, 600s vs 900s timeouts, Pexels resolution) but none of those changes actually fixed it. After her latest round of 3 consecutive timeouts (2026-06-15 22:20, 22:45, 23:06), I forked a new session, plugged in a fresh fal.ai API key (her previous one had been revoked between iter-16 and now — 401 "No user found for Key ID and Secret" on every call), and ran a real test against the live preview.
+
+The diagnostic logs revealed the **actual** cause: our status-polling URL was malformed.
+
+We were constructing `f"https://queue.fal.run/{model_id}/requests/{req_id}/status"` where `model_id = "fal-ai/ffmpeg-api/compose"`. That produces:
+```
+https://queue.fal.run/fal-ai/ffmpeg-api/compose/requests/<req>/status   ← HTTP 405
+```
+But fal.ai's queue uses the **app namespace** (`fal-ai/ffmpeg-api`), not the sub-endpoint (`fal-ai/ffmpeg-api/compose`), for status + result fetching. The submit response actually returned the correct URLs in `status_url` and `response_url` keys — we just ignored them.
+
+So every compose job was actually completing on fal.ai's side in 5-10 seconds, but our poll loop hammered a 405-ing URL every 3 seconds until `max_wait_s` ran out (600s, then 900s — neither would ever succeed). Every single faceless render in history was a complete waste of API spend that fal.ai actually fulfilled but we never picked up the result.
+
+**Fix.** `_fal_queue_run` now reads `status_url` + `response_url` directly from the submit response instead of constructing them from `model_id`. Failure mode: if either URL is missing, the job fails fast with a clear "Compose submit malformed" error.
+
+**Verified live (real API spend, ~$0.21 total):**
+- Test 1: Faceless · 16:9 · 3 AI Flux scenes · captions off · 12-word script → **complete in 14s**, 286KB MP4, plays cleanly. Cost: 14¢.
+- Test 2: Faceless · 9:16 · **8 Pexels scenes · captions ON (bold-yellow) · 64-word script** (exact same shape as her 3 failed renders) → **complete in 50s**, 7.2MB MP4, ftyp/isom MP4, captions burned in via 2nd compose pass. Cost: 7¢.
+
+**Side effects.** Added `logger = logging.getLogger("f48")` at module init (was referenced but never defined, would have crashed any future diagnostic logging). Diagnostic warnings on submit/poll/payload-shape stay in for now so any future fal-side issue is one log-tail away from being diagnosed. Updated `FAL_API_KEY` in `/app/backend/.env` to her new key.
+
+**Files touched in iter 17**
+- `/app/backend/server.py` — `_fal_queue_run` reads `status_url`/`response_url` from submit response; `logger` defined at module init; diagnostic warnings around fal-queue submit + poll cycles + compose-payload dump.
+- `/app/backend/.env` — `FAL_API_KEY` rotated to the new key the user generated.
+
+**Why the previous iterations missed this.** The error message "Compose polling timed out after 600s" pointed everyone at the timeout value, not at WHY the poll wasn't seeing the COMPLETED state. Without `logger` actually configured, none of the polling responses showed up anywhere — so the 405 response from a wrong URL was completely invisible. The fix took 40 minutes once we could see what fal.ai was actually returning.
+
 ## Iteration 16 — Avatar picker filter (broken since day one) + proper 9:16 framing (2026-02-13)
 User retried Avatar real-render in 9:16 — got the **same wrong output as iter-15** but mirrored: avatar tiny in centre with huge white bars top/bottom and black bars left/right. Plus they confirmed the avatar picker shows the SAME list regardless of the aspect dropdown selection. User offered $4 of real-render budget for me to test on my end; I declined and fixed both issues from code review instead.
 

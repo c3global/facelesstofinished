@@ -45,6 +45,10 @@ from prompts import (
 # ---------------------------------------------------------------------------
 load_dotenv()
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logger = logging.getLogger("f48")
+logger.setLevel(logging.INFO)
+
 MONGO_URL = os.environ["MONGO_URL"]
 DB_NAME = os.environ["DB_NAME"]
 EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
@@ -792,8 +796,10 @@ async def _run_render_faceless(job: dict):
 
     async def _fal_queue_run(model_id: str, payload: dict, *, max_wait_s: int = 600) -> Optional[dict]:
         """Submit a job to fal.ai's queue endpoint and poll for completion."""
+        logger.warning(f"[fal-queue] {job_id} model={model_id} submit payload_keys={list(payload.keys())} tracks_count={len(payload.get('tracks', []))}")
         async with httpx.AsyncClient(timeout=30) as qclient:
             sub = await qclient.post(f"https://queue.fal.run/{model_id}", headers=fal_headers, json=payload)
+            logger.warning(f"[fal-queue] {job_id} submit status={sub.status_code} body={sub.text[:400]}")
             if sub.status_code not in (200, 202):
                 await db.renders.update_one(
                     {"id": job_id},
@@ -805,27 +811,40 @@ async def _run_render_faceless(job: dict):
                     }},
                 )
                 return None
-            req_id = sub.json().get("request_id")
-            if not req_id:
+            sub_body = sub.json()
+            req_id = sub_body.get("request_id")
+            # fal.ai's queue uses the APP namespace (e.g. "fal-ai/ffmpeg-api"),
+            # NOT the endpoint (e.g. "fal-ai/ffmpeg-api/compose"), for status
+            # and result fetching. Always trust the URLs returned by the
+            # submit response — constructing them from model_id breaks for any
+            # endpoint with a sub-path (compose, wizper subtypes, etc.).
+            status_url = sub_body.get("status_url")
+            result_url = sub_body.get("response_url")
+            logger.warning(f"[fal-queue] {job_id} request_id={req_id} status_url={status_url}")
+            if not req_id or not status_url or not result_url:
                 await db.renders.update_one(
                     {"id": job_id},
                     {"$set": {
                         "status": "failed",
-                        "error": "Compose returned no request_id",
+                        "error": f"Compose submit malformed (missing request_id/urls): {str(sub_body)[:300]}",
                         "actual_cost_cents": actual_cost_cents,
                         "completed_at": datetime.now(timezone.utc).isoformat(),
                     }},
                 )
                 return None
-            status_url = f"https://queue.fal.run/{model_id}/requests/{req_id}/status"
-            result_url = f"https://queue.fal.run/{model_id}/requests/{req_id}"
             deadline = asyncio.get_event_loop().time() + max_wait_s
+            tick = 0
             while asyncio.get_event_loop().time() < deadline:
                 await asyncio.sleep(3)
+                tick += 1
                 stat = await qclient.get(status_url, headers=fal_headers)
                 if stat.status_code != 200:
+                    if tick % 10 == 0:
+                        logger.warning(f"[fal-queue] {job_id} req={req_id} status_http={stat.status_code} body={stat.text[:200]}")
                     continue
                 st = stat.json().get("status", "")
+                if tick % 5 == 0:
+                    logger.warning(f"[fal-queue] {job_id} req={req_id} tick={tick} status={st} queue_pos={stat.json().get('queue_position')}")
                 if st == "COMPLETED":
                     res = await qclient.get(result_url, headers=fal_headers)
                     if res.status_code != 200:
@@ -1054,6 +1073,7 @@ async def _run_render_faceless(job: dict):
 
     ticker_task = asyncio.create_task(tick_compose_progress())
     try:
+        logger.warning(f"[compose-payload] {job_id} tracks={json.dumps(tracks)[:1500]}")
         compose_res = await _fal_queue_run(
             "fal-ai/ffmpeg-api/compose",
             {"tracks": tracks},
