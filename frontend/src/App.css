@@ -1645,12 +1645,17 @@
     0 0 0 1px color-mix(in srgb, var(--platform-accent) 55%, transparent);
 }
 .platform-card { transition: border-color .15s, background .15s; }
+/* v1.8.0 — selected platform pill: full brand-color fill + white text.
+   The earlier 12%-transparent fill produced near-white-on-white text in
+   light mode. Forcing background to the raw accent and locking the inner
+   .length-name to white guarantees contrast in both themes. */
 .platform-card.is-selected {
   border-color: var(--platform-accent) !important;
-  background: color-mix(in srgb, var(--platform-accent) 12%, transparent) !important;
+  background: var(--platform-accent) !important;
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--platform-accent) 22%, transparent) !important;
 }
-.platform-card .length-name { color: var(--text); }
+.platform-card.is-selected .length-name { color: #fff !important; }
+.platform-card.is-selected .length-desc { color: rgba(255,255,255,0.86) !important; }
 
 /* ---------- Shorts 3-column layout ---------- */
 .shorts-layout {
@@ -2334,3 +2339,111 @@
   font-weight: 600;
 }
 
+
+
+/* ========== v1.8.0 — Sticky results nav + collapsible sections ========== */
+
+/* The toolbar that appears above the topic input when an output exists.
+   Mirrors the Netlify v1.8.0 release. position:sticky + a top of 0 keeps
+   it pinned just inside the main scroll container, backdrop-blur lets the
+   hero text show through underneath. */
+.results-nav {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  margin: 0 -24px 18px;
+  padding: 10px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: color-mix(in srgb, var(--surface) 86%, transparent);
+  backdrop-filter: saturate(140%) blur(10px);
+  -webkit-backdrop-filter: saturate(140%) blur(10px);
+  border-bottom: 1px solid var(--border-soft);
+}
+.results-nav-status {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+}
+.results-nav-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.results-nav-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 10px;
+  background: transparent;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color .15s, background .15s, border-color .15s;
+}
+.results-nav-btn:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+  border-color: var(--border);
+}
+@media (max-width: 640px) {
+  .results-nav { padding: 8px 16px; margin: 0 -16px 14px; }
+  .results-nav-status { display: none; }      /* hide label on mobile per spec */
+  .results-nav-btn { padding: 6px 8px; }
+}
+
+/* Section-card header becomes clickable when collapse handler is wired. */
+.section-card-head.is-clickable {
+  cursor: pointer;
+  user-select: none;
+}
+.section-card-head-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.section-card-chevron {
+  color: var(--muted);
+  transition: transform .18s ease-out, color .18s;
+  flex-shrink: 0;
+}
+.section-card-chevron.is-collapsed { transform: rotate(-90deg); }
+.section-card-head.is-clickable:hover .section-card-chevron { color: var(--text); }
+/* When collapsed: trim the header padding so the card sits flatter in a list. */
+.section-card.is-collapsed { padding-bottom: 4px; }
+
+/* Per-variant Copy + Promote actions sit in a row at the bottom of each
+   sprint variant. */
+.sprint-variant-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.sprint-variant-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  background: transparent;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color .15s, background .15s, border-color .15s;
+}
+.sprint-variant-copy:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+  border-color: var(--border);
+}

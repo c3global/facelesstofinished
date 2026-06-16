@@ -27,7 +27,8 @@ import ShortPhoneBody from "../components/scripts/ShortPhoneBody";
 import SavedAnglesPanel from "../components/scripts/SavedAnglesPanel";
 import ScriptHistoryList from "../components/scripts/ScriptHistoryList";
 import GenProgress from "../components/scripts/GenProgress";
-import SprintResult from "../components/scripts/SprintResult";
+import SprintResult, { sprintAllToClipboardText } from "../components/scripts/SprintResult";
+import ResultsNavBar from "../components/scripts/ResultsNavBar";
 
 const MODES = { LONG: "long", SHORTS: "shorts" };
 const STEPS = {
@@ -125,6 +126,99 @@ export default function Scripts() {
   );
   const orderedKeys =
     output?.mode === "shorts" ? SHORTS_SECTION_ORDER : LONG_SECTION_ORDER;
+
+  // ---- Collapse state for v1.8.0 sticky-nav + per-section toggles ----
+  // Set of currently-collapsed section keys (e.g. {"hooks","outline"}).
+  // Empty = everything expanded. When `collapseAll()` fires we fill it with
+  // every visible key; `expandAll()` clears it. Reset on every new output so
+  // newly-generated cards land expanded.
+  const [collapsedSections, setCollapsedSections] = useState(() => new Set());
+  // Reset collapse state whenever a fresh output lands so newly-generated
+  // cards arrive expanded. Using a ref instead of a `useEffect` here so the
+  // reset happens during render (no flicker frame where stale collapse state
+  // is briefly applied to the new sections).
+  const outputIdRef = useRef(output?.id);
+  if (outputIdRef.current !== output?.id) {
+    outputIdRef.current = output?.id;
+    // setState during render is the official React idiom for "derive state
+    // from changing props" — discarded if the source value matches.
+    setCollapsedSections(new Set());
+  }
+
+  // Which section keys are visible on the current screen — needed for the
+  // "Collapse all / Expand all" semantics (we treat a screen as "all
+  // collapsed" only when every visible key is in the set).
+  const visibleSectionKeys = useMemo(() => {
+    if (!output?.text) return [];
+    if (output.mode === "shorts") {
+      return SHORTS_SECTION_ORDER.filter((k) => sections[k] && k !== "angles");
+    }
+    if (output.mode === "long") {
+      return LONG_SECTION_ORDER.filter((k) => sections[k] && k !== "angles");
+    }
+    return []; // sprint mode has no section cards, only variant phones
+  }, [output, sections]);
+  const allCollapsed =
+    visibleSectionKeys.length > 0 &&
+    visibleSectionKeys.every((k) => collapsedSections.has(k));
+
+  const toggleSection = (key) => {
+    setCollapsedSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+  const toggleCollapseAll = () => {
+    setCollapsedSections((prev) =>
+      visibleSectionKeys.every((k) => prev.has(k))
+        ? new Set()
+        : new Set(visibleSectionKeys)
+    );
+  };
+
+  // ---- Anchor scroll helpers used by the sticky nav bar ----
+  // Smooth-scrolls the target section under the sticky bar with a 64px top
+  // offset so the heading lands cleanly below it.
+  const scrollToAnchor = (id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const y = el.getBoundingClientRect().top + window.scrollY - 64;
+    window.scrollTo({ top: y, behavior: "smooth" });
+  };
+  const jumpToScript = () => {
+    // Long mode → first section that has a "script" key. Shorts mode →
+    // the centre phone-frame column (we tag it with id below).
+    if (output?.mode === "long") {
+      scrollToAnchor("section-script");
+    } else if (output?.mode === "shorts") {
+      scrollToAnchor("shorts-script-column");
+    } else {
+      scrollToAnchor("scripts-output");
+    }
+  };
+  const jumpToShorts = () => scrollToAnchor("sprint-grid");
+
+  // Auto-scroll to the freshly-generated shorts panel (sprint or
+  // repurpose) the moment it lands in the DOM. We watch the variant count
+  // transitioning from 0 → N. rAF-wrapped so React has actually painted
+  // the grid before we measure its position.
+  const lastVariantCountRef = useRef(0);
+  useEffect(() => {
+    const next = sprintVariants.length;
+    const prev = lastVariantCountRef.current;
+    if (next > 0 && prev === 0) {
+      requestAnimationFrame(() => {
+        const el = document.getElementById("sprint-grid");
+        if (el) {
+          const y = el.getBoundingClientRect().top + window.scrollY - 64;
+          window.scrollTo({ top: y, behavior: "smooth" });
+        }
+      });
+    }
+    lastVariantCountRef.current = next;
+  }, [sprintVariants.length]);
 
   const canLong = user?.entitlements?.includes("base");
   const canShorts = user?.entitlements?.includes("shorts");
@@ -510,6 +604,40 @@ export default function Scripts() {
     );
   };
 
+  // ---- Copy all sprint shorts as a single blob (v1.8.0) ----
+  // Concatenates each variant's text with markdown headers (`# CURIOSITY`)
+  // separated by `---` rules so the user can paste the whole pack into a
+  // doc and split it back apart by hand.
+  const copyAllShorts = async () => {
+    const text = sprintAllToClipboardText(sprintVariants);
+    if (!text) return;
+    let ok = false;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        ok = true;
+      }
+    } catch {}
+    if (!ok) {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.setAttribute("readonly", "");
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        ok = document.execCommand("copy");
+        document.body.removeChild(ta);
+      } catch {}
+    }
+    setToast(
+      ok
+        ? `Copied all ${sprintVariants.length} Shorts.`
+        : "Copy failed — try selecting & copying manually."
+    );
+  };
+
   const useInStudio = () => {
     if (!output?.text) return;
     const narration = extractNarration(output.text);
@@ -616,6 +744,42 @@ export default function Scripts() {
       data-testid="scripts-page"
     >
       <Toast message={toast} onDismiss={() => setToast("")} />
+
+      {/* v1.8.0 — Sticky results nav: appears whenever there's output, mirrors
+          the Netlify Script Engine update so users see the same toolbar on both
+          builds. Provides quick-jump anchors, copy actions, and the global
+          Collapse/Expand toggle that drives every section's open/closed state. */}
+      {step === STEPS.RESULT && output?.text && (() => {
+        const isSprint = output.mode === "sprint";
+        const isShorts = output.mode === "shorts";
+        const isLong = output.mode === "long";
+        const hasShorts = isSprint && sprintVariants.length > 0;
+        const hasScript = isLong || isShorts;
+        let status;
+        if (isSprint) {
+          status = sprintVariants.length
+            ? `Sprint ready · ${sprintVariants.length} Shorts`
+            : "Sprint ready";
+        } else if (isShorts) {
+          status = "Short ready";
+        } else {
+          status = "Script ready";
+        }
+        return (
+          <ResultsNavBar
+            status={status}
+            hasScript={hasScript}
+            hasShorts={hasShorts}
+            shortsCount={sprintVariants.length}
+            allCollapsed={allCollapsed}
+            onJumpScript={jumpToScript}
+            onJumpShorts={jumpToShorts}
+            onCopyScript={copyAll}
+            onCopyAllShorts={copyAllShorts}
+            onToggleCollapseAll={toggleCollapseAll}
+          />
+        );
+      })()}
 
       {/* Hero */}
       <div className="studio-hero">
@@ -1002,6 +1166,8 @@ export default function Scripts() {
                     section={sections.hooks}
                     testid="section-hooks"
                     revealIndex={0}
+                    collapsed={collapsedSections.has("hooks")}
+                    onToggle={toggleSection}
                   />
                 )}
                 {sections.titleVariants && (
@@ -1010,6 +1176,8 @@ export default function Scripts() {
                     section={sections.titleVariants}
                     testid="section-titleVariants"
                     revealIndex={1}
+                    collapsed={collapsedSections.has("titleVariants")}
+                    onToggle={toggleSection}
                   />
                 )}
                 {sections.coverPrompts && (
@@ -1018,11 +1186,13 @@ export default function Scripts() {
                     section={sections.coverPrompts}
                     testid="section-coverPrompts"
                     revealIndex={2}
+                    collapsed={collapsedSections.has("coverPrompts")}
+                    onToggle={toggleSection}
                   />
                 )}
               </div>
               {/* SCRIPT column — phone */}
-              <div className="shorts-col shorts-col-center">
+              <div id="shorts-script-column" className="shorts-col shorts-col-center">
                 <h4 className="shorts-col-head">Script</h4>
                 <PhoneFrame platform={output.platform || platform}>
                   <ShortPhoneBody shortBody={sections.shortScript?.body || ""} />
@@ -1037,6 +1207,8 @@ export default function Scripts() {
                     section={sections.caption}
                     testid="section-caption"
                     revealIndex={3}
+                    collapsed={collapsedSections.has("caption")}
+                    onToggle={toggleSection}
                   />
                 )}
                 {sections.hashtags && (
@@ -1045,6 +1217,8 @@ export default function Scripts() {
                     section={sections.hashtags}
                     testid="section-hashtags"
                     revealIndex={4}
+                    collapsed={collapsedSections.has("hashtags")}
+                    onToggle={toggleSection}
                   />
                 )}
                 {sections.onScreen && (
@@ -1053,6 +1227,8 @@ export default function Scripts() {
                     section={sections.onScreen}
                     testid="section-onScreen"
                     revealIndex={5}
+                    collapsed={collapsedSections.has("onScreen")}
+                    onToggle={toggleSection}
                   />
                 )}
                 {sections.broll && (
@@ -1061,6 +1237,8 @@ export default function Scripts() {
                     section={sections.broll}
                     testid="section-broll"
                     revealIndex={6}
+                    collapsed={collapsedSections.has("broll")}
+                    onToggle={toggleSection}
                   />
                 )}
                 {sections.notes && (
@@ -1069,6 +1247,8 @@ export default function Scripts() {
                     section={sections.notes}
                     testid="section-notes"
                     revealIndex={7}
+                    collapsed={collapsedSections.has("notes")}
+                    onToggle={toggleSection}
                   />
                 )}
               </div>
@@ -1083,6 +1263,8 @@ export default function Scripts() {
                   section={sections[k]}
                   testid={`section-${k}`}
                   revealIndex={i}
+                  collapsed={collapsedSections.has(k)}
+                  onToggle={toggleSection}
                 />
               ) : null
             )
