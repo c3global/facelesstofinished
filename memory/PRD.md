@@ -139,6 +139,47 @@ Major refactor that addresses 7 explicit user asks. Verified 21/21 backend + ~95
 
 **Deferred from this iteration (Avatar + B-roll cutaways composite mode):** A true "Avatar + B-roll cutaways" render mode (HeyGen avatar talking head intercut with stock B-roll) needs a new backend render branch and a UI toggle in Avatar mode. Decision: defer until the real HeyGen/fal.ai pipelines are wired (DRY_RUN_RENDERS=false) so the UI isn't building against simulated output. The B-roll prompts ARE staged on the handoff so the user can manually flip to Faceless mode in the meantime.
 
+## Iteration 22 — Script Engine v1.8.0 parity polish + cross-origin proxy readiness (2026-02-17)
+
+User-driven session targeting two threads from Charity:
+
+**(1) Cross-origin readiness for the Netlify reverse-proxy** at `faceless48.c3global.co/studio`. She'll route `/studio/*`, `/api/studio/*`, `/api/scripts/*` to this Emergent backend; everything else stays on Netlify. Verified all four of her dev's questions and shipped the two fixes that were still open:
+
+| # | Her question | Status before | Status after |
+|---|---|---|---|
+| (a) | Frontend API calls are all relative paths | ❌ absolute `${REACT_APP_BACKEND_URL}/api` | ✅ `${REACT_APP_BACKEND_URL || ''}/api` — empty env var in prod build = relative |
+| (b) | Build supports `base: '/studio'` | ❌ no `homepage`, no `PUBLIC_URL` | ✅ NEW `/app/frontend/.env.production` sets `PUBLIC_URL=/studio` so CRA emits assets at `/studio/static/*`; `BrowserRouter basename={process.env.PUBLIC_URL \|\| ''}` ensures react-router routes correctly under the proxy. Preview env unaffected (env.production only applies to `yarn build`) |
+| (c) | Cookies set without a Domain attribute | ✅ Already correct — our backend NEVER calls `set_cookie`. Auth is JWT in localStorage. Netlify owns the `auth-me` cookie; emergent only forwards the `Cookie` header server-side via the `LoginPayload.cookies` body field | unchanged |
+| (d) | Backend calls absolute Netlify auth-me server-side | ✅ Already correct — `/app/backend/server.py:207` calls `client.get(NETLIFY_AUTH_URL, headers={Cookie: ..., ...})` via httpx. `NETLIFY_AUTH_URL=https://faceless48.c3global.co/api/auth-me` set in `/app/backend/.env`. Never invoked from the browser | unchanged |
+
+**Deploy recipe for the Netlify dev**: their CI runs `yarn build` from `/app/frontend`; the `.env.production` is auto-picked-up by CRA and emits `/studio/...` asset paths + relative `/api/...` calls. Backend stays on Emergent; the Netlify reverse-proxy routes the two prefixes accordingly.
+
+**(2) Script Engine v1.8.0 parity polish.** Iter 21 had already wired 9 of the 10 v1.8.0 features. Audited against Charity's live Netlify screenshots and shipped the remaining piece + small polish:
+
+- **NEW: "Content Sprint" header block above the sprint grid** (`/app/frontend/src/components/scripts/SprintResult.jsx`). Centered title with brand-gradient text, "Tap a phone to expand it." subtitle, and a **duplicate** "Copy All N Shorts" button (in addition to the sticky-nav one) so the action stays visible after the user scrolls past the sticky bar — matches the live Netlify layout. Wired through `onCopyAll={copyAllShorts}` from Scripts.jsx → SprintResult.
+- **NEW: Staggered fade-in for sprint variant cards** — 60ms `animation-delay` per card via inline style + `@keyframes sprint-variant-reveal` in CSS, so the grid feels like it's "landing" rather than dumping all five phones in one frame.
+- **FIX (iter_13 regression catch): `toggleCollapseAll` was a no-op for long-form scripts loaded from history.** Root cause was `visibleSectionKeys.every(k => prev.has(k))` returning vacuous-true when the array was momentarily empty (sections memo settling after `output` flips on history-load), making the handler always set `new Set()`. Fix: defensive `if (visibleSectionKeys.length === 0) return;` guard + `useCallback([visibleSectionKeys])` wrap. Verified PASS twice via iter_14 — click 1 collapses all 7 SectionCards (.is-collapsed class added, label flips to "Expand all"), click 2 re-expands.
+
+**Files touched in iter 22**
+- `/app/frontend/src/components/scripts/SprintResult.jsx` — NEW `<div class="sprint-header">` block above grid with duplicate copy-all button; `onCopyAll` prop wired; `animationDelay` inline style on each variant card.
+- `/app/frontend/src/pages/Scripts.jsx` — `toggleCollapseAll` now uses `useCallback` + length guard; passes `onCopyAll={copyAllShorts}` to SprintResult; `useCallback` added to React import.
+- `/app/frontend/src/App.css` — NEW `.sprint-section`, `.sprint-header`, `.sprint-header-title` (brand gradient), `.sprint-header-sub`, `.sprint-header-copy-all` (pill-shaped); `.sprint-variant` gets initial opacity:0 + transform + animation; `@keyframes sprint-variant-reveal`.
+- `/app/frontend/src/App.js` — API base = relative when REACT_APP_BACKEND_URL is empty; BrowserRouter basename = PUBLIC_URL.
+- `/app/frontend/.env.production` — NEW (REACT_APP_BACKEND_URL="" + PUBLIC_URL="/studio"). Only consumed by `yarn build`, preview env unaffected.
+
+**Verified (iter_14 — frontend-only retest, ZERO LLM spend, ZERO renders)**
+- `toggleCollapseAll` PASS: click 1 collapses all 7 long-form SectionCards (.is-collapsed applied), label flips to "Expand all". Click 2 re-expands. Per-section chevron toggle still works independently.
+- Sticky nav status text + buttons render correctly.
+- Compile overlay: zero errors; only benign React Router v7 future-flag warnings.
+
+**Testing agent notes (for next iteration)**:
+- Two known minor cosmetic concerns to audit later: (a) the Jump/Copy buttons in sticky `results-nav` lack stable testids (`results-nav-jump-script`, `results-nav-copy-script`); (b) the CSS rule `.section-card.is-collapsed .section-card-body { display:none }` is effectively dead code because `SectionCard` unmounts its body via conditional rendering instead. Both non-blocking.
+- Scripts.jsx is now 1283 lines, server.py 2263 lines — refactor backlog is mounting.
+
+**Deferred to Phase 3 (per Charity's directive)**: "Test this engine" 4-second preview button per AI engine; Composite mode (Avatar talking-head + B-roll cutaways). Both are good ideas, neither is priority.
+
+**NOT building**: Admin panel + Resources port. Those stay on the Netlify deployment per Charity's architecture decision; the reverse-proxy routes `/admin`, `/resources`, `/api/auth-me`, `/api/admin-*`, `/api/pinball-webhook` to Netlify, only `/studio/*`, `/api/studio/*`, `/api/scripts/*` hit emergent.
+
 ## Iteration 21 — AI Text-to-Video toggle + Render both aspects (2026-02-17)
 
 Two power-user features Charity asked for after iter-20 stabilised the Faceless pipeline. Tested end-to-end via testing agent (iteration_12.json): **9/9 backend pytests PASS** + **100% frontend UI flows**, zero compile errors, zero real renders triggered.
