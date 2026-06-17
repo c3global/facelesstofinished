@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Sparkles,
   FileText,
@@ -164,13 +164,18 @@ export default function Scripts() {
       return next;
     });
   };
-  const toggleCollapseAll = () => {
+  const toggleCollapseAll = useCallback(() => {
+    // Defensive guard — `every` on an empty array returns vacuous-true and
+    // would always set the result to `new Set()`, making this button feel
+    // dead. This case showed up on long-form scripts loaded from history
+    // where the sections memo briefly settles after `output` flips.
+    if (visibleSectionKeys.length === 0) return;
     setCollapsedSections((prev) =>
       visibleSectionKeys.every((k) => prev.has(k))
         ? new Set()
         : new Set(visibleSectionKeys)
     );
-  };
+  }, [visibleSectionKeys]);
 
   // ---- Anchor scroll helpers used by the sticky nav bar ----
   // Smooth-scrolls the target section under the sticky bar with a 64px top

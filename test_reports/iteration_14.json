@@ -1,0 +1,38 @@
+{
+  "summary": "Iteration 14 — TARGETED retest of HIGH-priority regression from iter_13: [data-testid='results-nav-collapse-toggle'] in long-form mode. Fix (useCallback + visibleSectionKeys.length===0 guard at /app/frontend/src/pages/Scripts.jsx:167-178) FULLY RESOLVES the bug. All PASS criteria met on history-loaded long-form script id=01e9d569-1395-4ce7-a1b3-8073f988b177 ('Women over 40 and thyroid health' — note: not 'consistency wins' as task said; topic was different in DB). Per-section chevron toggle still works. Sticky nav text + buttons render correctly. Zero compile errors, zero console errors (only benign React Router v7 future-flag warnings). NO Studio renders triggered, NO LLM generations triggered — only history-open path exercised.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "verified_features": {
+    "auth_passwordless": "PASS — drcharitycampbell@gmail.com login via email-only form lands on /studio; navigation to /scripts works",
+    "compile_overlay": "PASS — no webpack-dev-server-client-overlay; only React Router v7 future-flag warnings (benign)",
+    "history_open_long": "PASS — clicking [data-testid='scripts-history-open-01e9d569-…'] loads long-form script with 7 .section-card elements",
+    "results_nav_collapse_toggle_click1": "PASS — click 1: label 'Collapse all' → 'Expand all'; all 7 .section-card got .is-collapsed class; .section-card-body elements are unmounted (functionally hidden — implementation uses conditional rendering rather than display:none CSS, which is functionally stronger than the spec called for)",
+    "results_nav_collapse_toggle_click2": "PASS — click 2: label 'Expand all' → 'Collapse all'; .is-collapsed count back to 0; all 7 .section-card-body elements remounted with display:block",
+    "per_section_chevron_toggle": "PASS — clicking [data-testid='section-hooks-header'] toggles only that single card (.is-collapsed count flips 0→1→0); other 6 cards stay expanded",
+    "sticky_results_nav_render": "PASS — [data-testid='results-nav'] text reads exactly 'Script ready\\nJump to Script\\nCopy Script\\nCollapse all'",
+    "section_header_testids": "PASS — all 7 expected section header testids present: section-concept-header, section-hooks-header, section-outline-header, section-script-header, section-transitions-header, section-broll-header, section-notes-header"
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Note (not a bug): Sticky nav Jump/Copy buttons render correctly and are visible/clickable in the UI, but their data-testid attributes are NOT 'results-nav-jump' / 'results-nav-copy' as one might expect from the family naming convention. Worth auditing testid naming for consistency — buttons should have stable testids so future regression scripts can target them (e.g., results-nav-jump-script, results-nav-copy-script). NOT blocking.",
+    "Implementation detail: SectionCard hides its body via conditional rendering (unmount) rather than the .section-card.is-collapsed .section-card-body { display:none } CSS rule the iter_13 spec referenced. Both achieve the same visual outcome; the unmount approach actually saves DOM weight. The CSS rule is therefore dead code if it exists — worth a sweep.",
+    "(Carried from iter_13) Scripts.jsx is now 1283 lines (was 1278) — still well over the 700-line guideline. Sprint flow, multi-platform flow, and angle-picker flow could each be their own hook.",
+    "(Carried) server.py refactor still recommended before adding more engines (~2263 lines)."
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "N/A (frontend-only retest)",
+    "frontend": "100% (all 4 retest items PASS — regression fully fixed)"
+  },
+  "test_credentials": "drcharitycampbell@gmail.com (passwordless, DEV_BYPASS)",
+  "seed_data_creation": "None — pure retest path. No new history items created, no LLM spend.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter_13 regression on results-nav-collapse-toggle is fully fixed in iter_14. The fix (useCallback wrap + length-guard) at Scripts.jsx:167-178 is correct and robust against the vacuous-true bug + stale-closure risk. If a future iteration adds new long-form sections, the same handler will continue to work because visibleSectionKeys is derived from output.mode + sections. Note for next agent: the topic stored at id 01e9d569-1395-4ce7-a1b3-8073f988b177 is 'Women over 40 and thyroid health' (not 'consistency wins' as the task statement claimed — likely a typo / mis-remembered detail in the iter_14 task brief). Two known minor naming issues to consider auditing in future runs: (a) the Jump/Copy buttons in results-nav lack the expected results-nav-jump / results-nav-copy testids, (b) the dead CSS rule for .section-card.is-collapsed .section-card-body { display:none } is bypassed because SectionCard unmounts its body when collapsed.",
+  "rca of the issue": "ALREADY FIXED. Original RCA (iter_13): toggleCollapseAll used `visibleSectionKeys.every(k => prev.has(k))` which returns vacuous-true when visibleSectionKeys is []; result was always `new Set()`, making the button feel dead. Fix applied at Scripts.jsx:167-178: (a) early-return guard `if (visibleSectionKeys.length === 0) return;` at top of the handler, (b) wrapped handler in useCallback with [visibleSectionKeys] dependency so the closure always sees the freshest array. Both defences are now in place; verified by iter_14 click1/click2 cycle on 7-section long-form output."
+}
