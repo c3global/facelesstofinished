@@ -139,6 +139,43 @@ Major refactor that addresses 7 explicit user asks. Verified 21/21 backend + ~95
 
 **Deferred from this iteration (Avatar + B-roll cutaways composite mode):** A true "Avatar + B-roll cutaways" render mode (HeyGen avatar talking head intercut with stock B-roll) needs a new backend render branch and a UI toggle in Avatar mode. Decision: defer until the real HeyGen/fal.ai pipelines are wired (DRY_RUN_RENDERS=false) so the UI isn't building against simulated output. The B-roll prompts ARE staged on the handoff so the user can manually flip to Faceless mode in the meantime.
 
+## Iteration 23 — 5 angles + per-category sprint variant colors (2026-02-17)
+
+Two precise bugs Charity caught from screenshots of the live build vs the emergent build:
+
+**Bug 1: Long-form CTA said "Show me 4 angles →" but the live Netlify build shows 5.** Root cause was `ANGLES_SYSTEM_PROMPT` in `/app/backend/prompts.py` explicitly instructing Claude "Generate exactly 4 angles" — so the backend returned 4 every time and the frontend CTA mirrored the count. Fixed three locations:
+- `prompts.py:20` — "surface 4–5 distinct creative ANGLES" → "surface 5 distinct creative ANGLES"
+- `prompts.py:42` — "Generate exactly 4 angles. Each must use a DIFFERENT category if possible..." → "Generate exactly 5 angles. Each must use a DIFFERENT category — one curiosity, one contrarian, one how-to, one story, one list (use each category exactly once so the user sees all 5 creative directions side-by-side, not five curiosity hooks)."
+- `prompts.py:46` — user message "Generate 4 distinct creative angles" → "Generate 5 distinct creative angles"
+- `Scripts.jsx:736` — `ctaCopy = "Show me 4 angles →"` → `"Show me 5 angles →"`
+- `tests/test_scripts.py:75` — tightened from `3 <= len(angles) <= 5` to `len(angles) == 5` AND `{a['category'] for a in angles} == {curiosity, contrarian, how-to, story, list}` so any regression trips immediately.
+
+Live verification (iter_15): one call to `POST /api/scripts/angles` with topic "cold brew coffee marketing" returned exactly 5 angles with all 5 distinct categories in 6.1s.
+
+**Bug 2: All 5 sprint variant cards shared the YouTube-red platform-accent color.** Charity's reference Netlify screenshot shows each variant tinted by its `category` field — curiosity=lavender, contrarian=red, how-to=green, story=amber, list=blue. The same applies to the angle-picker cards in Step 1. Investigation revealed:
+- `AngleCard.jsx` already imported `ANGLE_CAT` with `color: var(--cat-curiosity)` style passthrough — but the underlying `--cat-curiosity` / `--cat-contrarian` / `--cat-howto` / `--cat-story` / `--cat-list` CSS variables **didn't exist** in `:root`, so the inline style resolved to an undefined var and silently fell back to defaults. The angle-picker has been quietly broken for several iterations.
+- Sprint variant pills had no per-category logic at all — they just used `var(--platform-accent, var(--accent))`.
+
+**Fix:**
+- New `:root` block in `/app/frontend/src/App.css` defines the five `--cat-*` vars (single source of truth, used by both AngleCard and SprintResult): curiosity `#A78BFA`, contrarian `#EF4444`, how-to `#10B981`, story `#F59E0B`, list `#38BDF8`.
+- `SprintResult.jsx` now writes `data-category={cat}` on each variant card (lowercased + hyphenated for the "how-to" case).
+- New CSS block `.sprint-variant[data-category="..."]` sets `--variant-accent: var(--cat-X)` per category, then applies it to: variant-num text color, variant-cat pill (background+color+border via `color-mix`), card border + soft background tint, hover lift with category-tinted shadow, and the `Promote to full short` button color/border.
+
+Live verification (iter_15): one sprint generation ($0.05 LLM spend), all 5 variants ended with distinct `.sprint-variant-cat` computed colors matching the spec hex→RGB exactly: `rgb(167,139,250)` / `rgb(239,68,68)` / `rgb(16,185,129)` / `rgb(245,158,11)` / `rgb(56,189,248)`. Border colors also 5 distinct `color-mix` tints.
+
+**Files touched in iter 23**
+- `/app/backend/prompts.py` — 3 locations updated to "5 angles, one per category".
+- `/app/backend/tests/test_scripts.py` — assertion tightened to exact-5 + category-set equality.
+- `/app/frontend/src/pages/Scripts.jsx:736` — CTA copy update.
+- `/app/frontend/src/components/scripts/SprintResult.jsx` — new `data-category` attribute on `.sprint-variant`.
+- `/app/frontend/src/App.css` — new `--cat-*` vars in `:root` + new `.sprint-variant[data-category]` block with `--variant-accent` cascade.
+
+**Iter 15 test report**: 9/9 PASS, ~$0.07 total live LLM spend, zero Studio renders, zero regressions on iter_14 surfaces.
+
+**Backlog carried (testing-agent recommendation worth fixing soon):**
+- Several `Scripts.jsx` testids drift from the spec: `scripts-topic` (not `topic-input`), `scripts-get-angles-btn` (not `generate-btn`), and the CTA's text is mode-dependent ("Show me 5 angles" in long, "Generate 5-Short Content Sprint" in shorts+sprint). Worth adding a stable `scripts-primary-cta` testid so regression suites stop guessing.
+- Scripts.jsx is 1283 lines; server.py 2263 lines — refactor backlog is mounting.
+
 ## Iteration 22 — Script Engine v1.8.0 parity polish + cross-origin proxy readiness (2026-02-17)
 
 User-driven session targeting two threads from Charity:

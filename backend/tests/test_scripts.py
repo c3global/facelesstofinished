@@ -72,7 +72,13 @@ def test_angles_shape(angles_response):
     assert angles_response["topic"]
     angles = angles_response["angles"]
     assert isinstance(angles, list)
-    assert 4 <= len(angles) <= 5, f"Expected ~5 angles, got {len(angles)}"
+    # Iter 23 contract: exactly 5 angles, one per category — locks in the
+    # prompt change that explicitly mandates "one curiosity, one contrarian,
+    # one how-to, one story, one list" so any regression trips immediately.
+    assert len(angles) == 5, f"Expected exactly 5 angles, got {len(angles)}"
+    assert {a["category"] for a in angles} == {
+        "curiosity", "contrarian", "how-to", "story", "list",
+    }, f"Expected all 5 categories, got {[a['category'] for a in angles]}"
     for a in angles:
         assert a["name"] and isinstance(a["name"], str)
         assert a["framing"] and isinstance(a["framing"], str)
