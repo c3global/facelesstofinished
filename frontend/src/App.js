@@ -7,7 +7,11 @@ import Login from "./pages/Login";
 import Header from "./components/Header";
 import "./App.css";
 
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+// API base — absolute in dev/preview (REACT_APP_BACKEND_URL set), relative in
+// production where the Netlify reverse-proxy at faceless48.c3global.co/studio
+// already routes `/api/*` to this backend. Empty/undefined env var falls back
+// to "" so axios issues relative paths.
+const API = `${process.env.REACT_APP_BACKEND_URL || ""}/api`;
 const TOKEN_KEY = "f48_studio_token";
 const THEME_KEY = "f48_studio_theme";
 
@@ -110,7 +114,7 @@ export default function App() {
   return (
     <ThemeProvider>
       <AuthProvider>
-        <BrowserRouter>
+        <BrowserRouter basename={process.env.PUBLIC_URL || ""}>
           <Header />
           <Routes>
             <Route path="/login" element={<Login />} />

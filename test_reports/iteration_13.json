@@ -1,0 +1,65 @@
+{
+  "summary": "Iteration 13 — Frontend regression on F2F48 Script Engine v1.8.0 parity (sprint-header above grid + staggered fade-in + sticky nav + light-theme pills + gated angle picker). 9/10 spec items PASS. 1 REGRESSION found: [data-testid='results-nav-collapse-toggle'] in long-form mode does NOT actually collapse/expand sections when clicked from a history-loaded script — handler fires but state never flips (button label stays 'Collapse all', no .is-collapsed class added to any .section-card). Per-section header chevron still works correctly. Backend smoke (/auth/me, /studio/render/estimate, /scripts/history) all 200 OK; minor schema note: /scripts/history returns {items:[...]} not a bare array as task spec claimed (same as iter 12's /auth/check spec mismatch). One real sprint generation was triggered for 'cold brew coffee' (~$0.05 Claude spend, accepted by spec).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/scripts/history", "issue": "Returns object {items:[…]} rather than the bare array the task spec assumed. Frontend handles this fine via apiClient adapter, but the spec line 'GET /api/scripts/history returns an array' is technically inaccurate. Same family as iter 12's /auth/check note."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "ResultsNavBar / Scripts.jsx toggleCollapseAll",
+        "issue": "Clicking [data-testid='results-nav-collapse-toggle'] on a long-form script loaded from history does nothing — button text stays 'Collapse all' across multiple clicks, zero .section-card elements receive .is-collapsed class, all 7 .section-card-body nodes remain in DOM. Per-section toggling via clicking the card head chevron still works (verified — first card collapsed correctly when clicking its head). Suspected RCA: either (a) loadFromHistory(id) at Scripts.jsx:652 sets output via setOutput(r.data) and the useEffect at line 138 resets collapsedSections back to Set() on any dependency churn, OR (b) visibleSectionKeys memo (line 145) returns [] in this path so toggleCollapseAll's `every` returns vacuous-true and assigns new Set() forever. Backend /api/scripts/job/{id} confirmed returns top-level mode:'long' + text:16999 chars, so output.mode === 'long' should hold. Worth adding a console.log inside toggleCollapseAll or memoizing it via useCallback with explicit deps.",
+        "selector": "[data-testid='results-nav-collapse-toggle']",
+        "priority": "HIGH"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {
+        "screen": "Light-mode platform pills (Shorts mode)",
+        "issues": ["TikTok pill in light theme uses bg=rgb(37,244,238) (cyan) with white text — passes the spec's two-criterion check (bg!=white AND text==white) but the contrast of white-on-cyan is below WCAG AA. YouTube (red) + Reels (pink) bg with white text are fine."]
+      }
+    ]
+  },
+  "verified_features": {
+    "auth_passwordless": "PASS — POST /api/auth/check {email:'drcharitycampbell@gmail.com'} returns 235-char JWT; GET /auth/me returns {isAdmin:true, entitlements:[base,shorts,studio]}",
+    "compile_overlay": "PASS — /scripts loads cleanly, zero webpack overlay, zero console errors (only React Router v7 future-flag warnings, benign)",
+    "sprint_header_block": "PASS — [data-testid='sprint-header'] appears ABOVE [data-testid='sprint-grid'] after generation. Title='Content Sprint', subtitle='Tap a phone to expand it.', button='Copy all 5 Shorts'",
+    "sprint_header_copy_all": "PASS — clicking [data-testid='sprint-header-copy-all'] triggers clipboard write AND surfaces toast 'Copied all 5 Shorts.'",
+    "sprint_variant_fade_in": "PASS — all 5 [data-testid='sprint-variant-N'] end at opacity:1, transform: matrix(1,0,0,1,0,0). Animation 'sprint-variant-reveal' confirmed in App.css with 60ms stagger via inline animationDelay",
+    "sticky_results_nav_after_sprint": "PASS — text='Sprint ready · 5 Shorts Jump to Shorts Copy All 5 Shorts Collapse all', no regression from iter 12",
+    "per_variant_copy": "PASS — [data-testid='sprint-variant-1-copy'] click flips label to 'Copied!' transient state; clipboard write succeeds",
+    "topic_angle_picker_gated_long": "PASS — long-form topic 'consistency wins' + 'Show me 4 angles →' lands on [data-testid='angles-grid'] with 4 angle cards (NOT direct result). Gated flow preserved.",
+    "light_theme_platform_pill_contrast": "PASS — data-theme='light' applied, all 3 platform-cards (YouTube/Reels/TikTok) get is-selected; bg becomes platform accent (rgb(255,0,51) / rgb(225,48,108) / rgb(37,244,238)); .length-name color = rgb(255,255,255). Meets the two stated criteria.",
+    "results_nav_present_in_long_form": "PASS — text='Script ready Jump to Script Copy Script Collapse all' on history-loaded long-form output"
+  },
+  "tested_failures": {
+    "results_nav_collapse_toggle_no_op": "FAIL — see frontend_issues.ui_bugs[0]"
+  },
+  "test_report_links": [],
+  "action_items": [
+    "Fix toggleCollapseAll in /app/frontend/src/pages/Scripts.jsx (lines 145-173): verify visibleSectionKeys is non-empty before flipping (or guard the vacuous-true case `if (visibleSectionKeys.length === 0) return;`). Also consider wrapping in useCallback so the closure captures the freshest visibleSectionKeys when ResultsNavBar re-renders.",
+    "Quick repro: open /scripts, click any 'Long' history row, scroll up, click 'Collapse all' button in sticky nav — nothing happens. Per-section chevron in card head still works.",
+    "(Optional) Tighten /api/scripts/history task-spec language — it returns {items:[…]} not [...]. Same nit-pick from iter 12 for /auth/check's isAdmin field.",
+    "(Carried) server.py still ~2263 lines; refactor recommended before adding more engines."
+  ],
+  "critical_code_review_comments": [
+    "Scripts.jsx toggleCollapseAll (line 167-173): vacuous-true bug when visibleSectionKeys is empty — every([]) returns true so result is always new Set(). Add length guard.",
+    "Scripts.jsx loadFromHistory (line 652): no error toast / state when /scripts/job/{id} fails; silently swallowed in try/catch. Consider surfacing.",
+    "ResultsNavBar.jsx: not memoized — if Scripts re-renders frequently, this re-renders too. Low-cost component so not urgent.",
+    "Scripts.jsx is 1278 lines — pushing past the 700-line guideline; the sprint flow, multi-platform flow, and angle-picker flow could each be their own custom hook."
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "100% (3/3 smoke endpoints 200 OK)",
+    "frontend": "90% (9/10 spec items PASS; results-nav-collapse-toggle is broken for long-form)"
+  },
+  "test_credentials": "drcharitycampbell@gmail.com (DEV_BYPASS, passwordless). JWT 235 chars stored as f48_studio_token in localStorage.",
+  "seed_data_creation": "One real sprint script generated for topic 'cold brew coffee' (mode=shorts, sprint, 5 variants). It now appears at the top of /api/scripts/history as id=80723c10-1a33-40af-81af-098c5b9d0256. ~$0.05 Claude spend, acceptable per spec. NO Studio renders triggered.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Sprint v1.8.0 parity (sprint-header above grid + staggered fade-in + Copy all N Shorts + light-theme pills + per-variant copy + gated angle picker) all PASS. ONE REGRESSION to address: results-nav-collapse-toggle button in long-form mode is a no-op (handler fires but nothing collapses). Per-section header chevrons still work. The bug repros on history-loaded long-form scripts (and likely on fresh long-form generations too — same code path). Suspected root cause: vacuous-true `every([])` returning true when visibleSectionKeys is empty, OR a stale-closure issue where toggleCollapseAll captures an empty visibleSectionKeys before the memo updates. Fastest fix is a length guard at the top of toggleCollapseAll, or wrapping in useCallback. After fix: rerun the long-form history-open path, click results-nav-collapse-toggle, verify all 7 section-card elements gain .is-collapsed and the button text flips to 'Expand all'.",
+  "rca of the issue": "results-nav-collapse-toggle no-op: handler `toggleCollapseAll` at Scripts.jsx:167 uses `visibleSectionKeys.every((k) => prev.has(k))` to decide whether to expand or collapse. When visibleSectionKeys is [] (vacuous truth), every() returns true and we always assign `new Set()`, so cards never get collapsed. Even when visibleSectionKeys is populated, if a stale closure from an earlier render is invoked (e.g., from a memoized child), the same empty-array vacuous-true bug fires. Reproduction: load /scripts, click a 'Long' history row, click 'Collapse all' button in sticky nav. Mitigation: add `if (visibleSectionKeys.length === 0) return;` guard at top of toggleCollapseAll OR change the condition to `visibleSectionKeys.length > 0 && visibleSectionKeys.every(...)` and wrap the handler in useCallback([visibleSectionKeys])."
+}

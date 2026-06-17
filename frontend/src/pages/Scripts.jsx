@@ -1148,6 +1148,7 @@ export default function Scripts() {
               platform={output.platform || platform}
               onPromote={promoteVariant}
               promotingIndex={promotingIndex}
+              onCopyAll={copyAllShorts}
             />
           ) : output.mode === "shorts" ? (
             <div className="shorts-layout" data-testid="shorts-layout">

@@ -2048,11 +2048,65 @@
   gap: 24px;
   margin-top: 16px;
 }
+/* v1.8.0 mirror — header block above the sprint grid with a duplicate
+   "Copy all N Shorts" button so the action stays in view after the user
+   scrolls past the sticky results-nav. Subtitle "Tap a phone to expand it."
+   matches the live Netlify Script Engine copy. */
+.sprint-section { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.sprint-header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  text-align: center;
+  margin: 8px 0 16px;
+}
+.sprint-header-title {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin: 0;
+  background: linear-gradient(135deg, var(--platform-accent, var(--accent)), color-mix(in srgb, var(--platform-accent, var(--accent)) 50%, var(--text) 50%));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.sprint-header-sub { font-size: 13px; color: var(--muted); margin: 0; }
+.sprint-header-copy-all {
+  margin-top: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 18px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--platform-accent, var(--accent)) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--platform-accent, var(--accent)) 40%, transparent);
+  color: var(--platform-accent, var(--accent));
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background .15s, border-color .15s, transform .1s;
+}
+.sprint-header-copy-all:hover {
+  background: color-mix(in srgb, var(--platform-accent, var(--accent)) 28%, transparent);
+  border-color: color-mix(in srgb, var(--platform-accent, var(--accent)) 65%, transparent);
+}
+.sprint-header-copy-all:active { transform: scale(0.97); }
 .sprint-variant {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 12px;
+  /* Staggered fade-in — matches SectionCard reveal so the sprint grid feels
+     alive rather than dumping all five phones in a single frame. */
+  opacity: 0;
+  transform: translateY(8px);
+  animation: sprint-variant-reveal 0.45s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+@keyframes sprint-variant-reveal {
+  to { opacity: 1; transform: translateY(0); }
 }
 .sprint-variant-head {
   text-align: center;
