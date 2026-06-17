@@ -1,6 +1,14 @@
 import React from "react";
 import { Clapperboard, UserCircle2, Film, Layers } from "lucide-react";
 
+// Single source of truth for Composite's "coming soon" status — used both
+// for the visible badge text on the card AND the toast that fires when a
+// user taps it. Keeping the two strings in lockstep here so a future tweak
+// of one doesn't drift from the other.
+export const COMPOSITE_BADGE = "Rolling Out";
+export const COMPOSITE_TOAST =
+  "Composite mode is rolling out — Avatar + B-roll cutaways are in Phase 3. Pick Avatar or Faceless for now.";
+
 /**
  * ModePicker — first-visit landing card on /studio.
  *
@@ -39,7 +47,7 @@ export default function ModePicker({ onPick, onComingSoon }) {
       title: "Composite",
       blurb: "Avatar + B-roll combined for maximum impact.",
       tint: "var(--warning)",
-      badge: "Rolling Out",
+      badge: COMPOSITE_BADGE,
       disabled: true,
       testid: "mode-picker-composite",
     },
@@ -60,6 +68,9 @@ export default function ModePicker({ onPick, onComingSoon }) {
             className={`mode-picker-card ${c.disabled ? "is-coming-soon" : ""}`}
             data-mode={c.id}
             data-testid={c.testid}
+            // a11y — pick a clean spoken label so screen readers announce
+            // "Select Avatar mode" rather than the entire blurb sentence.
+            aria-label={c.disabled ? `${c.title} mode (${c.badge})` : `Select ${c.title} mode`}
             style={{ "--mode-tint": c.tint }}
             onClick={() => {
               if (c.disabled) onComingSoon?.(c.id);

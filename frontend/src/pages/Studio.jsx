@@ -9,7 +9,7 @@ import {
   StockPicker,
   AIEnginePicker,
 } from "../components/Pickers";
-import ModePicker from "../components/ModePicker";
+import ModePicker, { COMPOSITE_TOAST } from "../components/ModePicker";
 import Toast from "../components/Toast";
 
 const MODES = { AVATAR: "avatar", FACELESS: "faceless" };
@@ -682,9 +682,7 @@ export default function Studio() {
             setShowModePicker(false);
             try { localStorage.setItem("f48_studio_mode_chosen", "1"); } catch {}
           }}
-          onComingSoon={() => setToast(
-            "Composite mode is rolling out — Avatar + B-roll cutaways are in Phase 3. Pick Avatar or Faceless for now."
-          )}
+          onComingSoon={() => setToast(COMPOSITE_TOAST)}
         />
       ) : (
         <>

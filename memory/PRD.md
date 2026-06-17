@@ -139,6 +139,36 @@ Major refactor that addresses 7 explicit user asks. Verified 21/21 backend + ~95
 
 **Deferred from this iteration (Avatar + B-roll cutaways composite mode):** A true "Avatar + B-roll cutaways" render mode (HeyGen avatar talking head intercut with stock B-roll) needs a new backend render branch and a UI toggle in Avatar mode. Decision: defer until the real HeyGen/fal.ai pipelines are wired (DRY_RUN_RENDERS=false) so the UI isn't building against simulated output. The B-roll prompts ARE staged on the handoff so the user can manually flip to Faceless mode in the meantime.
 
+## Iteration 25 — "Choose Your Video Creation Mode" landing card (2026-02-17)
+
+Charity asked to add a first-visit landing screen on `/studio` matching her reference image — a clapperboard glyph, "Choose Your Video Creation Mode" title, and three large cards (Avatar / Faceless / Composite). Composite is Phase 3 and shows a "Rolling Out" badge instead of being hidden.
+
+**Component:** new `/app/frontend/src/components/ModePicker.jsx`. Three cards rendered in a `repeat(auto-fit, minmax(260px, 1fr))` grid so the layout collapses gracefully on mobile. Each card uses an inline `--mode-tint` CSS var so the SAME stylesheet supports all three modes without duplication:
+- **Avatar** → `var(--accent)` (`#7F77DD` canonical primary purple), UserCircle2 icon glyph, "Select" CTA
+- **Faceless** → `var(--success)` (`#1D9E75` canonical teal), Film icon glyph, "Select" CTA
+- **Composite** → `var(--warning)` (`#C9956C` canonical warm rose), Layers icon glyph, "Rolling Out" badge, "Coming soon" CTA (disabled but clickable to show the explainer toast)
+
+The art panel inside each card uses a radial-gradient + tinted bg in lieu of stock photography — fast loading, on-brand, easily swapped for real promo shots later.
+
+**Single-source-of-truth pattern** (testing agent comment 19): the Composite "Rolling Out" badge text AND the explainer toast text both pull from exported constants `COMPOSITE_BADGE` and `COMPOSITE_TOAST` in `ModePicker.jsx`, so a future copy tweak in one stays in sync with the other.
+
+**a11y** (testing agent comment 22): each card has `aria-label="Select Avatar mode"` (or `Composite mode (Rolling Out)` for the disabled card) so screen readers announce the action clearly rather than the full blurb sentence.
+
+**Persistence + UX flow:**
+- First visit (`localStorage.f48_studio_mode_chosen` missing) → ModePicker is shown above everything else; mode-toggle bar + chip form are hidden.
+- Selecting Avatar or Faceless → sets `mode` state, hides picker, writes `f48_studio_mode_chosen=1` to localStorage, shows the chip form.
+- Selecting Composite → does NOT switch modes; only fires a toast explaining Phase 3 status.
+- Returning visit → picker stays hidden; user goes straight to the chip form.
+- Script handoff from `/scripts` → picker is auto-skipped AND localStorage flag is set (since the script's source mode already implies a deliberate choice).
+- New `[data-testid="mode-toggle-change"]` link ("← Change mode") in the post-pick mode-toggle row reopens the picker any time. Useful for A/B between Avatar and Faceless without losing the deliberate-selection ritual.
+
+**Files touched in iter 25**
+- `/app/frontend/src/components/ModePicker.jsx` — NEW (~110 lines).
+- `/app/frontend/src/pages/Studio.jsx` — new `showModePicker` state w/ localStorage hydration; conditional render wrapper around the existing chip form; script-handoff auto-skip; imports ModePicker + COMPOSITE_TOAST; new "Change mode" link in mode-toggle row.
+- `/app/frontend/src/App.css` — appended `.mode-picker`, `.mode-picker-header`, `.mode-picker-grid`, `.mode-picker-card` (with hover lift + focus ring + coming-soon variant), `.mode-picker-art` (radial-gradient art panel), `.mode-picker-art-icon` (top-left badge), `.mode-picker-badge` (top-right pill), `.mode-picker-card-title` / `-blurb` / `-cta`, `.mode-toggle-change`, and a `@media (max-width: 720px)` block for mobile.
+
+**Verified (iter_16):** 8/8 PASS frontend smoke — first-visit shows picker, Avatar/Faceless pick persists + shows correct chips, "Change mode" reopens, Composite click shows toast WITHOUT switching mode, page reload respects persistence, compile clean.
+
 ## Iteration 24 — Canonical brand palette parity with faceless48.c3global.co (2026-02-17)
 
 Charity dropped the full canonical brand-token spec from the live production app. Audited every token in emergent's CSS and patched all mismatches so the two builds are now pixel-equivalent.
