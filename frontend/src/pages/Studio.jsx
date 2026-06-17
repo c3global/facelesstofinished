@@ -737,7 +737,7 @@ export default function Studio() {
         {mode === MODES.AVATAR ? (
           <>{chipAvatar}{chipVoice}{chipAspect}</>
         ) : (
-          <>{chipTtsVoice}{chipBroll}{anyAiScene && chipAiEngine}{chipAspect}</>
+          <>{chipTtsVoice}{chipBroll}{chipAiEngine}{chipAspect}</>
         )}
       </div>
 
