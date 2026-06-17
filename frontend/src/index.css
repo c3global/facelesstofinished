@@ -22,9 +22,9 @@
   --success-soft:  rgba(29, 158, 117, 0.12);
   --info:          #378ADD;
   --info-soft:     rgba(55, 138, 221, 0.12);
-  --warning:       #C4866A;
-  --warning-soft:  rgba(196, 134, 106, 0.14);
-  --warning-ring:  rgba(196, 134, 106, 0.30);
+  --warning:       #C9956C;
+  --warning-soft:  rgba(201, 149, 108, 0.14);
+  --warning-ring:  rgba(201, 149, 108, 0.30);
   --danger:        #C41A18;
   --danger-soft:   rgba(196, 26, 24, 0.12);
   --header-bg:     rgba(15, 10, 30, 0.6);
@@ -39,7 +39,7 @@
   --surface-soft:  rgba(15, 10, 30, 0.025);
   --surface-hover: rgba(15, 10, 30, 0.05);
   --border:        #D8D2EA;
-  --border-soft:   rgba(216, 210, 234, 0.7);
+  --border-soft:   rgba(120, 110, 170, 0.25);
   --accent:        #5E55C2;
   --accent-hover:  #6E66D2;
   --accent-soft:   rgba(94, 85, 194, 0.10);
@@ -69,12 +69,15 @@
   --radius-lg: 14px;
   --radius-xl: 20px;
 
-  /* Angle category palette (Content Sprint taxonomy) */
-  --cat-curiosity:  #9B8AF7;   /* purple */
-  --cat-contrarian: #EF4444;   /* red */
-  --cat-howto:      #22C55E;   /* green */
-  --cat-story:      #F59E0B;   /* amber */
-  --cat-list:       #3B82F6;   /* blue */
+  /* Sprint angle accents — canonical palette from faceless48.c3global.co.
+     Used by AngleCard (Step 1 pick-from-5 grid) AND SprintResult variant
+     cards so each of the 5 sprint shorts reads as a distinct creative
+     direction regardless of the active platform's primary color. */
+  --cat-curiosity:  #7F77DD;   /* primary purple */
+  --cat-contrarian: #C41A18;   /* red */
+  --cat-howto:      #1D9E75;   /* teal */
+  --cat-story:      #E0A458;   /* warm amber */
+  --cat-list:       #378ADD;   /* blue */
 
   /* Platform accent — set dynamically by Scripts.jsx via JS */
   --platform-accent: var(--accent);

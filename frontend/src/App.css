@@ -1797,30 +1797,25 @@
 
 /* Per-section accent colors — left border on each section card */
 :root {
-  --sec-angles:      #FF7A29;   /* orange */
-  --sec-concept:     #A78BFA;   /* lavender */
-  --sec-hooks:       #EF4444;   /* red */
-  --sec-outline:     #3B82F6;   /* blue */
-  --sec-script:      #22C55E;   /* green */
-  --sec-transitions: #EC4899;   /* pink */
-  --sec-broll:       #06B6D4;   /* cyan */
-  --sec-notes:       #F59E0B;   /* amber */
-  --sec-shortScript: #22C55E;
-  --sec-onScreen:    #06B6D4;
-  --sec-caption:     #A78BFA;
-  --sec-hashtags:    #EC4899;
-  --sec-titleVariants: #3B82F6;
-  --sec-coverPrompts: #FF7A29;
-
-  /* Angle categories — used by AngleCard (Step 1 pick-from-5 grid) AND by
-     SprintResult variant cards so each of the 5 sprint shorts reads as a
-     distinct creative direction regardless of the active platform's
-     primary color. Mirrors the live Netlify v1.8.0 palette. */
-  --cat-curiosity:   #A78BFA;   /* lavender */
-  --cat-contrarian:  #EF4444;   /* red */
-  --cat-howto:       #10B981;   /* emerald green */
-  --cat-story:       #F59E0B;   /* amber / gold */
-  --cat-list:        #38BDF8;   /* sky blue */
+  /* Section card accents — canonical palette from faceless48.c3global.co.
+     Each section card uses its accent as left-border + title color so the
+     user can visually scan the script package at a glance. Shorts and
+     long-form share several vars where the section repeats (Hooks,
+     B-Roll, Production Notes). */
+  --sec-angles:        #E0A458;   /* warm amber (Topic Angles) */
+  --sec-concept:       #7F77DD;   /* primary purple (Video Concept) */
+  --sec-hooks:         #C41A18;   /* red (Hook Variations) */
+  --sec-outline:       #5BA0F2;   /* sky blue (Outline) */
+  --sec-script:        #1D9E75;   /* teal (Full Script) */
+  --sec-transitions:   #9C6DD1;   /* purple (Transitions) */
+  --sec-broll:         #378ADD;   /* blue (B-Roll Shot List) */
+  --sec-notes:         #C9956C;   /* warm rose (Production Notes) */
+  --sec-shortScript:   #1D9E75;   /* teal (Short-Form Script) */
+  --sec-onScreen:      #7F77DD;   /* primary purple (On-Screen Text) */
+  --sec-caption:       #5BA0F2;   /* sky blue (Caption) */
+  --sec-hashtags:      #9C6DD1;   /* purple (Hashtags) */
+  --sec-titleVariants: #E0A458;   /* warm amber (Title / Thumbnail Variants) */
+  --sec-coverPrompts:  #E7B23C;   /* golden amber (Cover Image Prompts) */
 }
 
 [data-section="angles"]        { --sec-color: var(--sec-angles); }

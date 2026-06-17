@@ -139,6 +139,32 @@ Major refactor that addresses 7 explicit user asks. Verified 21/21 backend + ~95
 
 **Deferred from this iteration (Avatar + B-roll cutaways composite mode):** A true "Avatar + B-roll cutaways" render mode (HeyGen avatar talking head intercut with stock B-roll) needs a new backend render branch and a UI toggle in Avatar mode. Decision: defer until the real HeyGen/fal.ai pipelines are wired (DRY_RUN_RENDERS=false) so the UI isn't building against simulated output. The B-roll prompts ARE staged on the handoff so the user can manually flip to Faceless mode in the meantime.
 
+## Iteration 24 — Canonical brand palette parity with faceless48.c3global.co (2026-02-17)
+
+Charity dropped the full canonical brand-token spec from the live production app. Audited every token in emergent's CSS and patched all mismatches so the two builds are now pixel-equivalent.
+
+**Tokens corrected:**
+
+1. `--warning` `#C4866A` → **`#C9956C`** (her `--rose`, "warm rose / highlight"). Also resoftened `--warning-soft` / `--warning-ring` to keep their alpha tints consistent.
+2. Light-mode `--border-soft` `rgba(216, 210, 234, 0.7)` → **`rgba(120, 110, 170, 0.25)`** to match her spec (subtler purple-tinted dividers in light mode).
+3. Sprint angle accents (5 tokens) — all 5 were off-brand; replaced with canonical:
+   - `--cat-curiosity` `#9B8AF7` → **`#7F77DD`** (primary purple, same as `--accent`)
+   - `--cat-contrarian` `#EF4444` → **`#C41A18`** (canonical red, same as `--danger`)
+   - `--cat-howto` `#22C55E` → **`#1D9E75`** (teal, same as `--success`)
+   - `--cat-story` `#F59E0B` → **`#E0A458`** (warm amber, distinct from `--warning`)
+   - `--cat-list` `#3B82F6` → **`#378ADD`** (blue, same as `--info`)
+4. Section card accents — 14 tokens, ALL replaced with canonical values. Long-form: `--sec-angles` `#FF7A29` → **`#E0A458`** · `--sec-concept` `#A78BFA` → **`#7F77DD`** · `--sec-hooks` `#EF4444` → **`#C41A18`** · `--sec-outline` `#3B82F6` → **`#5BA0F2`** · `--sec-script` `#22C55E` → **`#1D9E75`** · `--sec-transitions` `#EC4899` → **`#9C6DD1`** · `--sec-broll` `#06B6D4` → **`#378ADD`** · `--sec-notes` `#F59E0B` → **`#C9956C`**. Shorts: `--sec-shortScript` `#22C55E` → **`#1D9E75`** · `--sec-onScreen` `#06B6D4` → **`#7F77DD`** · `--sec-caption` `#A78BFA` → **`#5BA0F2`** · `--sec-hashtags` `#EC4899` → **`#9C6DD1`** · `--sec-titleVariants` `#3B82F6` → **`#E0A458`** · `--sec-coverPrompts` `#FF7A29` → **`#E7B23C`**.
+
+**Cleanup:** Removed the duplicate `--cat-*` block from `App.css` (previously defined in BOTH `index.css` AND `App.css` — App.css won via cascade order, masking the index.css definitions). Now there's a single source of truth: design-tokens (`--bg`, `--accent`, `--cat-*`) live in `index.css`; section-card accents (`--sec-*`) live in `App.css`.
+
+**Files touched in iter 24**
+- `/app/frontend/src/index.css` — `--warning` family + light-mode `--border-soft` + all 5 `--cat-*` vars updated to canonical.
+- `/app/frontend/src/App.css` — `--sec-*` block (14 tokens) rebuilt with canonical hex; duplicate `--cat-*` block removed.
+
+**Verified:** Automated probe of all 29 canonical tokens vs the merged CSS — **29/29 PASS**. Visual smoke screenshot of the login page confirms the dark `#0F0A1E` background, the amber `#C9956C` "STUDIO ACCESS" eyebrow label, and the purple `#7F77DD` "Enter Studio" CTA all render with the correct production hues.
+
+**No behavioural changes** — purely visual tokens. The `data-category` cascade, the `.sprint-variant[data-category=...]` selectors, the AngleCard `ANGLE_CAT` mapping, the `data-section` border/title cascade all remain unchanged; they just resolve to the right colors now.
+
 ## Iteration 23 — 5 angles + per-category sprint variant colors (2026-02-17)
 
 Two precise bugs Charity caught from screenshots of the live build vs the emergent build:
