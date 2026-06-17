@@ -1811,6 +1811,16 @@
   --sec-hashtags:    #EC4899;
   --sec-titleVariants: #3B82F6;
   --sec-coverPrompts: #FF7A29;
+
+  /* Angle categories — used by AngleCard (Step 1 pick-from-5 grid) AND by
+     SprintResult variant cards so each of the 5 sprint shorts reads as a
+     distinct creative direction regardless of the active platform's
+     primary color. Mirrors the live Netlify v1.8.0 palette. */
+  --cat-curiosity:   #A78BFA;   /* lavender */
+  --cat-contrarian:  #EF4444;   /* red */
+  --cat-howto:       #10B981;   /* emerald green */
+  --cat-story:       #F59E0B;   /* amber / gold */
+  --cat-list:        #38BDF8;   /* sky blue */
 }
 
 [data-section="angles"]        { --sec-color: var(--sec-angles); }
@@ -2146,6 +2156,60 @@
   background: color-mix(in srgb, var(--platform-accent, var(--accent)) 16%, transparent);
   color: var(--platform-accent, var(--accent));
   margin-top: 2px;
+}
+
+/* -----------------------------------------------------------------------
+   Per-variant category color — mirrors the live Netlify build so each of
+   the 5 sprint variants reads as a distinct creative direction at a
+   glance instead of all 5 cards sharing the platform's primary color
+   (e.g. YouTube red drowning out the contrast). Backend tags each
+   variant with one of five category values; we set --variant-accent
+   from the data-category attribute and let the pill, the variant
+   number, the card-promote button, and a subtle card outline pick it up.
+
+     curiosity  → lavender / soft purple
+     contrarian → red
+     how-to     → emerald green
+     story      → amber / gold
+     list       → sky blue
+   ----------------------------------------------------------------------- */
+.sprint-variant[data-category="curiosity"]  { --variant-accent: var(--cat-curiosity); }
+.sprint-variant[data-category="contrarian"] { --variant-accent: var(--cat-contrarian); }
+.sprint-variant[data-category="how-to"]     { --variant-accent: var(--cat-howto); }
+.sprint-variant[data-category="story"]      { --variant-accent: var(--cat-story); }
+.sprint-variant[data-category="list"]       { --variant-accent: var(--cat-list); }
+
+.sprint-variant[data-category] .sprint-variant-num,
+.sprint-variant[data-category] .sprint-variant-cat {
+  color: var(--variant-accent);
+}
+.sprint-variant[data-category] .sprint-variant-cat {
+  background: color-mix(in srgb, var(--variant-accent) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--variant-accent) 35%, transparent);
+}
+/* Subtle card-level tint — keeps the YouTube/Reels/TikTok phone frame
+   neutral but lets each variant feel like its own object. */
+.sprint-variant[data-category] {
+  position: relative;
+  padding: 14px 12px 12px;
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--variant-accent) 4%, transparent);
+  border: 1px solid color-mix(in srgb, var(--variant-accent) 18%, transparent);
+  transition: border-color .2s ease, background .2s ease, transform .2s ease, box-shadow .2s ease;
+}
+.sprint-variant[data-category]:hover {
+  border-color: color-mix(in srgb, var(--variant-accent) 55%, transparent);
+  background: color-mix(in srgb, var(--variant-accent) 8%, transparent);
+  transform: translateY(-2px);
+  box-shadow: 0 14px 36px -16px color-mix(in srgb, var(--variant-accent) 45%, transparent);
+}
+.sprint-variant[data-category] .sprint-variant-promote {
+  color: var(--variant-accent);
+  border-color: color-mix(in srgb, var(--variant-accent) 35%, transparent);
+}
+.sprint-variant[data-category] .sprint-variant-promote:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--variant-accent) 14%, transparent);
+  border-color: color-mix(in srgb, var(--variant-accent) 55%, transparent);
 }
 
 

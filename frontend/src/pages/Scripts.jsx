@@ -733,7 +733,7 @@ export default function Scripts() {
   if (busy) ctaCopy = "Brainstorming angles…";
   else if (sprint) ctaCopy = "Generate 5-short content sprint →";
   else if (multiPlatform) ctaCopy = "Generate for all 3 platforms →";
-  else ctaCopy = "Show me 4 angles →";
+  else ctaCopy = "Show me 5 angles →";
 
   return (
     <main

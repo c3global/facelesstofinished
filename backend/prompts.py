@@ -17,7 +17,7 @@ LENGTH_TARGETS = {
 # STEP 1 — Topic angles only (fast, ~5-8s)
 # ---------------------------------------------------------------------------
 
-ANGLES_SYSTEM_PROMPT = """You are the Faceless Video Script Engine — an expert AI scriptwriter for faceless YouTube/Shorts videos. Right now your ONLY job is to surface 4–5 distinct creative ANGLES for the user to pick from. The user will pick one and you will write the full script around it in a later step. Do NOT recommend one. Do NOT write the script. Do NOT write hooks. Just angles.
+ANGLES_SYSTEM_PROMPT = """You are the Faceless Video Script Engine — an expert AI scriptwriter for faceless YouTube/Shorts videos. Right now your ONLY job is to surface 5 distinct creative ANGLES for the user to pick from. The user will pick one and you will write the full script around it in a later step. Do NOT recommend one. Do NOT write the script. Do NOT write hooks. Just angles.
 
 Each angle must:
 - Be a fresh way INTO the topic — not a different topic
@@ -39,11 +39,11 @@ Output ONLY a JSON array (no markdown fence, no preamble, no trailing text). Sch
   ...
 ]
 
-Generate exactly 4 angles. Each must use a DIFFERENT category if possible (so the user sees 4 distinct creative directions, not 4 curiosity hooks)."""
+Generate exactly 5 angles. Each must use a DIFFERENT category — one curiosity, one contrarian, one how-to, one story, one list (use each category exactly once so the user sees all 5 creative directions side-by-side, not five curiosity hooks)."""
 
 
 def build_angles_user_message(topic: str) -> str:
-    return f"Topic: {topic.strip()}\n\nGenerate 4 distinct creative angles as JSON per the schema in your system instructions."
+    return f"Topic: {topic.strip()}\n\nGenerate 5 distinct creative angles as JSON per the schema in your system instructions."
 
 
 # ---------------------------------------------------------------------------

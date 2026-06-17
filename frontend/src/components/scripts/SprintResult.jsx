@@ -61,46 +61,54 @@ export default function SprintResult({ variants, platform, onPromote, promotingI
         )}
       </div>
       <div id="sprint-grid" className="sprint-grid" data-testid="sprint-grid">
-        {variants.map((v, i) => (
-          <div
-            key={v.index}
-            className="sprint-variant"
-            data-testid={`sprint-variant-${v.index}`}
-            // Staggered fade-in matching the SectionCard reveal pattern —
-            // 60ms per variant so the grid feels like it's "landing"
-            // rather than dumping all five phones in a single frame.
-            style={{ animationDelay: `${i * 60}ms` }}
-          >
-            <div className="sprint-variant-head">
-              <span className="sprint-variant-num">Variant {v.index} / 5</span>
-              <span className="sprint-variant-name">{v.name}</span>
-              {v.angle && <span className="sprint-variant-angle">{v.angle}</span>}
-              {v.category && (
-                <span className="sprint-variant-cat">{v.category}</span>
-              )}
+        {variants.map((v, i) => {
+          // Normalize category for CSS attribute selectors — backend returns
+          // values like "how-to" already, but be defensive in case of stray
+          // casing or whitespace. CSS rules in App.css key off
+          // [data-category="curiosity|contrarian|how-to|story|list"].
+          const cat = (v.category || "").toString().trim().toLowerCase().replace(/\s+/g, "-");
+          return (
+            <div
+              key={v.index}
+              className="sprint-variant"
+              data-testid={`sprint-variant-${v.index}`}
+              data-category={cat || undefined}
+              // Staggered fade-in matching the SectionCard reveal pattern —
+              // 60ms per variant so the grid feels like it's "landing"
+              // rather than dumping all five phones in a single frame.
+              style={{ animationDelay: `${i * 60}ms` }}
+            >
+              <div className="sprint-variant-head">
+                <span className="sprint-variant-num">Variant {v.index} / 5</span>
+                <span className="sprint-variant-name">{v.name}</span>
+                {v.angle && <span className="sprint-variant-angle">{v.angle}</span>}
+                {v.category && (
+                  <span className="sprint-variant-cat">{v.category}</span>
+                )}
+              </div>
+              <PhoneFrame platform={platform}>
+                <ShortPhoneBody shortBody={v.body} />
+              </PhoneFrame>
+              <div className="sprint-variant-actions">
+                <CopyShortButton variant={v} />
+                {onPromote && (
+                  <button
+                    type="button"
+                    className="sprint-variant-promote"
+                    data-testid={`sprint-variant-${v.index}-promote`}
+                    disabled={promotingIndex != null}
+                    onClick={() => onPromote(v)}
+                  >
+                    <ArrowUpRight size={13} />
+                    {promotingIndex === v.index
+                      ? "Promoting…"
+                      : "Promote to full short"}
+                  </button>
+                )}
+              </div>
             </div>
-            <PhoneFrame platform={platform}>
-              <ShortPhoneBody shortBody={v.body} />
-            </PhoneFrame>
-            <div className="sprint-variant-actions">
-              <CopyShortButton variant={v} />
-              {onPromote && (
-                <button
-                  type="button"
-                  className="sprint-variant-promote"
-                  data-testid={`sprint-variant-${v.index}-promote`}
-                  disabled={promotingIndex != null}
-                  onClick={() => onPromote(v)}
-                >
-                  <ArrowUpRight size={13} />
-                  {promotingIndex === v.index
-                    ? "Promoting…"
-                    : "Promote to full short"}
-                </button>
-              )}
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

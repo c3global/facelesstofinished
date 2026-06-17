@@ -72,7 +72,7 @@ def test_angles_shape(angles_response):
     assert angles_response["topic"]
     angles = angles_response["angles"]
     assert isinstance(angles, list)
-    assert 3 <= len(angles) <= 5, f"Expected ~4 angles, got {len(angles)}"
+    assert 4 <= len(angles) <= 5, f"Expected ~5 angles, got {len(angles)}"
     for a in angles:
         assert a["name"] and isinstance(a["name"], str)
         assert a["framing"] and isinstance(a["framing"], str)
