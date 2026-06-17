@@ -598,17 +598,11 @@ export default function Studio() {
       <ChevronDown size={14} className="chip-caret" />
     </button>
   );
-  // AI engine chip — only visible in Faceless mode AND when at least one
-  // scene is going through the AI pipeline (broll_source = "ai" or "mix",
-  // or any scene has explicit source="ai"). Hidden for pure Pexels/Pixabay
-  // renders since the engine choice has no effect there.
-  const anyAiScene = useMemo(() => {
-    if (brollSource === "ai") return true;
-    if (brollSource === "mix") {
-      return scenes.some((s) => s.source === "ai");
-    }
-    return scenes.some((s) => s.source === "ai");
-  }, [brollSource, scenes]);
+  // AI engine chip — always visible in Faceless mode so users can discover
+  // and configure the engine BEFORE picking an AI b-roll source. Earlier iter
+  // hid it unless broll_source = "ai" or "mix" but that buried the feature.
+  // The picker explains that the choice only applies to AI scenes; pure stock
+  // renders will simply ignore the setting.
   const aiEngineLabel = {
     flux: "Engine · Flux + Motion",
     kling: "Engine · Kling 2.1",
