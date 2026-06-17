@@ -2588,3 +2588,187 @@
   background: var(--surface-hover);
   border-color: var(--border);
 }
+
+/* =====================================================================
+   ModePicker — first-visit "Choose Your Video Creation Mode" landing
+   Reference layout: large clapperboard glyph, centered title + subtitle,
+   three large cards side-by-side. Each card tints with its mode color
+   (Avatar = primary purple, Faceless = teal, Composite = warm rose +
+   "Rolling Out" badge — Phase 3 preview).
+   ===================================================================== */
+.mode-picker {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 36px;
+  padding: 48px 0 24px;
+}
+.mode-picker-header {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+.mode-picker-icon { color: var(--accent); }
+.mode-picker-title {
+  font-size: 32px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin: 0;
+  color: var(--text);
+}
+.mode-picker-sub {
+  font-size: 14px;
+  color: var(--muted);
+  margin: 0;
+}
+.mode-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 22px;
+  width: 100%;
+  max-width: 1080px;
+}
+.mode-picker-card {
+  /* Each card uses its --mode-tint inline (set per card) so the same
+     CSS block supports all three modes without duplication. */
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 28px 24px 28px;
+  min-height: 480px;
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--mode-tint) 18%, transparent) 0%,
+      color-mix(in srgb, var(--mode-tint) 4%, transparent) 60%,
+      transparent 100%),
+    var(--surface);
+  border: 1px solid color-mix(in srgb, var(--mode-tint) 50%, transparent);
+  color: var(--text);
+  cursor: pointer;
+  transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease;
+  text-align: center;
+  overflow: hidden;
+  font: inherit;
+}
+.mode-picker-card:hover:not(.is-coming-soon) {
+  transform: translateY(-4px);
+  border-color: color-mix(in srgb, var(--mode-tint) 85%, transparent);
+  box-shadow:
+    0 24px 60px -22px color-mix(in srgb, var(--mode-tint) 65%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, var(--mode-tint) 40%, transparent);
+}
+.mode-picker-card:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--mode-tint) 35%, transparent);
+}
+.mode-picker-card.is-coming-soon {
+  cursor: not-allowed;
+  opacity: 0.88;
+}
+.mode-picker-art {
+  /* Center stage — big icon as a stylized "preview" while we don't have
+     stock photography. Tinted via the mode color, sits in a tall frame
+     mirroring the live reference layout. */
+  width: 100%;
+  height: 260px;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background:
+    radial-gradient(circle at 50% 35%,
+      color-mix(in srgb, var(--mode-tint) 40%, transparent) 0%,
+      color-mix(in srgb, var(--mode-tint) 10%, transparent) 45%,
+      transparent 75%),
+    color-mix(in srgb, var(--mode-tint) 10%, var(--bg));
+  color: var(--mode-tint);
+  border: 1px solid color-mix(in srgb, var(--mode-tint) 30%, transparent);
+}
+.mode-picker-art-icon {
+  /* Small badge icon in the top-left corner — matches the reference */
+  position: absolute;
+  top: 38px;
+  left: 38px;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--mode-tint) 28%, transparent);
+  color: var(--mode-tint);
+  border: 1px solid color-mix(in srgb, var(--mode-tint) 45%, transparent);
+}
+.mode-picker-badge {
+  position: absolute;
+  top: 38px;
+  right: 38px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  background: color-mix(in srgb, var(--mode-tint) 18%, transparent);
+  color: var(--mode-tint);
+  border: 1px solid color-mix(in srgb, var(--mode-tint) 45%, transparent);
+}
+.mode-picker-card-title {
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin: 12px 0 4px;
+  color: var(--mode-tint);
+}
+.mode-picker-card-blurb {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--muted);
+  max-width: 280px;
+  margin: 0;
+}
+.mode-picker-card-cta {
+  margin-top: auto;
+  display: inline-block;
+  width: calc(100% - 8px);
+  padding: 12px 18px;
+  border-radius: 10px;
+  background: var(--mode-tint);
+  color: #fff;
+  font-weight: 600;
+  font-size: 14px;
+  letter-spacing: 0.02em;
+  transition: background .15s, color .15s;
+}
+.mode-picker-card.is-coming-soon .mode-picker-card-cta {
+  background: transparent;
+  color: var(--mode-tint);
+  border: 1px dashed color-mix(in srgb, var(--mode-tint) 55%, transparent);
+}
+.mode-picker-card:hover:not(.is-coming-soon) .mode-picker-card-cta {
+  background: color-mix(in srgb, var(--mode-tint) 90%, #000 10%);
+}
+
+/* "Change mode" affordance — slim secondary inside the post-pick toggle row */
+.mode-toggle-change {
+  margin-left: auto;
+  padding: 6px 10px;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  transition: color .15s;
+}
+.mode-toggle-change:hover { color: var(--accent); }
+
+@media (max-width: 720px) {
+  .mode-picker-card { min-height: 380px; }
+  .mode-picker-art { height: 180px; }
+  .mode-picker-card-title { font-size: 24px; }
+  .mode-picker-title { font-size: 24px; }
+}

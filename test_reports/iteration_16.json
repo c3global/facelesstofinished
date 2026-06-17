@@ -1,0 +1,34 @@
+{
+  "summary": "Iteration 16 — Landing mode-picker frontend smoke test PASS end-to-end. All 8 requested checks verified live on the preview URL with admin auth (drcharitycampbell@gmail.com, passwordless via POST /api/auth/check → JWT stored in localStorage as f48_studio_token). No real renders, no LLM spend.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "verified_features": {
+    "mode_picker_first_visit": "PASS — after removing localStorage 'f48_studio_mode_chosen' and navigating to /studio, [data-testid='mode-picker'] is visible with all three cards present: [data-testid='mode-picker-avatar'], [data-testid='mode-picker-faceless'], [data-testid='mode-picker-composite']",
+    "mode_picker_title_and_sub": "PASS — title reads exactly 'Choose Your Video Creation Mode' and subtitle reads exactly 'Pick the workflow that fits your content style.'",
+    "composite_badge": "PASS — [data-testid='mode-picker-composite-badge'] is present and text reads 'Rolling Out'",
+    "avatar_pick_flow": "PASS — clicking [data-testid='mode-picker-avatar'] hides the picker, shows the chip-row with chip-avatar/chip-voice/chip-aspect, sets localStorage f48_studio_mode_chosen='1', and studio-page data-mode='avatar'",
+    "change_mode_link_reopens_picker": "PASS — [data-testid='mode-toggle-change'] is present with text '← Change mode' and clicking it re-displays the mode-picker",
+    "faceless_pick_flow": "PASS — clicking [data-testid='mode-picker-faceless'] hides the picker, shows Faceless chips (chip-tts-voice / chip-broll / chip-aspect), and studio-page data-mode='faceless'",
+    "composite_no_mode_change_with_toast": "PASS — clicking [data-testid='mode-picker-composite'] keeps the picker visible (mode unchanged — does NOT close picker and does NOT switch mode-toggle) AND [data-testid='toast'] appears with text 'Composite mode is rolling out — Avatar + B-roll cutaways are in Phase 3. Pick Avatar or Faceless for now.' (contains both 'Composite' and 'Phase 3')",
+    "persistence_on_reload": "PASS — with localStorage f48_studio_mode_chosen='1' set, page.reload() shows the chip-row directly and the mode-picker does NOT reappear",
+    "compile_health": "PASS — no 'Compiled with problems' overlay; console clean except two benign React Router v7 future-flag warnings",
+    "backend_auth_smoke": "PASS — POST /api/auth/check with {email:'drcharitycampbell@gmail.com'} returns 200 with {token, user} keys (verified inline during test setup)"
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "ModePicker.jsx and Studio.jsx integration is clean — props (onPick / onComingSoon), keyboard-accessibility (buttons), data-testids on all three cards plus the composite badge, and the disabled (is-coming-soon) state are all correctly wired. The composite-card onClick branches via c.disabled so the parent's setMode never fires for composite — exactly matching the spec.",
+    "Minor: the toast message in Studio.jsx (line 686) is the single source of the Composite copy. Consider lifting it into a constant or i18n key alongside ModePicker.jsx so the picker badge text ('Rolling Out') and the toast wording stay in sync if either is changed.",
+    "Minor a11y: each mode-picker-card is a <button type='button'> (good) but the entire card is clickable while also containing a heading <h2>. Consider an aria-label on the button (e.g. aria-label='Select Avatar mode') so screen-reader announcements aren't dominated by the long blurb text. Not a blocker.",
+    "(Carried) Studio.jsx is now 1274 lines — the chip-row, scene-section, storyboard, active-grid, history-list could each be hooks/subcomponents.",
+    "(Carried) server.py refactor still recommended (~2263 lines)."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (auth smoke only — no other backend touched per spec)", "frontend": "100% (all 8 requested checks PASS)"},
+  "test_credentials": "drcharitycampbell@gmail.com (passwordless, DEV_BYPASS)",
+  "seed_data_creation": "None — no renders triggered, no LLM calls, no data persisted.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "ModePicker landing-card feature is fully working. Key testids: mode-picker, mode-picker-avatar, mode-picker-faceless, mode-picker-composite, mode-picker-composite-badge, mode-toggle-change, toast. localStorage flag key is 'f48_studio_mode_chosen' (value '1' when picked). JWT key remains 'f48_studio_token'. Composite click intentionally does NOT switch modes — only shows toast. To skip the picker programmatically in future tests, just set localStorage.setItem('f48_studio_mode_chosen','1') before navigating to /studio. To force-show, removeItem the same key. Auth shortcut: POST /api/auth/check with {email:'drcharitycampbell@gmail.com'} → write response.token into localStorage as f48_studio_token.",
+  "rca of the issue": "No bugs found — pure feature verification iteration."
+}

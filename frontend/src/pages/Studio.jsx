@@ -9,6 +9,7 @@ import {
   StockPicker,
   AIEnginePicker,
 } from "../components/Pickers";
+import ModePicker from "../components/ModePicker";
 import Toast from "../components/Toast";
 
 const MODES = { AVATAR: "avatar", FACELESS: "faceless" };
@@ -74,6 +75,15 @@ export default function Studio() {
   // Mode
   const [mode, setMode] = useState(MODES.AVATAR);
 
+  // Mode-picker landing card — shown on first visit, persisted to localStorage
+  // so returning users skip straight to the chip form. A "Change mode" link
+  // re-opens the picker any time. Skipped automatically when a script handoff
+  // is in flight (the source mode is already implied by the handoff).
+  const [showModePicker, setShowModePicker] = useState(() => {
+    try { return !localStorage.getItem("f48_studio_mode_chosen"); }
+    catch { return true; }
+  });
+
   // Script
   const [script, setScript] = useState("");
 
@@ -101,6 +111,12 @@ export default function Studio() {
       // Default mode by source: shorts → Faceless (uses voiceover + B-roll natively),
       // long → stay on Avatar (talking head) but the B-roll prompts are staged.
       if (payload.sourceMode === "shorts") setMode(MODES.FACELESS);
+
+      // Script handoff implies the user already chose a content path on
+      // /scripts — skip the mode-picker landing this time and persist the
+      // implicit choice so future visits don't re-show it either.
+      setShowModePicker(false);
+      try { localStorage.setItem("f48_studio_mode_chosen", "1"); } catch {}
 
       const wordCount = (payload.script || "").trim().split(/\s+/).filter(Boolean).length;
       setHandoffBanner({
@@ -655,27 +671,55 @@ export default function Studio() {
         </div>
       )}
 
-      {/* Mode toggle */}
-      <div className="mode-toggle" role="tablist" data-testid="mode-toggle">
-        <button
-          role="tab"
-          data-mode="avatar"
-          className={`mode-opt ${mode === MODES.AVATAR ? "is-active" : ""}`}
-          data-testid="mode-avatar"
-          onClick={() => setMode(MODES.AVATAR)}
-        >
-          <UserCircle2 size={14} /> Avatar
-        </button>
-        <button
-          role="tab"
-          data-mode="faceless"
-          className={`mode-opt ${mode === MODES.FACELESS ? "is-active" : ""}`}
-          data-testid="mode-faceless"
-          onClick={() => setMode(MODES.FACELESS)}
-        >
-          <Film size={14} /> Faceless
-        </button>
-      </div>
+      {/* First-visit landing card — full-bleed mode picker. Once the user
+          selects Avatar or Faceless we hide this and surface the chip form
+          underneath; a small "Change mode" link in the mode-toggle row lets
+          them reopen it later. Composite is a Phase 3 preview right now. */}
+      {showModePicker ? (
+        <ModePicker
+          onPick={(picked) => {
+            setMode(picked === "avatar" ? MODES.AVATAR : MODES.FACELESS);
+            setShowModePicker(false);
+            try { localStorage.setItem("f48_studio_mode_chosen", "1"); } catch {}
+          }}
+          onComingSoon={() => setToast(
+            "Composite mode is rolling out — Avatar + B-roll cutaways are in Phase 3. Pick Avatar or Faceless for now."
+          )}
+        />
+      ) : (
+        <>
+        {/* Mode toggle */}
+        <div className="mode-toggle" role="tablist" data-testid="mode-toggle">
+          <button
+            role="tab"
+            data-mode="avatar"
+            className={`mode-opt ${mode === MODES.AVATAR ? "is-active" : ""}`}
+            data-testid="mode-avatar"
+            onClick={() => setMode(MODES.AVATAR)}
+          >
+            <UserCircle2 size={14} /> Avatar
+          </button>
+          <button
+            role="tab"
+            data-mode="faceless"
+            className={`mode-opt ${mode === MODES.FACELESS ? "is-active" : ""}`}
+            data-testid="mode-faceless"
+            onClick={() => setMode(MODES.FACELESS)}
+          >
+            <Film size={14} /> Faceless
+          </button>
+          {/* Slim affordance to re-open the landing picker — useful for
+              users who want to A/B between modes without losing the
+              concept of a deliberate mode selection. */}
+          <button
+            type="button"
+            className="mode-toggle-change"
+            data-testid="mode-toggle-change"
+            onClick={() => setShowModePicker(true)}
+          >
+            ← Change mode
+          </button>
+        </div>
 
       {/* Script */}
       <div className="script-block">
@@ -1154,6 +1198,8 @@ export default function Studio() {
           </div>
         )}
       </div>
+      </>
+      )}
 
       {/* Modals */}
       <AvatarPicker open={modal === "avatar"} onClose={closeModal} value={avatar} onPick={setAvatar} currentAspect={aspect} />
