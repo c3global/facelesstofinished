@@ -15,7 +15,7 @@ import Toast from "../components/Toast";
 const MODES = { AVATAR: "avatar", FACELESS: "faceless" };
 const MAX_SCENES = 12;
 const SOURCE_HINT = {
-  ai:      "An image will be generated from your prompt with Flux 1.1 Pro by Black Forest Labs.",
+  ai:      "An AI-generated visual will be created from your prompt.",
   pexels:  "We'll search the Pexels stock library.",
   pixabay: "We'll search the Pixabay stock library.",
 };
@@ -864,7 +864,7 @@ export default function Studio() {
                       {s.source === "ai" ? (
                         <>
                           <Sparkles size={22} />
-                          <span className="storyboard-thumb-engine">Flux 1.1 Pro</span>
+                          <span className="storyboard-thumb-engine">AI visual</span>
                         </>
                       ) : s.source === "pexels" || s.source === "pixabay" ? (
                         <>

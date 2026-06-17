@@ -1329,7 +1329,7 @@ async def _run_render_faceless(job: dict):
             return None
 
     # 1) Kokoro TTS — single call
-    await _set_progress(20, "Generating voiceover with Kokoro TTS…")
+    await _set_progress(20, "Generating voiceover…")
     async with httpx.AsyncClient(timeout=120) as client:
         tts_r = await client.post(
             f"https://fal.run/{_kokoro_endpoint(job.get('tts_voice_id') or 'af_heart')}",
