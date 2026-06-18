@@ -64,6 +64,16 @@ PIXABAY_API_KEY = os.environ.get("PIXABAY_API_KEY", "")
 JWT_SECRET = os.environ.get("JWT_SECRET", "dev-secret-change-me")
 NETLIFY_AUTH_URL = os.environ.get("NETLIFY_AUTH_URL", "")
 DEV_BYPASS_EMAIL = os.environ.get("DEV_BYPASS_EMAIL", "").strip().lower()
+# Manual studio grants — comma-separated list of email addresses that get
+# instant studio access without hitting Netlify. Used to hand-onboard founders
+# during the brief window before the Pinball → GHL → Netlify webhook chain is
+# fully wired in production. Also serves as a permanent admin backstop so the
+# owner can't be locked out by a Netlify outage.
+STUDIO_GRANT_EMAILS = {
+    e.strip().lower()
+    for e in os.environ.get("STUDIO_GRANT_EMAILS", "").split(",")
+    if e.strip()
+}
 ADMIN_EMAILS = {
     e.strip().lower()
     for e in os.environ.get("ADMIN_EMAILS", "drcharitycampbell@gmail.com").split(",")
@@ -101,6 +111,11 @@ api = FastAPI()  # mounted at /api below
 class AuthUser(BaseModel):
     email: str
     entitlements: list[str] = []
+    # `isAdmin` is sourced from Netlify auth-me when the cross-origin handshake
+    # is used; falls back to the local ADMIN_EMAILS env var. We carry it in
+    # the JWT (rather than re-deriving on every request) so future changes to
+    # the source list don't accidentally lock active sessions out of admin UI.
+    is_admin: bool = False
 
 
 class LoginPayload(BaseModel):
@@ -142,10 +157,11 @@ class RenderRequest(BaseModel):
 # ---------------------------------------------------------------------------
 # Auth helpers
 # ---------------------------------------------------------------------------
-def issue_jwt(email: str, entitlements: list[str]) -> str:
+def issue_jwt(email: str, entitlements: list[str], is_admin: bool = False) -> str:
     payload = {
         "email": email,
         "entitlements": entitlements,
+        "isAdmin": is_admin,
         "iat": int(time.time()),
         "exp": int(time.time()) + JWT_TTL_HOURS * 3600,
     }
@@ -167,7 +183,11 @@ async def current_user(authorization: Optional[str] = Header(default=None)) -> A
     payload = decode_jwt(token)
     if not payload:
         raise HTTPException(status_code=401, detail="Invalid token")
-    return AuthUser(email=payload["email"], entitlements=payload.get("entitlements", []))
+    return AuthUser(
+        email=payload["email"],
+        entitlements=payload.get("entitlements", []),
+        is_admin=bool(payload.get("isAdmin")) or payload["email"].lower() in ADMIN_EMAILS,
+    )
 
 
 def require_studio(user: AuthUser) -> None:
@@ -184,44 +204,92 @@ async def health():
 
 
 @api.post("/auth/check")
-async def auth_check(payload: LoginPayload):
-    """Verify a user is authenticated.
+async def auth_check(payload: LoginPayload, request: Request):
+    """Verify a user has Studio access.
 
-    Strategy:
-    1. If email matches DEV_BYPASS_EMAIL, grant all entitlements (preview only).
-    2. Else if cookies provided + NETLIFY_AUTH_URL set, forward to Netlify
-       /api/auth-me and trust the response.
-    3. Otherwise 401.
+    Resolution order (first match wins):
+      1. `DEV_BYPASS_EMAIL` — preview/local-only single-email bypass so devs
+         can hit the Studio UI without touching Netlify. Set ONLY in the
+         preview .env; never in production env vars.
+      2. `STUDIO_GRANT_EMAILS` — comma-separated list of hand-onboarded
+         founders that get instant access. Manual override for the window
+         before the Pinball → GHL → Netlify webhook chain is fully live.
+         Also acts as a permanent admin backstop if Netlify is down.
+      3. Cross-origin handshake — forward the user's cookies (which the
+         Netlify reverse-proxy at faceless48.c3global.co/studio preserves
+         automatically) server-side to `NETLIFY_AUTH_URL`. Netlify is the
+         single source of truth: any future founder purchase auto-grants
+         via the existing webhook chain — no code change here required.
     """
     email = payload.email.strip().lower()
+    if not email:
+        raise HTTPException(status_code=400, detail="Email required")
 
+    # 1) Dev bypass — preview env only.
     if DEV_BYPASS_EMAIL and email == DEV_BYPASS_EMAIL:
-        token = issue_jwt(email, KNOWN_ENTITLEMENTS)
-        return {"token": token, "user": {"email": email, "entitlements": KNOWN_ENTITLEMENTS}}
+        is_admin = email in ADMIN_EMAILS
+        token = issue_jwt(email, KNOWN_ENTITLEMENTS, is_admin=is_admin)
+        return {
+            "token": token,
+            "user": {"email": email, "entitlements": KNOWN_ENTITLEMENTS, "isAdmin": is_admin},
+        }
 
-    if not NETLIFY_AUTH_URL or not payload.cookies:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+    # 2) Manual grant — admin backstop + founder onboarding window.
+    if email in STUDIO_GRANT_EMAILS:
+        is_admin = email in ADMIN_EMAILS
+        token = issue_jwt(email, KNOWN_ENTITLEMENTS, is_admin=is_admin)
+        return {
+            "token": token,
+            "user": {"email": email, "entitlements": KNOWN_ENTITLEMENTS, "isAdmin": is_admin},
+        }
+
+    # 3) Cross-origin auth-me handshake.
+    if not NETLIFY_AUTH_URL:
+        # No Netlify wired AND no manual grant — there's nothing left to try.
+        raise HTTPException(status_code=401, detail="Could not sign in. Use the email you bought with.")
+
+    # Cookies travel with the request as a standard `Cookie` header through
+    # the Netlify reverse-proxy. We forward that header verbatim to Netlify's
+    # auth-me endpoint. (Legacy: still honor `payload.cookies` body field for
+    # any callers that explicitly pass it — useful for server-to-server flows
+    # and the iter 22 e2e test harness.)
+    raw_cookies = request.headers.get("cookie") or payload.cookies or ""
+    if not raw_cookies:
+        raise HTTPException(status_code=401, detail="Could not sign in. Use the email you bought with.")
 
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             r = await client.get(
                 NETLIFY_AUTH_URL,
-                headers={"Cookie": payload.cookies, "Accept": "application/json"},
+                headers={"Cookie": raw_cookies, "Accept": "application/json"},
             )
-    except httpx.HTTPError:
-        raise HTTPException(status_code=502, detail="Auth service unavailable")
+    except httpx.HTTPError as exc:
+        logger.warning(f"[auth] Netlify auth-me unreachable: {type(exc).__name__}: {exc}")
+        raise HTTPException(status_code=502, detail="Auth service unavailable. Please retry.")
 
     if r.status_code != 200:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+        raise HTTPException(status_code=401, detail="Could not sign in. Use the email you bought with.")
 
     data = r.json()
+    if not data.get("authenticated"):
+        raise HTTPException(status_code=401, detail="Could not sign in. Use the email you bought with.")
+
     netlify_email = (data.get("email") or "").strip().lower()
     ents = data.get("entitlements") or []
-    if not netlify_email or netlify_email != email:
-        raise HTTPException(status_code=401, detail="Email mismatch")
+    is_admin = bool(data.get("isAdmin")) or netlify_email in ADMIN_EMAILS
 
-    token = issue_jwt(netlify_email, ents)
-    return {"token": token, "user": {"email": netlify_email, "entitlements": ents}}
+    # Studio gate — Netlify is the source of truth for who's allowed in.
+    # Admins bypass the entitlement check so an owner with no purchase record
+    # (e.g. Charity herself) can still use the app.
+    if not is_admin and "studio" not in ents:
+        raise HTTPException(status_code=403, detail="Studio access required. Upgrade your account.")
+
+    final_email = netlify_email or email
+    token = issue_jwt(final_email, ents, is_admin=is_admin)
+    return {
+        "token": token,
+        "user": {"email": final_email, "entitlements": ents, "isAdmin": is_admin},
+    }
 
 
 @api.get("/auth/me")
@@ -229,7 +297,7 @@ async def auth_me(user: AuthUser = Depends(current_user)):
     return {
         "email": user.email,
         "entitlements": user.entitlements,
-        "isAdmin": user.email.lower() in ADMIN_EMAILS,
+        "isAdmin": user.is_admin,
     }
 
 
@@ -883,7 +951,7 @@ async def studio_tts_voices_preload(user: AuthUser = Depends(current_user)):
     already have a cached preview are skipped. Costs ~$0.05 total for all 10
     voices, one-time per deployment."""
     require_studio(user)
-    if user.email.lower() not in ADMIN_EMAILS:
+    if not user.is_admin:
         raise HTTPException(status_code=403, detail="Admin only")
     if not FAL_API_KEY:
         raise HTTPException(status_code=500, detail="fal.ai key missing")
@@ -1914,7 +1982,7 @@ async def studio_render_delete(job_id: str, user: AuthUser = Depends(current_use
     # Admins can force-delete any status (covers stuck-in-progress orphans).
     # Customers can only delete completed/failed renders so an active
     # background task doesn't write to a vanished doc.
-    is_admin = user.email.lower() in ADMIN_EMAILS
+    is_admin = user.is_admin
     if not is_admin and doc["status"] not in ("complete", "failed"):
         raise HTTPException(status_code=409, detail="In-progress renders cannot be deleted")
     await db.renders.delete_one({"id": job_id, "user_email": user.email})
@@ -1940,7 +2008,7 @@ async def studio_render_bulk_delete(payload: BulkDeleteRequest, user: AuthUser =
     if not payload.ids:
         return {"deleted": 0}
     q = {"id": {"$in": payload.ids}, "user_email": user.email}
-    is_admin = user.email.lower() in ADMIN_EMAILS
+    is_admin = user.is_admin
     if not is_admin:
         q["status"] = {"$in": ["complete", "failed"]}
     res = await db.renders.delete_many(q)
