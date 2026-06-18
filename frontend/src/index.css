@@ -104,6 +104,20 @@ body {
   overflow-x: hidden;
 }
 
+/* Aurora background — three soft radial gradients painted just off-screen via
+   a fixed pseudo-element. The signature "premium creator studio" feel.
+   Exact tokens per /BRAND.md Section 3-C of the canonical brand system. */
+:root {
+  --aurora-1: rgba(127, 119, 221, 0.22);   /* primary purple */
+  --aurora-2: rgba(55, 138, 221, 0.16);    /* blue */
+  --aurora-3: rgba(201, 149, 108, 0.10);   /* warm rose */
+}
+[data-theme="light"] {
+  /* ~50% softer in light mode so the gradients don't muddy white surfaces */
+  --aurora-1: rgba(127, 119, 221, 0.10);
+  --aurora-2: rgba(55, 138, 221, 0.07);
+  --aurora-3: rgba(201, 149, 108, 0.06);
+}
 body::before {
   content: "";
   position: fixed;
@@ -111,14 +125,9 @@ body::before {
   pointer-events: none;
   z-index: 0;
   background:
-    radial-gradient(700px 480px at 12% 8%, rgba(201, 149, 108, 0.07), transparent 70%),
-    radial-gradient(800px 520px at 92% 14%, rgba(196, 26, 24, 0.06), transparent 70%),
-    radial-gradient(900px 600px at 75% 95%, rgba(127, 119, 221, 0.05), transparent 70%);
-}
-[data-theme="light"] body::before {
-  background:
-    radial-gradient(700px 480px at 12% 8%, rgba(168, 118, 69, 0.05), transparent 70%),
-    radial-gradient(900px 600px at 92% 14%, rgba(94, 85, 194, 0.04), transparent 70%);
+    radial-gradient(900px 600px at 18% -10%, var(--aurora-1), transparent 60%),
+    radial-gradient(800px 500px at 100% 15%, var(--aurora-2), transparent 65%),
+    radial-gradient(700px 500px at 50% 110%, var(--aurora-3), transparent 60%);
 }
 #root { position: relative; z-index: 1; }
 

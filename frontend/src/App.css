@@ -209,12 +209,16 @@
   margin: 0;
 }
 .studio-title {
-  font-weight: 800;
-  font-size: clamp(34px, 5vw, 54px);
-  letter-spacing: -0.025em;
-  line-height: 1.08;
+  /* Canonical hero treatment per BRAND.md Section 3-B: white → lavender →
+     warm rose at a 135° diagonal. The lavender-to-rose transition is what
+     reads as "premium." Weight 700 + tight tracking matches the brand spec
+     for the hero headline (previously was 800 / -0.025em, slightly off). */
+  font-weight: 700;
+  font-size: clamp(36px, 6vw, 64px);
+  letter-spacing: -0.02em;
+  line-height: 1.05;
   margin: 0;
-  background: linear-gradient(180deg, #FFFFFF 0%, #F5E8DA 45%, #D8B79A 100%);
+  background: linear-gradient(135deg, #FFFFFF 0%, #E8E4FF 35%, #C9956C 100%);
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
@@ -1447,32 +1451,50 @@
 .section-card {
   background: var(--surface);
   border: 1px solid var(--border-soft);
-  border-radius: var(--radius-lg);
+  /* Canonical card radius per BRAND.md Section 3-D — 14px (was --radius-lg
+     which is 12px). Subtle but the spec is precise about this. */
+  border-radius: 14px;
   overflow: hidden;
 }
 .section-card-head {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 14px 18px;
+  /* Card outer padding per BRAND.md Section 4 — 28px 30px desktop.
+     The head pads slightly less vertically so the title sits closer to its
+     accent left-border without the body looking cramped. */
+  padding: 22px 30px 18px;
   border-bottom: 1px solid var(--border-soft);
   background: var(--surface-soft);
 }
 .section-card-title {
-  font-weight: 600; font-size: 14px;
-  letter-spacing: 0.04em;
+  /* Eyebrow uppercase tracking per BRAND.md Section 3-A — 13px / 700 /
+     0.22em / uppercase. The combination of small size + wide tracking +
+     uppercase is what makes each card feel like a magazine section
+     instead of a form field. */
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  line-height: 1.55;
   margin: 0;
   color: var(--text);
 }
 .section-card-body {
   margin: 0;
-  padding: 18px 20px;
+  /* Card body padding per BRAND.md Section 4 — 28px 30px desktop. */
+  padding: 22px 30px 28px;
   font-family: var(--font-sans);
-  font-size: 14px;
-  line-height: 1.7;
+  font-size: 15px;
+  line-height: 1.55;
   color: var(--text);
   white-space: pre-wrap;
   word-break: break-word;
   max-height: 520px;
   overflow-y: auto;
+}
+@media (max-width: 720px) {
+  /* Mobile card padding per BRAND.md Section 4 — 22px 20px. */
+  .section-card-head { padding: 18px 20px 14px; }
+  .section-card-body { padding: 18px 20px 22px; }
 }
 .copy-btn {
   display: inline-flex; align-items: center; gap: 6px;
