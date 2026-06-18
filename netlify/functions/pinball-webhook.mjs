@@ -7,6 +7,16 @@ import { logActivity, storeWebhookPayload } from './_shared/activity.mjs';
 const PRODUCT_ID_TO_ENTITLEMENT = {
   '01ks3pmetahzgx2mfg7q5crs0j': 'base',   // Faceless to Finished in 48
   '01ksgx97wad7vcc27ycvw0erg7': 'shorts', // Faceless Shorts (OTO + backend)
+  '01kv67kgk9z028tn0hy1kzk92r': 'studio', // Studio Founder Lifetime
+};
+
+// Higher tiers imply lower tiers — Studio is the top of the stack and grants
+// access to everything below it. Applied on grant only, not on refund (refunds
+// revoke only the specific entitlement they target, since the buyer may have
+// purchased the lower tiers separately).
+const TIER_IMPLIES = {
+  studio: ['shorts', 'base'],
+  shorts: ['base'],
 };
 
 function verifyToken(req) {
@@ -114,7 +124,19 @@ export async function processWebhook(payload, { event: forcedEvent, productParam
   const email = extractEmail(payload);
   const orderId = extractOrderId(payload);
   const orderTotalCents = extractOrderTotalCents(payload);
-  const entitlements = resolveEntitlements(payload, productParam);
+  const isRefund = eventType && /refund/i.test(eventType);
+  let entitlements = resolveEntitlements(payload, productParam);
+
+  // On grants, cascade higher tiers into the lower ones they imply, so a Studio
+  // buyer is never locked out of the Script Engine they paid for.
+  if (!isRefund) {
+    const expanded = new Set(entitlements);
+    for (const tier of entitlements) {
+      const implied = TIER_IMPLIES[tier];
+      if (implied) implied.forEach((e) => expanded.add(e));
+    }
+    entitlements = [...expanded];
+  }
 
   if (!email) {
     await logActivity({
@@ -130,7 +152,6 @@ export async function processWebhook(payload, { event: forcedEvent, productParam
     return { ok: false, status: 400, body: 'No email in payload' };
   }
 
-  const isRefund = eventType && /refund/i.test(eventType);
   try {
     const results = [];
     for (const product of entitlements) {
