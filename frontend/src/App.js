@@ -4,6 +4,7 @@ import axios from "axios";
 import Studio from "./pages/Studio";
 import Scripts from "./pages/Scripts";
 import Login from "./pages/Login";
+import Admin from "./pages/Admin";
 import Header from "./components/Header";
 import "./App.css";
 
@@ -120,6 +121,7 @@ export default function App() {
             <Route path="/login" element={<Login />} />
             <Route path="/studio" element={<RequireStudio><Studio /></RequireStudio>} />
             <Route path="/scripts" element={<RequireAuth><Scripts /></RequireAuth>} />
+            <Route path="/admin" element={<RequireAuth><Admin /></RequireAuth>} />
             <Route path="/" element={<Navigate to="/scripts" replace />} />
             <Route path="*" element={<Navigate to="/scripts" replace />} />
           </Routes>

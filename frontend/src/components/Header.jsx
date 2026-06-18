@@ -1,6 +1,6 @@
 import React from "react";
 import { useNavigate, useLocation, NavLink } from "react-router-dom";
-import { LogOut, Sun, Moon, FileText, Wand2 } from "lucide-react";
+import { LogOut, Sun, Moon, FileText, Wand2, Shield } from "lucide-react";
 import { useAuth, useTheme } from "../App";
 
 export default function Header() {
@@ -39,6 +39,15 @@ export default function Header() {
                 data-testid="nav-studio"
               >
                 <Wand2 size={13} /> Studio
+              </NavLink>
+            )}
+            {user?.isAdmin && (
+              <NavLink
+                to="/admin"
+                className={({ isActive }) => `nav-link ${isActive ? "is-active" : ""}`}
+                data-testid="nav-admin"
+              >
+                <Shield size={13} /> Admin
               </NavLink>
             )}
           </nav>

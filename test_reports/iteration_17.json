@@ -1,0 +1,48 @@
+{
+  "summary": "Iteration 17 — Full admin panel + Pinball webhook + Netlify import end-to-end testing on the live preview URL. Found and FIXED one critical backend bug: load_dotenv() ran AFTER `from admin_routes import register_admin_routes`, causing admin_routes to read PINBALL_WEBHOOK_TOKEN as empty string at module-load time, which made every webhook (even with the correct token) return 401. After moving load_dotenv() above the import in /app/backend/server.py, all 12 module pytests pass, all 18 live integration pytests pass, all admin frontend flows verified.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "verified_features": {
+    "pytest_module_suite": "12/12 PASS — backend/tests/test_admin_pinball.py (Pinball webhook token-gate, dedupe, union-merge, max() counters, replay, admin endpoint isAdmin gating)",
+    "pytest_live_suite": "18/18 PASS — backend/tests/test_admin_live.py (admin 401/403/200 gating, q + entitlement filters, grant/revoke/delete/bulk-delete, import with errors[], activity filter, stats shape, full Pinball webhook flow including studio_lifetime/studio_status/studio_current_period_end + duplicate)",
+    "frontend_admin_locked": "PASS — directkynections@gmail.com (non-admin) at /admin sees [data-testid='admin-locked'] with text 'Admin access required.', and nav-admin link is hidden",
+    "frontend_admin_full": "PASS — drcharitycampbell@gmail.com (isAdmin=true via ADMIN_EMAILS) sees full dashboard, nav-admin link visible, all three tabs (buyers/activity/stats) present",
+    "frontend_buyers_tab": "PASS — 9 buyer rows rendered with entitlement chips, spend, dates; grant picker opens via [data-testid='grant-open-{email}'], picking [data-testid='grant-{email}-studio'] calls PATCH /grant and entitlement appears (verified via API); revoke chip x-button (data-testid='revoke-{email}-{ent}') calls /revoke and removes entitlement (verified via API)",
+    "frontend_import_button": "PASS — Import from Netlify button visible; click triggers cross-origin fetch to https://faceless48.c3global.co/api/admin-buyers which is correctly blocked by CORS in preview; friendly toast appears: 'Couldn\\'t reach Netlify. Open this page on faceless48.c3global.co/studio so cookies are same-origin.' This is the expected preview-only behavior per Charity's spec",
+    "frontend_activity_tab": "PASS — 185 activity rows rendered; 11 Replay buttons visible (only on webhook_failed events); filter dropdowns present",
+    "frontend_stats_tab": "PASS — all 5 metric tiles present (stat-total-users=9, stat-active-30d=6, stat-renders=1, stat-scripts=13, stat-revenue=$1677.00); stats-chart-wrap (Recharts AreaChart) rendered; stats-ent-breakdown shows base=9, shorts=3, studio=3",
+    "frontend_tab_persistence": "PASS — clicking Stats sets localStorage f48_admin_tab='stats'; reload() lands on Stats tab (stat-total-users still present)",
+    "auth_jwt_isadmin_claim": "PASS — POST /api/auth/check returns {user.isAdmin: true} for drcharitycampbell@gmail.com (in ADMIN_EMAILS); returns {user.isAdmin: false} for directkynections@gmail.com (in STUDIO_GRANT_EMAILS only)"
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_admin_pinball.py",
+    "/app/backend/tests/test_admin_live.py",
+    "/app/test_reports/pytest/iteration_17.xml",
+    "/app/test_reports/pytest/iteration_17_live.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "FIXED in this iteration: /app/backend/server.py had `from admin_routes import register_admin_routes` on line 47 BEFORE `load_dotenv()` on line 52. admin_routes.py line 29 reads PINBALL_WEBHOOK_TOKEN at module import time, so it was always empty in the running server (only the pytest suite worked because it sets os.environ before importing and then importlib.reload(admin_routes)). Moved load_dotenv() up so it runs before the admin_routes import. Smoke test confirms the webhook now responds 200 with status=ok using the production .env token 'replace-me-before-deploy'.",
+    "(Optional hardening) admin_routes.py could read PINBALL_WEBHOOK_TOKEN lazily inside the request handler (`os.environ.get('PINBALL_WEBHOOK_TOKEN')` per-call) — that would have prevented the bug entirely and lets ops rotate the token without restarting uvicorn. Module-level constant is a foot-gun for env-driven secrets.",
+    "(Carried from prev iterations) Studio.jsx is 1274 lines and server.py is ~2442 lines — refactor recommended.",
+    "Admin.jsx + BuyersTab.jsx + ActivityTab.jsx + StatsTab.jsx are clean, well-scoped, use api client + toasts consistently, and all critical interactive elements have data-testid attributes — solid implementation."
+  ],
+  "updated_files": [
+    "/app/backend/server.py (moved load_dotenv() above the `from admin_routes import …` line to fix the env-load-order bug)",
+    "/app/backend/tests/test_admin_live.py (new — 18 live integration tests against the preview URL with real JWTs)"
+  ],
+  "success_rate": {"backend": "100% (30/30: 12 module + 18 live pytests)", "frontend": "100% (all 13 frontend checks PASS including tab persistence and Netlify-import toast)"},
+  "test_credentials": "Admin: drcharitycampbell@gmail.com (DEV_BYPASS passwordless, isAdmin=true). Non-admin: directkynections@gmail.com (passwordless, isAdmin=false, has base/shorts/studio entitlements). Pinball token: 'replace-me-before-deploy'.",
+  "seed_data_creation": "Ran /app/backend/tests/seed_admin_dev_data.py (6 buyers + 5 activity rows including 1 webhook_failed). Plus the live test suite added a few TEST_* buyers and deleted most of them (a few TEST_imp_* may remain from the import test fixture — harmless).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Admin panel is fully working in preview. Key testids: admin-locked, nav-admin, admin-tab-{buyers|activity|stats}, grant-open-{email}, grant-{email}-{base|shorts|studio}, revoke-{email}-{ent}, delete-{email}, buyers-select-all, buyers-bulk-delete, buyers-import, buyers-search, buyers-filter-entitlement, buyers-refresh, buyer-row-{email}, buyer-select-{email}, buyers-total, buyers-table, admin-toast, replay-{id}, stat-total-users, stat-active-30d, stat-renders, stat-scripts, stat-revenue, stats-chart-wrap, stats-ent-breakdown. localStorage keys: f48_studio_token (JWT), f48_studio_user (user blob with isAdmin), f48_admin_tab (active admin tab persistence). PINBALL_WEBHOOK_TOKEN env value is loaded at module import — DO NOT re-order the imports in server.py back. To rerun: `cd /app && python -m pytest backend/tests/test_admin_pinball.py backend/tests/test_admin_live.py -v`.",
+  "rca of the issue": "Root cause: env-load-order bug. /app/backend/server.py imported admin_routes BEFORE calling load_dotenv(). Since admin_routes.py reads PINBALL_WEBHOOK_TOKEN via os.environ.get(...) at module top-level (line 29), the constant was '' (empty) in the running uvicorn process because /app/backend/.env hadn't been loaded yet. The token-gate `if not PINBALL_WEBHOOK_TOKEN or token != PINBALL_WEBHOOK_TOKEN:` then rejected every request as 'invalid token'. The pytest suite masked this because it explicitly sets os.environ['PINBALL_WEBHOOK_TOKEN']='test-token-xyz' and then importlib.reload(admin_routes) BEFORE importing server — so it picked up the env. Reproduction: POST /api/pinball-webhook?token=replace-me-before-deploy&product=base with any body → 401 Unauthorized. Fix: moved `load_dotenv()` above the `from admin_routes import register_admin_routes` line in server.py. Verified with curl and 18-test live pytest suite (all pass)."
+}

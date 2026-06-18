@@ -44,11 +44,14 @@ from prompts import (
     ANGLES_SYSTEM_PROMPT,
     build_angles_user_message,
 )
-
 # ---------------------------------------------------------------------------
 # Setup
 # ---------------------------------------------------------------------------
+# IMPORTANT: load_dotenv() MUST run before importing admin_routes, because
+# admin_routes reads PINBALL_WEBHOOK_TOKEN at module-import time.
 load_dotenv()
+
+from admin_routes import register_admin_routes  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("f48")
@@ -2414,6 +2417,19 @@ async def scripts_delete(script_id: str, user: AuthUser = Depends(current_user))
     if r.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Not found")
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Admin + Pinball webhook routes — registered before mount.
+# ---------------------------------------------------------------------------
+register_admin_routes(
+    api=api,
+    db=db,
+    current_user=current_user,
+    ADMIN_EMAILS=ADMIN_EMAILS,
+    KNOWN_ENTITLEMENTS=KNOWN_ENTITLEMENTS,
+    log_activity=_log_activity,
+)
 
 
 # ---------------------------------------------------------------------------
