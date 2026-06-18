@@ -1318,6 +1318,37 @@
   .site-header { padding: 12px 16px; }
   .chip-label { max-width: 140px; }
   .site-nav { margin-left: 12px; padding-left: 12px; }
+  /* Mobile polish for the long-form output + history row + chip groupings.
+     Desktop layout is untouched — these only fire under 640px. */
+  .studio-hero { padding-top: 0; }
+  .studio-sub { font-size: 14px; max-width: 100%; }
+  /* History rows: stack the meta line above the action buttons so the
+     date + status chips + filename never get squeezed off-screen by the
+     trailing icon-buttons. Default desktop layout (row + space-between)
+     is preserved above the breakpoint. */
+  .history-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    padding: 12px 14px;
+  }
+  .history-actions {
+    justify-content: flex-end;
+  }
+  /* Generate / cost CTA — full-width on mobile so the thumb-zone target
+     is large enough; the secondary "both aspects" button stacks below. */
+  .cta-btn, .cta-btn-secondary { width: 100%; }
+  /* Storyboard scenes already scroll horizontally; just tighten the
+     internal padding so more of each thumbnail is visible. */
+  .storyboard-card { flex-basis: 118px; }
+  /* Source-card grid inside picker modals — single column on tiny phones
+     so each option is fully readable instead of squeezed to half-width. */
+  .source-grid { grid-template-columns: 1fr; }
+  /* Tighten section card padding one more step on very narrow phones */
+  .section-card-head { padding: 16px 18px 12px; }
+  .section-card-body { padding: 16px 18px 20px; font-size: 14px; }
+  /* Bulk-prompts + script textarea sit edge-to-edge on tiny phones */
+  .bulk-prompts, .script-textarea { font-size: 14px; }
 }
 
 /* ---------- Handoff banner ---------- */
