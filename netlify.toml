@@ -9,11 +9,33 @@
 [functions]
   node_bundler = "esbuild"
 
+# Studio API endpoints proxy to emergent (must come before the generic /api/* rule)
+[[redirects]]
+  from = "/api/studio/*"
+  to = "https://f2f48-video-engine.emergent.host/api/studio/:splat"
+  status = 200
+  force = true
+
+# Studio app proxies to emergent (both root and nested paths)
+[[redirects]]
+  from = "/studio"
+  to = "https://f2f48-video-engine.emergent.host/studio"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/studio/*"
+  to = "https://f2f48-video-engine.emergent.host/studio/:splat"
+  status = 200
+  force = true
+
+# All other API calls hit Netlify Functions
 [[redirects]]
   from = "/api/*"
   to = "/.netlify/functions/:splat"
   status = 200
 
+# SPA fallback for everything else
 [[redirects]]
   from = "/*"
   to = "/index.html"
