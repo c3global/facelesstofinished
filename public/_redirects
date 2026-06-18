@@ -1,4 +1,5 @@
 /api/studio/*  https://f2f48-video-engine.emergent.host/api/studio/:splat  200!
+/static/*      https://f2f48-video-engine.emergent.host/static/:splat      200!
 /studio        https://f2f48-video-engine.emergent.host/studio             200!
 /studio/*      https://f2f48-video-engine.emergent.host/studio/:splat      200!
 /api/*         /.netlify/functions/:splat                                  200

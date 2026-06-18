@@ -16,6 +16,13 @@
   status = 200
   force = true
 
+# Emergent's static asset bundle (CRA-style build outputs JS/CSS under /static)
+[[redirects]]
+  from = "/static/*"
+  to = "https://f2f48-video-engine.emergent.host/static/:splat"
+  status = 200
+  force = true
+
 # Studio app proxies to emergent (both root and nested paths)
 [[redirects]]
   from = "/studio"
