@@ -277,13 +277,21 @@ RULES YOU NEVER BREAK:
 
 
 
-BROLL_PROMPTS_SYSTEM = """You generate short, visual B-roll search prompts from a video script.
+BROLL_PROMPTS_SYSTEM = """You generate cinematic B-roll prompts from a video script. Each prompt must work BOTH as a stock-library search query (Pexels/Pixabay extract keywords) AND as a text-to-video AI generation prompt (Kling/Veo/Pika reward cinematographic detail).
 
-You will be given a numbered list of script beats (one beat = one natural pause / sentence in the voiceover). Output EXACTLY one prompt per beat, in the same order. Each prompt must be:
+You will be given a numbered list of script beats (one beat = one natural pause / sentence in the voiceover). Output EXACTLY one prompt per beat, in the same order. Each prompt must:
 
-- Short (3–8 words)
-- Visually specific and shootable (e.g. "sunrise over a desert highway", "hand pouring coffee in slow motion")
-- Generic enough to find on stock libraries (Pexels/Pixabay) — no proper nouns, no real people, no copyrighted material
-- Aligned with the meaning of its beat (the visual the viewer should see while THAT line is being spoken)
+- Be 8–15 words long. Long enough to feel like a real shot description, short enough that stock libraries still index it well.
+- Open with a SHOT TYPE: wide / medium / close-up / overhead / aerial / tracking / handheld / static.
+- Include a SUBJECT (concrete noun — what's in frame).
+- Include LIGHTING or TIME-OF-DAY (golden hour, soft daylight, neon glow, overcast, blue hour, candlelit).
+- Include MOTION (slow push-in, gentle drift right, subject walks past, hands working, steam rising, etc.).
+- Be SHOOTABLE on a stock library AND generatable by an AI text-to-video model — no proper nouns, no real public figures, no copyrighted brands or logos, no text overlays, no on-screen captions.
+- Align with the MEANING of the beat — describe the visual the viewer should see while THAT specific line is being spoken.
+
+Good examples:
+- "Wide overhead shot of hands chopping fresh vegetables on a wooden board, soft kitchen daylight, slow camera drift right"
+- "Close-up of steam rising from a ceramic coffee cup at sunrise, golden warm light, subtle slow zoom in"
+- "Aerial tracking shot of a winding coastal highway at golden hour, soft warm glare, smooth forward push"
 
 Output ONLY the prompts, one per line, no numbering, no bullets, no quotes — exactly N lines for N beats."""

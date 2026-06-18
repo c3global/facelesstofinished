@@ -436,7 +436,14 @@ async def _make_kenburns_mp4(image_url: str, aspect: str, duration_ms: int, scen
         pre_scale = "scale=1536:864:force_original_aspect_ratio=increase,crop=1536:864"
 
     preset = _KENBURNS_PRESETS[scene_idx % len(_KENBURNS_PRESETS)]
-    vf = f"{pre_scale},zoompan={preset}:d={total_frames}:s={out_w}x{out_h}:fps={fps}"
+    # Two-step framerate alignment — the historical flicker bug came from
+    # `zoompan` defaulting to 25fps internally while we output at 30fps.
+    # We now:
+    #   1) tell ffmpeg the looped still is a 30fps stream via -framerate before -i
+    #   2) compute zoompan's `d` against that same 30fps cadence
+    #   3) tack `fps=30` on the END of the filter chain so any internal
+    #      drift gets resampled cleanly without frame-duplication judder.
+    vf = f"{pre_scale},zoompan={preset}:d={total_frames}:s={out_w}x{out_h}:fps={fps},fps={fps}"
 
     tmpdir = tempfile.mkdtemp(prefix="kburns_")
     src = os.path.join(tmpdir, "src")
@@ -451,11 +458,22 @@ async def _make_kenburns_mp4(image_url: str, aspect: str, duration_ms: int, scen
                 f.write(r.content)
         # Render via ffmpeg in a worker thread so we don't block the event loop.
         cmd = [
-            FFMPEG_BIN, "-y", "-loglevel", "error", "-loop", "1", "-i", src,
+            FFMPEG_BIN, "-y", "-loglevel", "error",
+            # Critical for zoompan stability: declare an explicit 30fps input
+            # framerate for the looped still. Without this, zoompan's internal
+            # 25fps default fights with the 30fps output and produces visible
+            # judder/flicker every ~5 frames as ffmpeg duplicates frames to
+            # bridge the gap. Reported by Charity after iter 21 t2v rollout.
+            "-framerate", str(fps),
+            "-loop", "1", "-i", src,
             "-vf", vf,
             "-t", f"{duration_s:.2f}",
             "-r", str(fps),
-            "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+            # `medium` preset + crf 19 keeps the still-source motion crisp.
+            # `veryfast` was visibly soft on the panel borders (especially
+            # on 9:16 portrait crops where the zoompan reaches max zoom).
+            "-c:v", "libx264", "-preset", "medium", "-crf", "19",
+            "-pix_fmt", "yuv420p",
             "-movflags", "+faststart",
             dst,
         ]
@@ -609,6 +627,12 @@ T2V_ENGINES: dict = {
             "prompt": prompt,
             "duration": "10" if dur_s > 7 else "5",
             "aspect_ratio": "9:16" if aspect == "9_16" else "16:9",
+            # Negative prompt + tighter cfg_scale lift Kling output above the
+            # default "AI slop" feel. Reported live by Charity after a $30
+            # render — visuals were disconnected from the script. Stronger
+            # prompt adherence + explicit reject of low-quality artefacts.
+            "negative_prompt": "blurry, low quality, distorted, ugly, watermark, text overlay, deformed, bad anatomy, oversaturated, grainy, jpeg artifacts, motion blur",
+            "cfg_scale": 0.7,
         },
         "cost_cents": 50,
         "max_wait_s": 600,
@@ -623,11 +647,14 @@ T2V_ENGINES: dict = {
             "aspect_ratio": "9:16" if aspect == "9_16" else "16:9",
             "resolution": "720p",
             "generate_audio": False,
+            "negative_prompt": "blurry, low quality, distorted, ugly, watermark, text overlay, deformed, bad anatomy, oversaturated, grainy, jpeg artifacts",
         },
         "cost_cents": 100,  # ~$1/clip @ 8s standard pricing
         "max_wait_s": 900,
     },
-    # Pika 2.1 — flat $0.40/clip, supports many aspect ratios.
+    # Pika 2.1 — flat $0.40/clip, supports many aspect ratios. Charity's best
+    # subjective t2v experience so far; bias the default UX here once we're
+    # confident in the prompt-engineering pipeline.
     "pika": {
         "model": "fal-ai/pika/v2.1/text-to-video",
         "build_payload": lambda prompt, aspect, dur_s: {
@@ -635,6 +662,7 @@ T2V_ENGINES: dict = {
             "duration": 10 if dur_s > 7 else 5,
             "aspect_ratio": "9:16" if aspect == "9_16" else "16:9",
             "resolution": "720p",
+            "negative_prompt": "blurry, low quality, distorted, ugly, watermark, text overlay, deformed, bad anatomy, oversaturated, grainy, jpeg artifacts",
         },
         "cost_cents": 40,
         "max_wait_s": 600,
@@ -693,16 +721,70 @@ async def _fal_t2v_generate(engine: str, prompt: str, aspect: str, duration_ms: 
         return None
 
 
+async def _trim_t2v_clip(video_url: str, duration_ms: int, scene_idx: int) -> Optional[str]:
+    """Trim a fresh text-to-video output to the exact per-scene duration WITHOUT
+    re-scaling or re-cropping. The t2v engines (Kling/Veo/Pika) already emit
+    the requested aspect ratio natively — running them through the stock-clip
+    normalizer's scale+crop pipeline was double-encoding the output, softening
+    detail, and occasionally squashing the aspect when the source dimensions
+    were slightly off-spec (e.g. 1080x1920 → re-cropped to 720x1280 with a
+    different DAR). Reported by Charity post-iter 21: 'occasionally aspect
+    ratio was wrong... AI slop feel'."""
+    duration_s = max(1.5, duration_ms / 1000.0)
+    tmpdir = tempfile.mkdtemp(prefix="t2vtrim_")
+    src = os.path.join(tmpdir, "src.mp4")
+    dst = os.path.join(tmpdir, "out.mp4")
+    try:
+        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as cli:
+            r = await cli.get(video_url)
+            if r.status_code != 200 or not r.content:
+                return None
+            with open(src, "wb") as f:
+                f.write(r.content)
+        cmd = [
+            FFMPEG_BIN, "-y", "-loglevel", "error",
+            "-fflags", "+genpts",
+            "-stream_loop", "-1",   # loop in case scene is longer than the t2v clip's max (10s)
+            "-ss", "0", "-i", src,
+            "-t", f"{duration_s:.2f}",
+            "-an",
+            # NO -vf — we deliberately preserve the t2v engine's native
+            # resolution, framerate, and aspect. The engine was already told
+            # which aspect to render in; trust its output.
+            "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+            "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart",
+            dst,
+        ]
+        proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        _, err = await asyncio.wait_for(proc.communicate(), timeout=120)
+        if proc.returncode != 0 or not os.path.exists(dst):
+            logger.warning(f"[t2v-trim] ffmpeg failed scene={scene_idx} rc={proc.returncode} stderr={err.decode()[-300:]}")
+            return None
+        loop = asyncio.get_event_loop()
+        fal_url = await loop.run_in_executor(None, fal_client.upload_file, dst)
+        return fal_url
+    except Exception as exc:
+        logger.warning(f"[t2v-trim] scene={scene_idx} exception: {type(exc).__name__}: {exc}")
+        return None
+    finally:
+        try:
+            for f in (src, dst):
+                if os.path.exists(f):
+                    os.unlink(f)
+            os.rmdir(tmpdir)
+        except Exception:
+            pass
+
+
 async def _make_t2v_clip(prompt: str, aspect: str, duration_ms: int, engine: str, scene_idx: int) -> Optional[str]:
     """Generate an AI text-to-video clip via fal.ai (Kling/Veo/Pika), then
-    crop/scale/loop the raw output to fit the exact `duration_ms` slot in our
-    timeline. Returns the trimmed fal-storage URL or None on any failure."""
+    trim it to fit the exact `duration_ms` slot WITHOUT scale/crop. The t2v
+    engines already emit the requested aspect natively — see _trim_t2v_clip."""
     raw_url = await _fal_t2v_generate(engine, prompt, aspect, duration_ms)
     if not raw_url:
         return None
-    # Pipe through the existing stock-clip normalizer — it already handles
-    # aspect crop, 30fps resample, and seamless looping for short sources.
-    return await _trim_stock_video(raw_url, aspect, duration_ms, scene_idx)
+    return await _trim_t2v_clip(raw_url, duration_ms, scene_idx)
 
 
 # --- Sentence-aware script splitter ----------------------------------------
@@ -863,7 +945,12 @@ async def studio_stock_search(
             r = await client.get(
                 "https://api.pexels.com/videos/search",
                 headers={"Authorization": PEXELS_API_KEY},
-                params={"query": q, "orientation": orientation, "per_page": 12},
+                # 40 results gives users a real choice (previously 12 made the
+                # picker feel anemic — reported by Charity). Pexels accepts up
+                # to 80 per page; 40 keeps payload size sane while tripling
+                # variety. No explicit sort param — Pexels orders by relevance
+                # which already prioritises popular high-engagement clips.
+                params={"query": q, "orientation": orientation, "per_page": 40},
             )
             if r.status_code != 200:
                 raise HTTPException(status_code=502, detail="Pexels error")
@@ -888,7 +975,17 @@ async def studio_stock_search(
                 raise HTTPException(status_code=500, detail="Pixabay key missing")
             r = await client.get(
                 "https://pixabay.com/api/videos/",
-                params={"key": PIXABAY_API_KEY, "q": q, "per_page": 12},
+                # `order=popular` ranks by community engagement (lifetime views +
+                # likes) which is a far better quality signal than Pixabay's
+                # default `popular-by-week` (skews to whatever a few users
+                # spammed last 7 days). 50 results = 4x what we had before.
+                params={
+                    "key": PIXABAY_API_KEY,
+                    "q": q,
+                    "per_page": 50,
+                    "order": "popular",
+                    "safesearch": "true",
+                },
             )
             if r.status_code != 200:
                 raise HTTPException(status_code=502, detail="Pixabay error")
