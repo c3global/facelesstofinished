@@ -15,6 +15,34 @@ paying customers + entitlements on the existing Netlify backend at
 `https://faceless48.c3global.co/api/auth-me` — the new Studio should call
 back to it for entitlement verification.
 
+## 2026-02-18 — Phase 3.5: Native Admin Panel + Pinball webhook + Netlify import
+**Status:** SHIPPED — all 30 backend pytests + 13 frontend checks pass.
+
+Three pieces, single deploy:
+1. **Admin Panel (`/admin`)** — gated by JWT `isAdmin` claim from ADMIN_EMAILS. Three tabs:
+   - **Buyers**: table over `db.buyers` (search, entitlement filter, grant/revoke/delete chips, bulk delete, optimistic UI). "Import from Netlify" button does a same-origin browser fetch to `https://faceless48.c3global.co/api/admin-buyers` then POSTs to `/api/admin/buyers/import`.
+   - **Activity**: table over `db.activity` with type/email/date filters, Replay button for `webhook_failed` events, JSON detail expand.
+   - **Stats**: Recharts AreaChart for signups + 5 metric tiles + entitlement breakdown.
+2. **Netlify Buyer Import (`POST /api/admin/buyers/import`, admin JWT)** — batch upsert. Existing rows merge: entitlements + seenOrderIds **union**, counters **max()**, addedAt/firstUseAt **earliest wins**, lastLoginAt **latest wins**, **never null-overwrite**. Returns `{imported, merged, skipped, errors[]}`.
+3. **Pinball Webhook (`POST /api/pinball-webhook?token=&product=`)** — token gate via `PINBALL_WEBHOOK_TOKEN` env var (same value as Netlify side for dual-webhook safety window). Dedupes by `order_id`. `product=studio` sets `studio_lifetime: true`, `studio_status: "active"`, `studio_current_period_end: "2099-01-01T00:00:00Z"`. All failures log `webhook_failed` to `db.activity` with full payload for Replay.
+
+**Bug fix during testing**: `load_dotenv()` was running *after* `from admin_routes import register_admin_routes` in `server.py`, causing PINBALL_WEBHOOK_TOKEN to be read as empty at module-load time → every webhook returned 401. Fixed by moving `load_dotenv()` above the import.
+
+**Files added/modified**:
+- `/app/backend/admin_routes.py` (NEW, 380 lines)
+- `/app/backend/server.py` (3 lines: import + load_dotenv reorder + register call)
+- `/app/backend/.env` (added `PINBALL_WEBHOOK_TOKEN`)
+- `/app/frontend/src/pages/Admin.jsx` (NEW)
+- `/app/frontend/src/components/admin/{BuyersTab,ActivityTab,StatsTab}.jsx` (NEW)
+- `/app/frontend/src/App.css` (~400 lines admin styles appended)
+- `/app/frontend/src/App.js`, `Header.jsx` (admin route + nav)
+- `recharts` added via yarn
+- `/app/backend/tests/test_admin_pinball.py`, `seed_admin_dev_data.py`, `test_admin_live.py` (NEW)
+
+**Env var to populate before flipping the webhook live**: `PINBALL_WEBHOOK_TOKEN` (currently `replace-me-before-deploy`).
+
+
+
 ## Architecture
 
 | Layer | Tech | Notes |
