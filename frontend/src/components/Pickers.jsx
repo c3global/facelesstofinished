@@ -178,12 +178,25 @@ export function AvatarPicker({ open, onClose, value, onPick, currentAspect = "9_
         <div className="avatar-grid" data-testid="avatar-grid">
           {filtered.map((a) => {
             const isFav = favorites.has(a.id);
+            const pick = () => { onPick(a); onClose(); };
+            // Outer wrapper is a div+role=button (not a <button>) so we can
+            // nest the favorites <button> inside without violating HTML's
+            // no-button-in-button rule. Card is keyboard-activatable via
+            // Enter/Space mirroring native <button> a11y.
             return (
-              <button
+              <div
                 key={a.id}
                 className={`avatar-card ${value?.id === a.id ? "is-selected" : ""} ${isFav ? "is-favorite" : ""}`}
                 data-testid={`avatar-card-${a.id}`}
-                onClick={() => { onPick(a); onClose(); }}
+                role="button"
+                tabIndex={0}
+                onClick={pick}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    pick();
+                  }
+                }}
               >
                 {a.preview_image_url ? (
                   <img className="avatar-thumb" src={a.preview_image_url} alt={a.name} loading="lazy" />
@@ -212,7 +225,7 @@ export function AvatarPicker({ open, onClose, value, onPick, currentAspect = "9_
                 {value?.id === a.id && (
                   <div className="avatar-check" data-testid={`avatar-check-${a.id}`}><Check size={14} /></div>
                 )}
-              </button>
+              </div>
             );
           })}
         </div>

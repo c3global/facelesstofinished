@@ -15,6 +15,41 @@ paying customers + entitlements on the existing Netlify backend at
 `https://faceless48.c3global.co/api/auth-me` — the new Studio should call
 back to it for entitlement verification.
 
+## 2026-02-19 — Phase 3.5h: Favorite Avatars (mirror of voice favorites) + HeyGen /v2/avatars timeout fix
+**Status:** SHIPPED — 20/20 backend pytests (10 avatar-favs + 10 voice-favs regression) + Playwright frontend E2E PASS.
+
+User requested the same star-toggle pattern for avatars after seeing it work for voices (1281 HeyGen avatars to scroll through). Done in one pass:
+
+**1. Backend** — new endpoints `GET/POST/DELETE /api/studio/avatars/favorites` at `server.py` ~L478-528. Mirrors the voice-favorites schema exactly: stores `favorite_avatars: [string]` on `db.buyers`, `$addToSet` for idempotency, `$pull` for removal, studio-entitlement gated, 400 on empty avatar_id, 401 without bearer.
+
+**2. Frontend** — `AvatarPicker` (`Pickers.jsx`) now:
+- Star button (`<button class="avatar-fav">`) in the top-LEFT of every avatar card (top-right is reserved for `.avatar-check` select indicator).
+- New ★ tab at index 0 of the modal-tabs row.
+- Pin-to-top sort in non-favorites tabs (favorites first, stable sort preserved otherwise).
+- Aspect-filter dropdown auto-disabled when ★ tab is active (favorites surface across all aspects so the user doesn't lose pins switching aspect).
+- Optimistic UI with revert-on-failure + `favTogglingId` debounce — identical pattern to VoicePicker.
+- Star backdrop uses `backdrop-filter: blur(4px)` over a dark rgba background so it stays legible on bright preview thumbs.
+
+**3. A11y fix (button-in-button nesting)** — the testing agent flagged a `validateDOMNesting` warning: the `<button class="avatar-fav">` was nested inside the outer `<button class="avatar-card">`. Refactored the outer wrapper to `<div role="button" tabIndex={0}>` with `onClick` + `onKeyDown` (Enter/Space) handlers, plus `:focus-visible` outline in App.css for keyboard a11y parity with the previous `<button>`. No HTML validation warnings remaining.
+
+**4. Bonus fix (testing agent caught) — `/api/studio/avatars` 30s timeout** — pre-existing bug: `httpx.AsyncClient(timeout=30)` in `_heygen_get()` was too tight for HeyGen `/v2/avatars` cold response (~65s for 1281-avatar payload). Result: every cache-miss request 500'd after ~30s and the picker stayed in "Loading avatars..." forever. Bumped to `httpx.Timeout(90.0, connect=10.0)` so the cache populates correctly. Subsequent calls serve from Mongo cache in <200ms.
+
+**Files touched in iter 3.5h**
+- `/app/backend/server.py` — 3 new avatar-favorites endpoints + `_heygen_get` timeout 30→90s.
+- `/app/frontend/src/components/Pickers.jsx` — full AvatarPicker rewrite with favorites + a11y div+role=button.
+- `/app/frontend/src/App.css` — `.avatar-fav`, `.avatar-card.is-favorite`, `.avatar-card:focus-visible`.
+- `/app/backend/tests/test_avatar_favorites.py` (new) — 10 pytests mirroring the voice-favs suite.
+
+**Verified (iter_20 report + manual pytest)**
+- 20/20 backend pytests PASS (10 avatar + 10 voice regression intact).
+- Playwright E2E: 27 avatar cards at default 9:16 filter, 27 star buttons present, ★ tab visible. Click star → `is-on` + `aria-pressed=true` + card `is-favorite`, modal stays open (stopPropagation works). ★ tab → only favorited card, aspect dropdown disabled. Reload → favorite persists. All tab → favorite pinned to index 0.
+
+**Code-review backlog from testing agent (deferred, non-blocking — won't pursue unless user asks)**
+- Extract `useFavorites(endpoint)` hook to dedupe ~150 LOC near-identical between VoicePicker + AvatarPicker.
+- Extract backend `_toggle_favorite(field, value)` helper to collapse the 4 endpoints × ~12 LOC duplication.
+- Add startup task to pre-warm `heygen_avatars_v2` + `heygen_voices` caches so the first user of the day doesn't hit the 60s+ cold-fetch latency (which can still 502 at the public ingress even though the backend now completes successfully).
+
+
 ## 2026-02-19 — Phase 3.5g: Voice Favorites UI + B-roll inline-style clipboard fix
 **Status:** SHIPPED — 10/10 backend pytests + Playwright frontend verification PASS.
 
