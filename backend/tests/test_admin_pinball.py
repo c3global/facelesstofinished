@@ -364,3 +364,83 @@ async def test_stats_shape(client):
     # signups_series sorted by date
     dates = [s["date"] for s in body["signups_series"]]
     assert dates == sorted(dates)
+
+
+# ---------------------------------------------------------------------------
+# Activity delete
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_activity_single_and_bulk_delete(client):
+    token = await _login(client, "admin@example.com")
+    h = {"Authorization": f"Bearer {token}"}
+
+    # Seed three activity rows
+    rows = [
+        {"id": "act_a", "ts": "2026-02-01T00:00:00Z", "type": "webhook", "email": "x@ex.com", "detail": {}},
+        {"id": "act_b", "ts": "2026-02-02T00:00:00Z", "type": "webhook", "email": "y@ex.com", "detail": {}},
+        {"id": "act_c", "ts": "2026-02-03T00:00:00Z", "type": "admin_grant", "email": "z@ex.com", "detail": {}},
+    ]
+    await db.activity.insert_many(rows)
+
+    # 1. Single delete
+    r = await client.delete("/api/admin/activity/act_a", headers=h)
+    assert r.status_code == 200
+    assert (await db.activity.find_one({"id": "act_a"})) is None
+    # admin_delete_activity log row was added — so we'll see 3 left (b, c, +log)
+    cnt = await db.activity.count_documents({})
+    assert cnt == 3
+
+    # 2. Single delete of nonexistent → 404
+    r = await client.delete("/api/admin/activity/does_not_exist", headers=h)
+    assert r.status_code == 404
+
+    # 3. Bulk delete by ids
+    r = await client.post(
+        "/api/admin/activity/bulk-delete",
+        json={"ids": ["act_b", "act_c"]},
+        headers=h,
+    )
+    assert r.status_code == 200
+    assert r.json()["deleted"] == 2
+    assert (await db.activity.find_one({"id": "act_b"})) is None
+
+    # 4. Bulk delete with empty list → 0 deleted, no errors
+    r = await client.post("/api/admin/activity/bulk-delete", json={"ids": []}, headers=h)
+    assert r.status_code == 200
+    assert r.json()["deleted"] == 0
+
+    # 5. Wipe all
+    await db.activity.insert_many([
+        {"id": "x1", "ts": "2026-02-04T00:00:00Z", "type": "webhook", "email": "a@b.com", "detail": {}},
+        {"id": "x2", "ts": "2026-02-05T00:00:00Z", "type": "webhook", "email": "a@b.com", "detail": {}},
+    ])
+    r = await client.post("/api/admin/activity/bulk-delete", json={"wipe_all": True}, headers=h)
+    assert r.status_code == 200
+    assert r.json()["wiped_all"] is True
+    # Wipe itself logs an `admin_wipe_activity` audit row AFTER the delete_many,
+    # so exactly 1 row remains — the audit trail of who wiped what.
+    remaining = [d async for d in db.activity.find({})]
+    assert len(remaining) == 1
+    assert remaining[0]["type"] == "admin_wipe_activity"
+
+
+@pytest.mark.asyncio
+async def test_activity_delete_requires_admin(client):
+    # Insert a row anonymously (direct mongo)
+    await db.activity.insert_one(
+        {"id": "guarded", "ts": "2026-02-01T00:00:00Z", "type": "webhook", "email": "x@ex.com", "detail": {}},
+    )
+    # No auth → 401
+    r = await client.delete("/api/admin/activity/guarded")
+    assert r.status_code == 401
+    # Non-admin → 403
+    token = await _login(client, "buyer@example.com")
+    r = await client.delete("/api/admin/activity/guarded", headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 403
+    # Bulk delete also gated
+    r = await client.post(
+        "/api/admin/activity/bulk-delete",
+        json={"ids": ["guarded"]},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 403

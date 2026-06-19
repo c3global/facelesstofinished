@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useState } from "react";
-import { RefreshCw, Repeat } from "lucide-react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { RefreshCw, Repeat, Trash2, AlertTriangle } from "lucide-react";
 import { apiClient } from "../../App";
 
 const TYPES = [
@@ -12,6 +12,9 @@ const TYPES = [
   "admin_bulk_delete",
   "admin_buyers_import",
   "admin_replay",
+  "admin_delete_activity",
+  "admin_bulk_delete_activity",
+  "admin_wipe_activity",
   "studio_render",
   "studio_render_deleted",
 ];
@@ -34,7 +37,9 @@ export default function ActivityTab() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [expanded, setExpanded] = useState(null);
+  const [selected, setSelected] = useState(() => new Set());
   const [toast, setToast] = useState(null);
+  const [wipeConfirm, setWipeConfirm] = useState(false);
 
   const showToast = useCallback((msg, kind = "ok") => {
     setToast({ msg, kind });
@@ -56,6 +61,7 @@ export default function ActivityTab() {
       const r = await apiClient.get("/admin/activity", { params });
       setItems(r.data.items || []);
       setTotal(r.data.total || 0);
+      setSelected(new Set());
     } catch (e) {
       showToast(e?.response?.data?.detail || "Failed to load activity", "err");
     } finally {
@@ -67,6 +73,21 @@ export default function ActivityTab() {
     load();
   }, [load]);
 
+  const allSelected = useMemo(
+    () => items.length > 0 && items.every((a) => selected.has(a.id)),
+    [items, selected],
+  );
+  const toggleAll = () => {
+    if (allSelected) setSelected(new Set());
+    else setSelected(new Set(items.map((a) => a.id)));
+  };
+  const toggleOne = (id) => {
+    const next = new Set(selected);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setSelected(next);
+  };
+
   const replay = async (id) => {
     if (!window.confirm("Replay this failed webhook? It will be re-processed locally.")) return;
     try {
@@ -75,6 +96,46 @@ export default function ActivityTab() {
       load();
     } catch (e) {
       showToast(e?.response?.data?.detail || "Replay failed", "err");
+    }
+  };
+
+  const deleteOne = async (id) => {
+    if (!window.confirm("Delete this activity event?")) return;
+    const prev = items;
+    setItems((cur) => cur.filter((a) => a.id !== id));
+    try {
+      await apiClient.delete(`/admin/activity/${encodeURIComponent(id)}`);
+      showToast("Deleted");
+    } catch (e) {
+      setItems(prev);
+      showToast(e?.response?.data?.detail || "Delete failed", "err");
+    }
+  };
+
+  const bulkDelete = async () => {
+    const ids = Array.from(selected);
+    if (ids.length === 0) return;
+    if (!window.confirm(`Delete ${ids.length} event(s)? This cannot be undone.`)) return;
+    const prev = items;
+    setItems((cur) => cur.filter((a) => !selected.has(a.id)));
+    setSelected(new Set());
+    try {
+      const r = await apiClient.post("/admin/activity/bulk-delete", { ids });
+      showToast(`Deleted ${r.data.deleted} event(s)`);
+    } catch (e) {
+      setItems(prev);
+      showToast(e?.response?.data?.detail || "Bulk delete failed", "err");
+    }
+  };
+
+  const wipeAll = async () => {
+    setWipeConfirm(false);
+    try {
+      const r = await apiClient.post("/admin/activity/bulk-delete", { wipe_all: true });
+      showToast(`Wiped — ${r.data.deleted} event(s) deleted`);
+      load();
+    } catch (e) {
+      showToast(e?.response?.data?.detail || "Wipe failed", "err");
     }
   };
 
@@ -119,6 +180,23 @@ export default function ActivityTab() {
         <button className="admin-btn" onClick={load} data-testid="activity-refresh">
           <RefreshCw size={13} /> Refresh
         </button>
+        {selected.size > 0 && (
+          <button
+            className="admin-btn is-danger"
+            onClick={bulkDelete}
+            data-testid="activity-bulk-delete"
+          >
+            <Trash2 size={13} /> Delete {selected.size}
+          </button>
+        )}
+        <button
+          className="admin-btn is-danger"
+          onClick={() => setWipeConfirm(true)}
+          data-testid="activity-wipe-all"
+          title="Delete every activity event (cannot be undone)"
+        >
+          <AlertTriangle size={13} /> Wipe all
+        </button>
         <span className="admin-meta" data-testid="activity-total">{total} events</span>
       </div>
 
@@ -126,6 +204,15 @@ export default function ActivityTab() {
         <table className="admin-table" data-testid="activity-table">
           <thead>
             <tr>
+              <th className="admin-th-checkbox">
+                <input
+                  type="checkbox"
+                  checked={allSelected}
+                  onChange={toggleAll}
+                  aria-label="Select all events"
+                  data-testid="activity-select-all"
+                />
+              </th>
               <th>Time</th>
               <th>Type</th>
               <th>Email</th>
@@ -135,10 +222,10 @@ export default function ActivityTab() {
           </thead>
           <tbody>
             {loading && (
-              <tr><td colSpan={5} className="admin-empty">Loading…</td></tr>
+              <tr><td colSpan={6} className="admin-empty">Loading…</td></tr>
             )}
             {!loading && items.length === 0 && (
-              <tr><td colSpan={5} className="admin-empty">No activity matches these filters.</td></tr>
+              <tr><td colSpan={6} className="admin-empty">No activity matches these filters.</td></tr>
             )}
             {!loading && items.map((a) => {
               const isFailed = a.type === "webhook_failed";
@@ -150,6 +237,15 @@ export default function ActivityTab() {
                     className={`activity-row ${isFailed ? "is-failed" : ""}`}
                     data-testid={`activity-row-${a.id}`}
                   >
+                    <td>
+                      <input
+                        type="checkbox"
+                        checked={selected.has(a.id)}
+                        onChange={() => toggleOne(a.id)}
+                        aria-label={`Select event ${a.id}`}
+                        data-testid={`activity-select-${a.id}`}
+                      />
+                    </td>
                     <td className="admin-td-ts">{fmtTs(a.ts)}</td>
                     <td>
                       <span className={`activity-type-pill activity-type-${a.type}`}>{a.type}</span>
@@ -165,21 +261,31 @@ export default function ActivityTab() {
                       </button>
                     </td>
                     <td>
-                      {isFailed && (
+                      <div className="activity-actions">
+                        {isFailed && (
+                          <button
+                            className="admin-btn is-small is-warning"
+                            onClick={() => replay(a.id)}
+                            data-testid={`replay-${a.id}`}
+                            title="Re-process this failed webhook locally (idempotent)"
+                          >
+                            <Repeat size={12} /> Replay
+                          </button>
+                        )}
                         <button
-                          className="admin-btn is-small is-warning"
-                          onClick={() => replay(a.id)}
-                          data-testid={`replay-${a.id}`}
-                          title="Re-process this failed webhook locally (idempotent)"
+                          className="admin-icon-btn"
+                          onClick={() => deleteOne(a.id)}
+                          aria-label="Delete event"
+                          data-testid={`activity-delete-${a.id}`}
                         >
-                          <Repeat size={12} /> Replay
+                          <Trash2 size={13} />
                         </button>
-                      )}
+                      </div>
                     </td>
                   </tr>
                   {isExpanded && (
                     <tr className="activity-detail-row" data-testid={`activity-detail-row-${a.id}`}>
-                      <td colSpan={5}>
+                      <td colSpan={6}>
                         <pre className="activity-detail-json">{JSON.stringify(a.detail, null, 2)}</pre>
                       </td>
                     </tr>
@@ -190,6 +296,28 @@ export default function ActivityTab() {
           </tbody>
         </table>
       </div>
+
+      {wipeConfirm && (
+        <div className="admin-confirm-overlay" data-testid="wipe-confirm-overlay">
+          <div className="admin-confirm-card">
+            <h3>
+              <AlertTriangle size={20} /> Wipe all activity?
+            </h3>
+            <p>
+              This will permanently delete <strong>every event</strong> in the activity log
+              ({total} events). Buyer records are unaffected. This cannot be undone.
+            </p>
+            <div className="admin-confirm-actions">
+              <button className="admin-btn" onClick={() => setWipeConfirm(false)} data-testid="wipe-cancel">
+                Cancel
+              </button>
+              <button className="admin-btn is-danger" onClick={wipeAll} data-testid="wipe-confirm">
+                Yes, wipe everything
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {toast && (
         <div className={`admin-toast is-${toast.kind}`} data-testid="admin-toast" role="status">

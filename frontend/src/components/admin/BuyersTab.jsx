@@ -1,9 +1,93 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Search, Plus, Trash2, Download, RefreshCw, X } from "lucide-react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Search, Plus, Trash2, Download, RefreshCw, X, FileUp, HelpCircle } from "lucide-react";
 import { apiClient } from "../../App";
 
 const ENTITLEMENTS = ["base", "shorts", "studio"];
 const NETLIFY_BUYERS_URL = "https://faceless48.c3global.co/api/admin-buyers";
+
+// Minimal RFC-4180 CSV parser. Handles quoted fields with commas + escaped
+// double-quotes ("a,b" → a,b ; "say ""hi""" → say "hi"). Returns array of
+// arrays. Empty trailing rows are dropped.
+function parseCSV(text) {
+  const rows = [];
+  let row = [];
+  let field = "";
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++; }
+        else inQuotes = false;
+      } else field += c;
+    } else if (c === '"') {
+      inQuotes = true;
+    } else if (c === ',') {
+      row.push(field); field = "";
+    } else if (c === '\n' || c === '\r') {
+      if (c === '\r' && text[i + 1] === '\n') i++;
+      row.push(field); field = "";
+      if (row.some((v) => v.length > 0)) rows.push(row);
+      row = [];
+    } else {
+      field += c;
+    }
+  }
+  if (field.length || row.length) {
+    row.push(field);
+    if (row.some((v) => v.length > 0)) rows.push(row);
+  }
+  return rows;
+}
+
+// Map a parsed CSV (array of arrays, first row = header) into BuyerImportRow[].
+function csvToBuyers(text) {
+  const rows = parseCSV(text);
+  if (rows.length < 2) return { buyers: [], errors: ["CSV is empty or has no data rows"] };
+  const header = rows[0].map((h) => h.trim().replace(/^\uFEFF/, ""));  // strip BOM
+  const idx = (name) => header.findIndex((h) => h.toLowerCase() === name.toLowerCase());
+
+  const emailIdx = idx("email");
+  if (emailIdx === -1) {
+    return {
+      buyers: [],
+      errors: ["CSV must include an 'email' column. Other columns are optional."],
+    };
+  }
+
+  const splitList = (s) => (s || "").split(/[,;|]/).map((x) => x.trim()).filter(Boolean);
+  const parseNum = (s) => {
+    const n = parseInt((s || "0").replace(/[^0-9-]/g, ""), 10);
+    return Number.isFinite(n) ? n : 0;
+  };
+  const parseDate = (s) => {
+    if (!s || !s.trim()) return null;
+    const d = new Date(s.trim());
+    return isNaN(d.getTime()) ? s.trim() : d.toISOString();
+  };
+
+  const cell = (row, col) => {
+    const i = idx(col);
+    return i === -1 ? "" : (row[i] || "").trim();
+  };
+
+  const buyers = rows.slice(1).map((row) => ({
+    email: cell(row, "email").toLowerCase(),
+    entitlements: splitList(cell(row, "entitlements")),
+    totalSpendCents: parseNum(cell(row, "totalSpendCents") || cell(row, "spend") || cell(row, "total_spend_cents")),
+    seenOrderIds: splitList(cell(row, "seenOrderIds") || cell(row, "order_ids")),
+    orderId: cell(row, "orderId") || cell(row, "order_id") || null,
+    addedAt: parseDate(cell(row, "addedAt") || cell(row, "added_at") || cell(row, "createdAt") || cell(row, "created_at")),
+    lastLoginAt: parseDate(cell(row, "lastLoginAt") || cell(row, "last_login_at") || cell(row, "lastLogin")),
+    loginCount: parseNum(cell(row, "loginCount") || cell(row, "login_count")),
+    scriptCount: parseNum(cell(row, "scriptCount") || cell(row, "script_count")),
+    shortsCount: parseNum(cell(row, "shortsCount") || cell(row, "shorts_count")),
+    firstUseAt: parseDate(cell(row, "firstUseAt") || cell(row, "first_use_at")),
+    source: cell(row, "source") || "csv-import",
+    event: cell(row, "event") || null,
+  }));
+  return { buyers, errors: [] };
+}
 
 function fmtCents(c) {
   if (!c) return "$0";
@@ -28,6 +112,8 @@ export default function BuyersTab() {
   const [toast, setToast] = useState(null);
   const [granting, setGranting] = useState(null); // buyer email currently choosing entitlement
   const [importing, setImporting] = useState(false);
+  const [csvHelp, setCsvHelp] = useState(false);
+  const csvFileRef = useRef(null);
 
   const showToast = useCallback((msg, kind = "ok") => {
     setToast({ msg, kind });
@@ -170,6 +256,35 @@ export default function BuyersTab() {
     }
   };
 
+  const importFromCSV = async (file) => {
+    if (!file || importing) return;
+    setImporting(true);
+    try {
+      const text = await file.text();
+      const { buyers, errors } = csvToBuyers(text);
+      if (errors.length) {
+        showToast(errors[0], "err");
+        return;
+      }
+      if (buyers.length === 0) {
+        showToast("No rows found in CSV", "err");
+        return;
+      }
+      const r = await apiClient.post("/admin/buyers/import", { buyers });
+      const { imported, merged, skipped, errors: rowErrors } = r.data;
+      showToast(
+        `Import done — ${imported} new · ${merged} merged · ${skipped} skipped` +
+          (rowErrors?.length ? ` · ${rowErrors.length} errors` : ""),
+      );
+      load();
+    } catch (e) {
+      showToast(e?.response?.data?.detail || e?.message || "CSV import failed", "err");
+    } finally {
+      setImporting(false);
+      if (csvFileRef.current) csvFileRef.current.value = "";
+    }
+  };
+
   return (
     <div className="admin-section" data-testid="buyers-tab">
       <div className="admin-toolbar">
@@ -198,14 +313,42 @@ export default function BuyersTab() {
         <button className="admin-btn" onClick={load} data-testid="buyers-refresh">
           <RefreshCw size={13} /> Refresh
         </button>
+
+        {/* Hidden file input drives the CSV import button */}
+        <input
+          ref={csvFileRef}
+          type="file"
+          accept=".csv,text/csv"
+          style={{ display: "none" }}
+          onChange={(e) => importFromCSV(e.target.files?.[0])}
+          data-testid="buyers-csv-input"
+        />
         <button
           className="admin-btn is-primary"
+          onClick={() => csvFileRef.current?.click()}
+          disabled={importing}
+          data-testid="buyers-import-csv"
+          title="Upload a CSV exported from Netlify, GHL, Pinball, or anywhere else"
+        >
+          <FileUp size={13} /> {importing ? "Importing…" : "Import CSV"}
+        </button>
+        <button
+          className="admin-btn"
+          onClick={() => setCsvHelp(true)}
+          aria-label="CSV format help"
+          data-testid="buyers-csv-help"
+          title="Show CSV format help"
+        >
+          <HelpCircle size={13} />
+        </button>
+        <button
+          className="admin-btn"
           onClick={importFromNetlify}
           disabled={importing}
-          data-testid="buyers-import"
-          title="Fetches /api/admin-buyers from Netlify (same-origin via reverse proxy) and POSTs the JSON to /api/admin/buyers/import"
+          data-testid="buyers-import-netlify"
+          title="Same-origin fetch to Netlify's /api/admin-buyers using your existing session cookie, then POST to /api/admin/buyers/import"
         >
-          <Download size={13} /> {importing ? "Importing…" : "Import from Netlify"}
+          <Download size={13} /> Sync from Netlify
         </button>
         {selected.size > 0 && (
           <button
@@ -245,7 +388,7 @@ export default function BuyersTab() {
               <tr><td colSpan={7} className="admin-empty">Loading…</td></tr>
             )}
             {!loading && items.length === 0 && (
-              <tr><td colSpan={7} className="admin-empty">No buyers found. Click <strong>Import from Netlify</strong> to seed the list.</td></tr>
+              <tr><td colSpan={7} className="admin-empty">No buyers found. Click <strong>Import CSV</strong> to seed the list.</td></tr>
             )}
             {!loading && items.map((b) => (
               <tr key={b.email} data-testid={`buyer-row-${b.email}`}>
@@ -321,6 +464,34 @@ export default function BuyersTab() {
           </tbody>
         </table>
       </div>
+
+      {csvHelp && (
+        <div className="admin-confirm-overlay" data-testid="csv-help-overlay" onClick={() => setCsvHelp(false)}>
+          <div className="admin-confirm-card csv-help-card" onClick={(e) => e.stopPropagation()}>
+            <h3><HelpCircle size={20} /> CSV format</h3>
+            <p>
+              First row is the header. Only <code>email</code> is required — every other column is optional.
+              Unknown columns are ignored, so you can drop in exports from Netlify, GHL, or Pinball as-is.
+            </p>
+            <pre className="csv-help-example">{`email,entitlements,totalSpendCents,seenOrderIds,addedAt,lastLoginAt,loginCount
+alex@example.com,"base,studio",29700,"po_1,po_2",2026-01-01,2026-02-15,12
+jamie@example.com,base,700,po_3,2026-02-10,2026-02-18,4
+priya@example.com,"base,shorts",4400,,,,`}</pre>
+            <ul className="csv-help-notes">
+              <li><strong>entitlements</strong> &amp; <strong>seenOrderIds</strong>: comma/semicolon/pipe-separated inside quotes.</li>
+              <li><strong>Counter columns</strong> (totalSpendCents, loginCount, scriptCount, shortsCount): integers; existing values are kept if higher.</li>
+              <li><strong>Date columns</strong> (addedAt, lastLoginAt, firstUseAt): any parseable date; leave blank to preserve existing.</li>
+              <li>Existing buyers are <strong>upserted</strong>: entitlements + order IDs are unioned, counters take the max, addedAt keeps the earliest, lastLoginAt keeps the latest. Never null-overwrites.</li>
+              <li>Bad rows (invalid email, etc.) are skipped and reported back in the result toast.</li>
+            </ul>
+            <div className="admin-confirm-actions">
+              <button className="admin-btn is-primary" onClick={() => setCsvHelp(false)} data-testid="csv-help-close">
+                Got it
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {toast && (
         <div className={`admin-toast is-${toast.kind}`} data-testid="admin-toast" role="status">

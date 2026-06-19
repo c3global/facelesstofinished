@@ -349,6 +349,35 @@ def register_admin_routes(
         )
         return {"ok": True, "result": result}
 
+    @api.delete("/admin/activity/{activity_id}")
+    async def admin_delete_activity(activity_id: str, admin=Depends(require_admin)):
+        r = await db.activity.delete_one({"id": activity_id})
+        if r.deleted_count == 0:
+            raise HTTPException(status_code=404, detail="Activity not found")
+        await log_activity("admin_delete_activity", admin.email, {"id": activity_id})
+        return {"ok": True}
+
+    @api.post("/admin/activity/bulk-delete")
+    async def admin_bulk_delete_activity(
+        payload: dict = Body(...),
+        admin=Depends(require_admin),
+    ):
+        ids = [str(i) for i in (payload.get("ids") or []) if i]
+        wipe_all = bool(payload.get("wipe_all"))
+        if wipe_all:
+            r = await db.activity.delete_many({})
+            await log_activity("admin_wipe_activity", admin.email, {"deleted": r.deleted_count})
+            return {"deleted": r.deleted_count, "wiped_all": True}
+        if not ids:
+            return {"deleted": 0}
+        r = await db.activity.delete_many({"id": {"$in": ids}})
+        await log_activity(
+            "admin_bulk_delete_activity",
+            admin.email,
+            {"count": r.deleted_count, "ids": ids},
+        )
+        return {"deleted": r.deleted_count}
+
     # ---- Stats ----
     @api.get("/admin/stats")
     async def admin_stats(_admin=Depends(require_admin)):

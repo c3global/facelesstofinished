@@ -15,6 +15,25 @@ paying customers + entitlements on the existing Netlify backend at
 `https://faceless48.c3global.co/api/auth-me` — the new Studio should call
 back to it for entitlement verification.
 
+## 2026-02-18 — Phase 3.5b: Admin panel enhancements (CSV import + activity delete)
+**Status:** SHIPPED — 14/14 backend pytests pass.
+
+Per user request after beta launch:
+1. **CSV import** for Buyers tab — primary button. Inline RFC-4180 CSV parser (~60 lines). Header row is parsed; only `email` is required, all other columns optional. Supports flexible aliases (e.g. `addedAt` / `added_at` / `createdAt`). Pipe/comma/semicolon-separated lists. Bad rows reported in toast. CSV format help modal accessible via `?` icon.
+2. **"Sync from Netlify"** kept as secondary button (renamed from "Import from Netlify").
+3. **Activity multi-select + delete**: checkbox column, "Select all", bulk-delete button (visible when ≥1 selected), single-row trash icon, **"Wipe all"** with confirm modal. Wipe itself logs an `admin_wipe_activity` audit row so we always know who cleared the log.
+4. Backend endpoints added: `DELETE /api/admin/activity/{id}` and `POST /api/admin/activity/bulk-delete` (supports both `{ids: []}` and `{wipe_all: true}`).
+5. New activity types tracked in filter dropdown: `admin_delete_activity`, `admin_bulk_delete_activity`, `admin_wipe_activity`.
+
+Files touched:
+- `/app/backend/admin_routes.py` (+~50 lines for the 2 new endpoints)
+- `/app/frontend/src/components/admin/BuyersTab.jsx` (~+110 lines for CSV parser + import flow + help modal)
+- `/app/frontend/src/components/admin/ActivityTab.jsx` (rewritten with multi-select + delete)
+- `/app/frontend/src/App.css` (~+85 lines for confirm overlay + csv help card styles)
+- `/app/backend/tests/test_admin_pinball.py` (+2 tests, 14/14 pass)
+
+
+
 ## 2026-02-18 — Phase 3.5: Native Admin Panel + Pinball webhook + Netlify import
 **Status:** SHIPPED — all 30 backend pytests + 13 frontend checks pass.
 
