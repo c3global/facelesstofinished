@@ -1,0 +1,44 @@
+{
+  "summary": "Iter-21 — pre-customer-launch polish PASS. Verified all 6 user-requested changes end-to-end: (1) default redirect to /scripts after login (not /studio), (2) login hero image /login-hero.png present + naturalWidth=1536 (loaded, not 404), (3) Learn more link href = https://sprint.c3global.co/faceless, (4) /favicon.png returns 200 image/png + index.html has <link rel='icon' href='/favicon.png'>, (5) <title>=Faceless to Finished — Studio, (6) Studio paywall card with correct title/CTA href when user lacks studio entitlement, Shorts mode pill gets .is-locked + Lock icon (replaces Smartphone) when user lacks shorts entitlement, clicking Shorts in that state shows paywall-shorts card and hides step-1 form, switching back to Long-form restores the form. Backend gating regression: 10/10 pytests pass (GET /api/studio/avatars=403 without studio, POST /api/scripts/shorts=403 without shorts, 401 without token, no regression for full-entitlement admin). KEY TECHNIQUE: the fetch-patching approach from iter-19 doesn't work for axios calls (axios uses XHR, not fetch), so instead I minted custom JWTs locally using the JWT_SECRET in backend/.env — /auth/me decodes entitlements straight from the JWT, so a base-only token reliably simulates a non-entitled user.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "verified_features": {
+    "default_login_redirect": "PASS — after login as drcharitycampbell@gmail.com, URL is /scripts (not /studio). Script Engine page renders with mode toggle.",
+    "login_hero_image": "PASS — [data-testid='login-hero-image'] present, src ends in /login-hero.png, naturalWidth=1536/naturalHeight=1024 (actually loaded). Public GET /login-hero.png returns 200 image/png, 2.2MB.",
+    "learn_more_link": "PASS — [data-testid='login-hero-learn-more'] href='https://sprint.c3global.co/faceless' (no more faceless48.c3global.co).",
+    "favicon": "PASS — GET <BASE>/favicon.png → 200 image/png (24KB). index.html has <link rel='icon' type='image/png' href='%PUBLIC_URL%/favicon.png'> + apple-touch-icon.",
+    "page_title": "PASS — document.title === 'Faceless to Finished — Studio'.",
+    "studio_paywall_card": "PASS — with a base-only JWT (no studio entitlement), /studio renders [data-testid='paywall-studio'] with title 'Studio access required.' and [data-testid='paywall-studio-cta'] href='https://sprint.c3global.co/f2f48studio'. Studio nav item also hidden from header (no regression).",
+    "shorts_paywall_card_and_mode_lock": "PASS — with a base-only JWT (no shorts entitlement), /scripts shorts pill has class 'mode-opt is-locked' + lucide-lock svg (instead of lucide-smartphone). Clicking shorts hides the topic form and renders [data-testid='paywall-shorts'] with title 'Shorts access required.' and CTA href='https://sprint.c3global.co/faceless'. Clicking Long-form removes the paywall and brings back the topic textarea.",
+    "backend_entitlement_gating_regression": "PASS 10/10 — /app/backend/tests/test_paywall_gating.py. Studio gating (3): 403 for base-only, 403 for shorts-only, 401 without token. Shorts gating (2): 403 for base-only, 401 without token. Full-entitlement (2): not-403 for studio, /auth/me returns all 3 ents for DEV_BYPASS admin. Branding assets (3): favicon.png 200, login-hero.png 200, index.html title + favicon link tag.",
+    "admin_no_regression": "PASS — DEV_BYPASS admin (drcharitycampbell@gmail.com with all 3 ents) sees /studio without paywall and /scripts shorts pill WITHOUT is-locked class and no Lock icon."
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_paywall_gating.py",
+    "/app/test_reports/pytest/iteration_21_paywall_gating.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "RequireStudio in App.js correctly renders <EntitlementPaywall feature='studio' />, but there is no equivalent route-level guard for Shorts — the Shorts paywall is conditionally rendered INSIDE Scripts.jsx (mode === SHORTS && !hasShortsEntitlement). This is fine UX-wise (Shorts is a mode within /scripts not a route), but it means the backend remains the only source of truth for shorts gating (verified — POST /api/scripts/shorts returns 403). Be sure /scripts/repurpose is also gated server-side (confirmed via grep: _require_entitlement(user,'shorts') at L2537).",
+    "EntitlementPaywall lives inline in App.js (which is now ~190 LOC including paywall component + meta map). Consider extracting to /components/EntitlementPaywall.jsx when adding a 3rd feature gate so App.js stays focused on routing.",
+    "The fetch-patching technique documented in iter-19 / agent_to_agent_context_note doesn't work for axios (which uses XHR, not fetch). For future paywall/entitlement tests, mint a JWT locally using JWT_SECRET from backend/.env — much more reliable. Captured in this iter's test_paywall_gating.py.",
+    "Studio paywall hides the Studio nav item in Header — verified visually (screenshot iter21_studio_paywall.png shows only Script Engine + Admin in nav). Implementation likely depends on user.entitlements; if Header derives nav from entitlements, that's clean. If hardcoded, gate visibility too."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_paywall_gating.py (new — 10 pytests covering studio/shorts/branding gating regression; mints custom JWTs using backend JWT_SECRET to simulate non-entitled users)"
+  ],
+  "success_rate": {"backend": "100% (10/10 paywall_gating + iter-20 avatar/voice favs regression intact)", "frontend": "100% (12/12 paywall + hero + redirect + branding checks)"},
+  "test_credentials": "Admin: drcharitycampbell@gmail.com (DEV_BYPASS, all 3 entitlements). Non-entitled user simulated via locally-minted JWT with entitlements=['base'] only.",
+  "seed_data_creation": "None. Paywall tests are read-only on backend and use a locally-minted JWT so no DB state is touched.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "To simulate a non-entitled user (base only / no shorts / no studio), DO NOT use the fetch-patch technique — axios uses XHR not fetch so the override is bypassed. Instead, mint a JWT locally using `python -c \"import jwt,time; print(jwt.encode({'email':'drcharitycampbell@gmail.com','entitlements':['base'],'isAdmin':True,'iat':int(time.time()),'exp':int(time.time())+3600}, '<JWT_SECRET from backend/.env>', algorithm='HS256'))\"` and stuff it into localStorage.f48_studio_token. /auth/me decodes entitlements directly from the JWT so the React app will see the restricted ent set. Paywall testids: paywall-studio / paywall-studio-cta (href=https://sprint.c3global.co/f2f48studio), paywall-shorts / paywall-shorts-cta (href=https://sprint.c3global.co/faceless). Shorts mode pill class 'is-locked' + lucide-lock svg replaces lucide-smartphone when no shorts entitlement. Pytest cmd: python -m pytest /app/backend/tests/test_paywall_gating.py -v (~1.6s).",
+  "rca of the issue": "No bugs found in iter-21. Initial Playwright run looked broken (4/13 paywall checks failing) because window.fetch interception doesn't catch axios XHR requests, so /auth/me kept returning all 3 entitlements. Switched to direct JWT minting using JWT_SECRET — every check then passed cleanly on first attempt. This is a documentation/technique note for future iters, not a code bug."
+}

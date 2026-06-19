@@ -10,7 +10,8 @@ import {
   Layers,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { apiClient, useAuth } from "../App";
+import { Lock } from "lucide-react";
+import { apiClient, useAuth, EntitlementPaywall } from "../App";
 import {
   parseSections,
   LONG_SECTION_ORDER,
@@ -102,6 +103,11 @@ function currentStreamingPhase(text, mode) {
 
 export default function Scripts() {
   const { user } = useAuth();
+  // Per-feature entitlement flags. Backend enforces via _require_entitlement
+  // (returns 403), but the frontend mirror lets us show a friendlier paywall
+  // card inline instead of an angry error toast when a non-shorts buyer
+  // clicks the Shorts mode pill.
+  const hasShortsEntitlement = Boolean(user?.entitlements?.includes("shorts"));
   const nav = useNavigate();
 
   const [tagline] = useState(
@@ -865,16 +871,25 @@ export default function Scripts() {
         <button
           role="tab"
           data-mode="shorts"
-          className={`mode-opt ${mode === MODES.SHORTS ? "is-active" : ""}`}
+          className={`mode-opt ${mode === MODES.SHORTS ? "is-active" : ""} ${!hasShortsEntitlement ? "is-locked" : ""}`}
           data-testid="scripts-mode-shorts"
           onClick={() => onModeChange(MODES.SHORTS)}
+          title={hasShortsEntitlement ? "" : "Upgrade to unlock Shorts"}
         >
-          <Smartphone size={14} /> Shorts
+          {hasShortsEntitlement ? <Smartphone size={14} /> : <Lock size={14} />} Shorts
         </button>
       </div>
 
-      {/* Step 1: topic + length/platform */}
-      {(step === STEPS.TOPIC || step === STEPS.ANGLES) && (
+      {/* Shorts paywall — render inline (in place of the form) when a
+          non-entitled user clicks the Shorts mode pill. This lets them
+          discover what they'd unlock without surprising them with a 403
+          mid-generation. Backend also enforces via _require_entitlement. */}
+      {mode === MODES.SHORTS && !hasShortsEntitlement && (
+        <EntitlementPaywall feature="shorts" />
+      )}
+
+      {/* Step 1: topic + length/platform — hidden when paywall is visible */}
+      {mode === MODES.SHORTS && !hasShortsEntitlement ? null : (step === STEPS.TOPIC || step === STEPS.ANGLES) && (
         <>
           <div className="script-block">
             <span className="script-label">Topic</span>

@@ -12,6 +12,84 @@
   font-size: 14px;
 }
 
+/* ---------- Paywall (entitlement gate) ---------- */
+.paywall-wrap {
+  width: 100%;
+  display: flex; align-items: center; justify-content: center;
+  padding: 56px 20px;
+}
+.paywall-card {
+  width: min(560px, 100%);
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-xl);
+  padding: 40px 36px;
+  box-shadow: var(--shadow-card);
+  text-align: left;
+  position: relative;
+  overflow: hidden;
+}
+.paywall-card::before {
+  /* Soft top-right gradient flourish so the card doesn't feel like a wall */
+  content: "";
+  position: absolute;
+  top: -80px; right: -80px;
+  width: 240px; height: 240px;
+  background: radial-gradient(circle at center, rgba(224, 164, 88, 0.22) 0%, transparent 70%);
+  pointer-events: none;
+}
+.paywall-eyebrow {
+  font-weight: 600; font-size: 11px;
+  letter-spacing: 0.3em; text-transform: uppercase;
+  color: var(--warning);
+  margin: 0 0 10px;
+  position: relative;
+}
+.paywall-title {
+  font-weight: 800; font-size: 26px;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  margin: 0 0 12px;
+  color: var(--text);
+  position: relative;
+}
+.paywall-desc {
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1.6;
+  margin: 0 0 24px;
+  position: relative;
+}
+.paywall-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 22px;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+  font-size: 14px;
+  border-radius: var(--radius-md);
+  text-decoration: none;
+  transition: background .15s, transform .08s;
+  position: relative;
+}
+.paywall-cta:hover { background: var(--accent-hover); transform: translateY(-1px); }
+.paywall-cta:active { transform: translateY(0); }
+.paywall-note {
+  font-size: 13px;
+  color: var(--muted);
+  margin: 22px 0 0;
+  line-height: 1.55;
+  position: relative;
+}
+.paywall-link {
+  color: var(--warning);
+  text-decoration: none;
+  font-weight: 500;
+}
+.paywall-link:hover { text-decoration: underline; }
+
 /* ---------- Header ---------- */
 .site-header {
   position: sticky; top: 0; z-index: 50;
@@ -207,6 +285,20 @@
   display: flex; flex-direction: column;
   /* Mobile: hero comes first and stays compact. Desktop: pinned center. */
 }
+.login-hero-image {
+  width: 100%;
+  max-width: 480px;
+  height: auto;
+  margin: 0 0 24px;
+  /* Soft drop shadow so the device mockup floats on the dark background
+     without a hard rectangular edge. Filter > box-shadow because the PNG
+     has transparency around the devices. */
+  filter: drop-shadow(0 24px 40px rgba(124, 92, 240, 0.18))
+          drop-shadow(0 6px 12px rgba(0, 0, 0, 0.35));
+}
+@media (max-width: 880px) {
+  .login-hero-image { max-width: 360px; align-self: center; }
+}
 .login-hero-eyebrow {
   font-weight: 600; font-size: 11px;
   letter-spacing: 0.3em; text-transform: uppercase;
@@ -380,6 +472,19 @@
   background: color-mix(in srgb, var(--platform-accent, #25F4EE) 14%, transparent);
   color: var(--platform-accent, #25F4EE);
   box-shadow: inset 0 0 0 1px var(--platform-accent, #25F4EE);
+}
+/* Locked state — entitlement gate. Pill stays clickable so user can see
+   the paywall, but dimmed + amber tint hints "this costs extra". */
+.mode-opt.is-locked {
+  opacity: 0.72;
+  color: var(--warning);
+}
+.mode-opt.is-locked:hover { opacity: 0.95; color: var(--warning); }
+.mode-opt.is-locked.is-active {
+  background: var(--warning-soft);
+  color: var(--warning);
+  box-shadow: inset 0 0 0 1px var(--warning);
+  opacity: 1;
 }
 
 /* When in Avatar mode, the studio takes on a subtle warm wash */

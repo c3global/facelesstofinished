@@ -111,8 +111,61 @@ function RequireStudio({ children }) {
   if (loading) return <div className="page-loading" data-testid="page-loading">Loading…</div>;
   if (!user) return <Navigate to="/login" replace />;
   if (!user.entitlements?.includes("studio"))
-    return <div className="page-locked" data-testid="page-locked">Studio access required.</div>;
+    return <EntitlementPaywall feature="studio" />;
   return children;
+}
+
+// Paywall card shown when a logged-in user tries to access a feature they
+// haven't purchased. Each feature redirects to its own sprint.c3global.co
+// sales page. The component lives here (vs a separate file) because the
+// gating logic + UI are tightly coupled and we want to keep App.js as the
+// single source of truth for route guards.
+export function EntitlementPaywall({ feature }) {
+  const meta = {
+    studio: {
+      title: "Studio access required.",
+      desc:
+        "Your Faceless to Finished account doesn't include the Studio yet. Upgrade to unlock 1,200+ HeyGen avatars, 2,300+ voices, and the Faceless render pipeline.",
+      cta: "Unlock Studio",
+      href: "https://sprint.c3global.co/f2f48studio",
+    },
+    shorts: {
+      title: "Shorts access required.",
+      desc:
+        "Short-form scripts (TikTok, Reels, YouTube Shorts) require the Faceless to Finished bundle. Grab it once and unlock unlimited shorts script generation.",
+      cta: "Get Faceless to Finished",
+      href: "https://sprint.c3global.co/faceless",
+    },
+  }[feature] || {
+    title: "Access required.",
+    desc: "Please upgrade your account to access this feature.",
+    cta: "Upgrade",
+    href: "https://sprint.c3global.co/faceless",
+  };
+  return (
+    <div className="paywall-wrap" data-testid={`paywall-${feature}`}>
+      <div className="paywall-card">
+        <p className="paywall-eyebrow">Upgrade Required</p>
+        <h1 className="paywall-title">{meta.title}</h1>
+        <p className="paywall-desc">{meta.desc}</p>
+        <a
+          className="paywall-cta"
+          href={meta.href}
+          target="_blank"
+          rel="noopener noreferrer"
+          data-testid={`paywall-${feature}-cta`}
+        >
+          {meta.cta} →
+        </a>
+        <p className="paywall-note">
+          Already purchased? Make sure you&apos;re signed in with the email you used
+          at checkout. Email{" "}
+          <a className="paywall-link" href="mailto:support@c3global.co">support@c3global.co</a>{" "}
+          if you need help.
+        </p>
+      </div>
+    </div>
+  );
 }
 
 export default function App() {

@@ -29,7 +29,9 @@ export default function Login() {
     setBusy(true);
     try {
       await login(email.trim());
-      nav("/studio");
+      // Default landing on the Script Engine — Studio access is gated and
+      // many customers only purchased Faceless to Finished (no Studio).
+      nav("/scripts");
     } catch (e) {
       const msg = e?.response?.data?.detail || "Could not sign in. Use the email you bought with.";
       setErr(msg);
@@ -43,6 +45,14 @@ export default function Login() {
       <div className="login-grid">
         {/* Brief landing hero — keeps non-customers oriented */}
         <section className="login-hero" data-testid="login-hero">
+          {/* Hero illustration: device mockup showing the Script Engine in
+              action. Lives in /public so CRA serves it from %PUBLIC_URL%. */}
+          <img
+            className="login-hero-image"
+            src={`${process.env.PUBLIC_URL || ""}/login-hero.png`}
+            alt="Faceless to Finished Studio across desktop, laptop, and mobile"
+            data-testid="login-hero-image"
+          />
           <p className="login-hero-eyebrow">Faceless to Finished</p>
           <h1 className="login-hero-headline">
             Hit publish <span className="login-hero-accent">10× faster.</span>
@@ -81,7 +91,7 @@ export default function Login() {
             New to Faceless to Finished?{" "}
             <a
               className="login-hero-link"
-              href="https://faceless48.c3global.co"
+              href="https://sprint.c3global.co/faceless"
               target="_blank"
               rel="noopener noreferrer"
               data-testid="login-hero-learn-more"
