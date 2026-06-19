@@ -15,6 +15,31 @@ paying customers + entitlements on the existing Netlify backend at
 `https://faceless48.c3global.co/api/auth-me` — the new Studio should call
 back to it for entitlement verification.
 
+## 2026-02-19 — Phase 3.5c: Script-engine drip + toggles + admin Add-buyer + gold nav
+**Status:** SHIPPED — 17/17 pytests pass (14 admin regression + 3 new streaming/toggle); admin Add-buyer flow verified end-to-end via Playwright.
+
+Four enhancements:
+1. **Drip / progressive rendering** of script generation. `_run_script_job` rewritten to use `LlmChat.stream_message()` with `TextDelta` / `StreamDone` events. Accumulated text is written back to `db.scripts.text` every ~250ms. Frontend `pollJob` now ticks at 500ms (was 2500ms) and accepts an `onPartial` callback that flips the view to RESULT as soon as text arrives. New `<div className="drip-status">` banner shows the current Claude phase ("Drafting video concept…" / "Writing hook variations…" / "Building outline…" etc.) parsed from the latest section header in the partial text.
+2. **3 Netlify-parity toggles** added to long-form: `Include hook variations`, `Include B-roll shot list`, `Include production notes`. Default ON. Backend `build_long_system_prompt()` accepts the 3 keyword args and conditionally omits the corresponding sections.
+3. **Gold sticky ResultsNavBar** — switched from low-contrast purple to bright gold gradient (`rgba(201,149,108,0.32) → rgba(224,164,88,0.22) → rgba(201,149,108,0.32)`) with uppercase `#E0A458` status text. Highly visible.
+4. **Admin "Add buyer" button + modal** — email + entitlement pills (base/shorts/studio). Calls existing `PATCH /admin/buyers/{email}/grant` once per selected entitlement (upserts).
+
+Files touched:
+- `/app/backend/server.py` — `_run_script_job` rewritten with streaming; `LongScriptRequest` gains 3 toggle fields
+- `/app/backend/prompts.py` — `build_long_system_prompt` accepts 3 kwargs to conditionally include sections
+- `/app/frontend/src/pages/Scripts.jsx` — phase-detector helpers, 3 toggle switches, faster polling with partial callback, drip-status banner, streaming status label in nav
+- `/app/frontend/src/components/admin/BuyersTab.jsx` — Add-buyer button + modal + sequential grant calls
+- `/app/frontend/src/App.css` — gold ResultsNavBar styles, include-toggle styles, drip-status banner styles, add-buyer modal styles
+- `/app/backend/tests/test_scripts_v18_streaming.py` (new — 3 tests)
+
+Code-review backlog (flagged, not blocking):
+- Scripts.jsx now 1397 lines — split into `useScriptEngine` hook + smaller view components
+- `_run_script_job` import of emergentintegrations is inline; hoist to top of file
+- Optional: bound write interval by `min_delta_bytes OR 250ms` instead of pure time-throttle
+- Optional: single endpoint `POST /api/admin/buyers` accepting entitlements[] (currently 1 grant call per entitlement)
+
+
+
 ## 2026-02-18 — Phase 3.5b: Admin panel enhancements (CSV import + activity delete)
 **Status:** SHIPPED — 14/14 backend pytests pass.
 
