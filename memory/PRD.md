@@ -15,6 +15,28 @@ paying customers + entitlements on the existing Netlify backend at
 `https://faceless48.c3global.co/api/auth-me` — the new Studio should call
 back to it for entitlement verification.
 
+## 2026-02-19 — Phase 3.5i: Landing-feel login page + first-time visitor copy fix
+**Status:** SHIPPED — visual verification PASS.
+
+After production deploy, the user flagged that the bare "Welcome back." login card was misleading for visitors who DON'T have Studio access — they had no context for what F2F48 is and the copy implied they should already have access. Fixed in one pass:
+
+**Changes**
+- Login page now uses a 2-column grid (collapses to stacked on mobile <881px): **left** is a brief landing hero, **right** is the sign-in card.
+- Hero: "Faceless to Finished" eyebrow → "Hit publish 10× faster." headline (with gold-gradient accent on "10× faster.") → 3 feature bullets with lucide icons (Script Engine / Avatar Studio / Faceless Render) → "Learn more" link to the main marketing site for non-customers.
+- Sign-in card title is now **conditional**: "Sign in." for first-time visitors, "Welcome back." only for customers who have signed in at least once before.
+- Returning-user detection via a durable `f48_studio_returning='1'` localStorage flag set inside `AuthProvider.login()` (App.js). Survives logout and token expiry; only cleared if the user wipes site data.
+
+**Files touched**
+- `/app/frontend/src/pages/Login.jsx` — full rewrite (2-column grid, conditional copy, lucide icons).
+- `/app/frontend/src/App.js` — login() now sets the returning flag.
+- `/app/frontend/src/App.css` — new `.login-grid`, `.login-hero*` styles + responsive breakpoint; `.login-title` dropped the gradient (smaller now, gradient moved to the hero headline accent).
+
+**Verified**
+- Screenshot: first-time visitor sees "Sign in." with full landing hero context — no longer misleading.
+- Conditional title verified via testid `login-title` text query — shows "Sign in." when flag absent and "Welcome back." when flag is set.
+- Mobile responsive: 2-column collapses to stacked under 880px.
+
+
 ## 2026-02-19 — Phase 3.5h: Favorite Avatars (mirror of voice favorites) + HeyGen /v2/avatars timeout fix
 **Status:** SHIPPED — 20/20 backend pytests (10 avatar-favs + 10 voice-favs regression) + Playwright frontend E2E PASS.
 

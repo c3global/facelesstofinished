@@ -79,6 +79,10 @@ function AuthProvider({ children }) {
   const login = useCallback(async (email) => {
     const r = await apiClient.post("/auth/check", { email });
     localStorage.setItem(TOKEN_KEY, r.data.token);
+    // Durable "you've signed in before" flag — survives logout + token expiry
+    // so the Login page can flip between first-time hero copy and "Welcome
+    // back." for returning customers. Wiped only if the user clears site data.
+    try { localStorage.setItem("f48_studio_returning", "1"); } catch {}
     setUser(r.data.user);
     return r.data.user;
   }, []);

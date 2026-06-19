@@ -1,13 +1,27 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { Zap, Mic, Film, ArrowRight } from "lucide-react";
 import { useAuth } from "../App";
 
+// Brief landing-feel sign-in page. Two columns on desktop, stacked on
+// mobile. The left column gives non-customers enough context to know
+// what F2F48 Studio is (so they don't feel mis-routed when they don't
+// have access). The right column is the existing sign-in card with copy
+// that switches between first-time visitor and returning-customer based
+// on the `f48_studio_returning` flag set in App.js#login().
 export default function Login() {
   const { login } = useAuth();
   const nav = useNavigate();
   const [email, setEmail] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+
+  // Detect returning customers from the durable localStorage flag. Falls
+  // back to false on first paint (SSR-safe in case we ever ship one).
+  const isReturning = useMemo(() => {
+    try { return localStorage.getItem("f48_studio_returning") === "1"; }
+    catch { return false; }
+  }, []);
 
   const submit = async (e) => {
     e.preventDefault();
@@ -26,35 +40,91 @@ export default function Login() {
 
   return (
     <div className="login-wrap" data-testid="login-page">
-      <form className="login-card" onSubmit={submit} data-testid="login-form">
-        <p className="login-eyebrow">Studio Access</p>
-        <h1 className="login-title">Welcome back.</h1>
-        <p className="login-sub">
-          Sign in with the email you used to purchase Faceless to Finished. We use it to verify your Studio entitlement —
-          no password needed.
-        </p>
-        <div className="login-form">
-          <input
-            type="email"
-            autoFocus
-            placeholder="you@email.com"
-            className="login-input"
-            data-testid="login-email-input"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-          />
-          <button
-            type="submit"
-            className="login-cta"
-            data-testid="login-submit-btn"
-            disabled={busy || !email}
-          >
-            {busy ? "Signing in…" : "Enter Studio"}
-          </button>
-          {err && <p className="login-error" data-testid="login-error">{err}</p>}
-        </div>
-      </form>
+      <div className="login-grid">
+        {/* Brief landing hero — keeps non-customers oriented */}
+        <section className="login-hero" data-testid="login-hero">
+          <p className="login-hero-eyebrow">Faceless to Finished</p>
+          <h1 className="login-hero-headline">
+            Hit publish <span className="login-hero-accent">10× faster.</span>
+          </h1>
+          <p className="login-hero-sub">
+            AI-assisted scripts, avatar videos, and faceless renders — purpose-built
+            for Faceless to Finished customers. Sign in with the email you purchased
+            with to access the Studio.
+          </p>
+
+          <ul className="login-hero-features">
+            <li className="login-hero-feature">
+              <span className="login-hero-feature-icon"><Zap size={16} /></span>
+              <div>
+                <div className="login-hero-feature-title">Script Engine</div>
+                <div className="login-hero-feature-sub">Long-form + Shorts with topic-angle AI.</div>
+              </div>
+            </li>
+            <li className="login-hero-feature">
+              <span className="login-hero-feature-icon"><Mic size={16} /></span>
+              <div>
+                <div className="login-hero-feature-title">Avatar Studio</div>
+                <div className="login-hero-feature-sub">1,200+ HeyGen avatars and 2,300+ voices.</div>
+              </div>
+            </li>
+            <li className="login-hero-feature">
+              <span className="login-hero-feature-icon"><Film size={16} /></span>
+              <div>
+                <div className="login-hero-feature-title">Faceless Render</div>
+                <div className="login-hero-feature-sub">Stock B-roll + voiceover, stitched and shipped.</div>
+              </div>
+            </li>
+          </ul>
+
+          <p className="login-hero-cta-note">
+            New to Faceless to Finished?{" "}
+            <a
+              className="login-hero-link"
+              href="https://faceless48.c3global.co"
+              target="_blank"
+              rel="noopener noreferrer"
+              data-testid="login-hero-learn-more"
+            >
+              Learn more <ArrowRight size={12} />
+            </a>
+          </p>
+        </section>
+
+        {/* Sign-in card */}
+        <form className="login-card" onSubmit={submit} data-testid="login-form">
+          <p className="login-eyebrow">Studio Access</p>
+          <h2 className="login-title" data-testid="login-title">
+            {isReturning ? "Welcome back." : "Sign in."}
+          </h2>
+          <p className="login-sub">
+            {isReturning
+              ? "Enter your email to jump back into the Studio."
+              : "Use the email you purchased Faceless to Finished with — no password needed."}
+          </p>
+          <div className="login-form">
+            <input
+              type="email"
+              autoFocus
+              placeholder="you@email.com"
+              className="login-input"
+              data-testid="login-email-input"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+            />
+            <button
+              type="submit"
+              className="login-cta"
+              data-testid="login-submit-btn"
+              disabled={busy || !email}
+            >
+              {busy ? "Signing in…" : "Enter Studio"}
+            </button>
+            {err && <p className="login-error" data-testid="login-error">{err}</p>}
+          </div>
+        </form>
+      </div>
     </div>
   );
 }
