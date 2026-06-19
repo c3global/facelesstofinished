@@ -15,6 +15,50 @@ paying customers + entitlements on the existing Netlify backend at
 `https://faceless48.c3global.co/api/auth-me` — the new Studio should call
 back to it for entitlement verification.
 
+## 2026-02-19 — Phase 3.5n: Pre-deploy bundle (4 quality-of-life wins batched with the critical fixes)
+**Status:** SHIPPED — 39/39 backend pytests PASS (5 new + 34 regression).
+
+User asked to batch low-risk wins into the same redeploy as the auth + Pinball-extractor fixes so the deploy isn't "wasted" on a single change. Picked **a + b + c + e** from the 5-option menu.
+
+### (a) Killed the dead Netlify auth-fallback branch
+Every failed login was making an outbound HTTP request to the dead `NETLIFY_AUTH_URL` (which resolved back to our own deploy with no matching route) — adding ~300ms of latency to every "Could not sign in" response and noise to logs. Removed:
+- The 4th resolution path in `auth_check` (the cross-origin handshake)
+- The `NETLIFY_AUTH_URL` env-var declaration
+- The `request: Request` parameter (no longer needed)
+- Vestigial `cookies` field on `LoginPayload` left as a no-op for backward compatibility with the existing frontend
+
+`auth_check` now has 3 clean resolution paths: DEV_BYPASS_EMAIL → STUDIO_GRANT_EMAILS → db.buyers. Failed sign-ins respond instantly with no network roundtrip.
+
+### (b) HeyGen cache pre-warm at backend startup
+First customer to use the Avatar/Voice picker after every redeploy used to wait 60+ seconds for the cold cache fill (HeyGen's `/v2/avatars` returns 1,281 records slowly). Added:
+- Extracted `_fetch_heygen_avatars` and `_fetch_heygen_voices` to module-level helpers (so they're callable without an authenticated user).
+- `@app.on_event("startup")` hook that schedules a non-blocking `asyncio.create_task(_warm())` after the API is ready.
+- Skips silently if `HEYGEN_API_KEY` isn't set (preview without integration) or if the cache is already fresh (TTL 24h).
+- Failures logged but never crash startup.
+
+Backend log on restart now shows: `[prewarm] heygen_avatars_v2: 1281 items in 0.0s` (cache hit) or `~60s` on a true cold start.
+
+### (c) "Test webhook" button in Admin → Buyers
+New `POST /api/admin/pinball/test-webhook` endpoint that builds a synthetic-but-realistic Pinball payload, runs it through the SAME `_process_pinball_event` helper the live webhook uses, and returns a healthy/failed diagnostic. The admin UI shows the result inline below the toolbar (success: green banner with synthetic test-email + entitlement; failure: red banner with HTTP status + detail). Synthetic buyer is tagged `_synthetic: True` so admin reports can filter; admin can delete it with one click after verifying.
+
+### (e) Welcome toast on first sign-in after Pinball auto-grant
+Pinball-webhook-granted buyers now see a one-shot "Welcome to Faceless to Finished — Base + Shorts access unlocked." toast the first time they sign in. Implementation:
+- `_process_pinball_event` sets `pending_welcome: True` + `pending_welcome_ents: [newly granted ents]` on the buyer doc, **only when this event actually grants a new entitlement** (so re-firing webhooks don't re-toast).
+- `auth_check` reads `pending_welcome` from the buyer doc, includes a `welcome` field in the response, then atomically `$unset`s the flag (one-shot delivery — second sign-in does NOT see it).
+- Login page stashes the welcome payload in `sessionStorage`; the Scripts page reads + clears it on mount and fires the toast with the user's specific entitlements (e.g. "Base + Shorts access unlocked").
+- Admin-added buyers do NOT get the welcome toast (reserved for paying customers' first sign-in).
+
+### Files touched
+- `/app/backend/server.py` — auth_check (removed Netlify branch, added welcome flag handling, updated docstring), `_fetch_heygen_avatars`/`_fetch_heygen_voices` extracted to module level, `@app.on_event("startup")` prewarm task, dropped `NETLIFY_AUTH_URL` constant.
+- `/app/backend/admin_routes.py` — new `POST /admin/pinball/test-webhook` endpoint, `_process_pinball_event` now sets `pending_welcome` + `pending_welcome_ents` when granting new entitlements.
+- `/app/frontend/src/App.js` — `login()` returns full response (user + welcome) so callers can stash the welcome payload.
+- `/app/frontend/src/pages/Login.jsx` — stashes welcome payload to sessionStorage before navigating to /scripts.
+- `/app/frontend/src/pages/Scripts.jsx` — new mount useEffect reads sessionStorage + fires the one-shot toast.
+- `/app/frontend/src/components/admin/BuyersTab.jsx` — new "Test webhook" button + inline result banner + handler function.
+- `/app/frontend/src/App.css` — new `.admin-banner` styles (ok/err variants).
+- `/app/backend/tests/test_admin_webhook_and_welcome.py` — new pytest file (5 cases: admin-test endpoint auth gate + happy path + 400 bad product, welcome present on first signin / absent on second, admin-grant gets no welcome).
+
+
 ## 2026-02-19 — Phase 3.5m: CRITICAL Pinball webhook fix — Emergent rejected real Pinball traffic
 **Status:** SHIPPED — 34/34 backend pytests PASS (8 new + 26 regression).
 

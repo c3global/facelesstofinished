@@ -153,6 +153,26 @@ export default function Scripts() {
   const [savedAngles, setSavedAngles] = useState([]);
   const [showSaved, setShowSaved] = useState(false);
   const [toast, setToast] = useState("");
+
+  // One-shot welcome banner — read & clear the session-stashed payload set
+  // by Login.jsx after a successful sign-in. Fires only when the auth
+  // response carried a `welcome` field (Pinball auto-grant on first sign-in).
+  // sessionStorage scope means it doesn't replay across tabs / page reloads.
+  useEffect(() => {
+    let raw;
+    try { raw = sessionStorage.getItem("f48_pending_welcome"); } catch { raw = null; }
+    if (!raw) return;
+    try { sessionStorage.removeItem("f48_pending_welcome"); } catch {}
+    try {
+      const data = JSON.parse(raw);
+      const ents = Array.isArray(data?.entitlements) ? data.entitlements : [];
+      if (ents.length === 0) return;
+      const label = ents.map((e) => e.charAt(0).toUpperCase() + e.slice(1)).join(" + ");
+      setToast(`Welcome to Faceless to Finished — ${label} access unlocked.`);
+    } catch {
+      /* malformed payload — silent */
+    }
+  }, []);
   const [promotingIndex, setPromotingIndex] = useState(null);
 
   const pollRef = useRef(null);

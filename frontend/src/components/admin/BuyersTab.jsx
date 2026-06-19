@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Search, Plus, Trash2, RefreshCw, X, FileUp, HelpCircle } from "lucide-react";
+import { Search, Plus, Trash2, RefreshCw, X, FileUp, HelpCircle, Zap } from "lucide-react";
 import { apiClient } from "../../App";
 
 const ENTITLEMENTS = ["base", "shorts", "studio"];
@@ -112,6 +112,10 @@ export default function BuyersTab() {
   const [granting, setGranting] = useState(null); // buyer email currently choosing entitlement
   const [importing, setImporting] = useState(false);
   const [csvHelp, setCsvHelp] = useState(false);
+  // Result of the most recent "Test webhook" click — shown inline below the
+  // toolbar so the admin can read the diagnostic without losing context.
+  const [webhookTest, setWebhookTest] = useState(null);
+  const [webhookTesting, setWebhookTesting] = useState(false);
   const csvFileRef = useRef(null);
   const [addModal, setAddModal] = useState(false);
   const [newEmail, setNewEmail] = useState("");
@@ -222,6 +226,34 @@ export default function BuyersTab() {
     } catch (e) {
       setItems(prev);
       showToast(e?.response?.data?.detail || "Bulk delete failed", "err");
+    }
+  };
+
+  // Test the Pinball webhook end-to-end. Calls our own /admin/pinball/test-webhook
+  // endpoint which builds a synthetic payload and processes it through the
+  // SAME _process_pinball_event helper the live Pinball webhook uses. Lets
+  // the admin verify connectivity + grant logic without bothering a real
+  // customer or triggering a paid test order. Result + synthetic test email
+  // is shown inline so the admin can immediately delete the test buyer.
+  const runWebhookTest = async () => {
+    if (webhookTesting) return;
+    setWebhookTesting(true);
+    setWebhookTest(null);
+    try {
+      const r = await apiClient.post("/admin/pinball/test-webhook", {});
+      setWebhookTest({ ok: r.data.ok !== false, ...r.data });
+      if (r.data.ok !== false) {
+        showToast("Webhook test passed — synthetic buyer created");
+        load();  // refresh table so the synthetic buyer shows up
+      } else {
+        showToast(`Webhook test failed: ${r.data.detail || "unknown"}`, "err");
+      }
+    } catch (e) {
+      const detail = e?.response?.data?.detail || e?.message || "Webhook test failed";
+      setWebhookTest({ ok: false, detail });
+      showToast(detail, "err");
+    } finally {
+      setWebhookTesting(false);
     }
   };
 
@@ -355,6 +387,15 @@ export default function BuyersTab() {
         >
           <HelpCircle size={13} />
         </button>
+        <button
+          className="admin-btn"
+          onClick={runWebhookTest}
+          disabled={webhookTesting}
+          data-testid="buyers-test-webhook"
+          title="Send a synthetic Pinball payload to your own webhook endpoint and verify the grant logic. Creates a disposable test buyer you can delete."
+        >
+          <Zap size={13} /> {webhookTesting ? "Testing…" : "Test webhook"}
+        </button>
         {selected.size > 0 && (
           <button
             className="admin-btn is-danger"
@@ -366,6 +407,35 @@ export default function BuyersTab() {
         )}
         <span className="admin-meta" data-testid="buyers-total">{total} total</span>
       </div>
+
+      {webhookTest && (
+        <div
+          className={`admin-banner ${webhookTest.ok ? "is-ok" : "is-err"}`}
+          data-testid="buyers-webhook-test-result"
+        >
+          <div className="admin-banner-body">
+            <strong>{webhookTest.ok ? "✓ Webhook healthy" : "✗ Webhook test failed"}</strong>
+            <div style={{ marginTop: 4, fontSize: 13 }}>
+              {webhookTest.ok
+                ? webhookTest.message
+                : `${webhookTest.detail || "Unknown error"}${webhookTest.status_code ? ` (HTTP ${webhookTest.status_code})` : ""}`}
+            </div>
+            {webhookTest.ok && webhookTest.test_email && (
+              <div style={{ marginTop: 4, fontSize: 12, opacity: 0.75 }}>
+                Synthetic buyer: <code>{webhookTest.test_email}</code> · entitlement: <code>{webhookTest.test_product}</code>
+              </div>
+            )}
+          </div>
+          <button
+            className="admin-banner-close"
+            onClick={() => setWebhookTest(null)}
+            aria-label="Dismiss"
+            data-testid="buyers-webhook-test-dismiss"
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
 
       <div className="admin-table-wrap">
         <table className="admin-table" data-testid="buyers-table">

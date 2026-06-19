@@ -65,7 +65,6 @@ FAL_API_KEY = os.environ.get("FAL_API_KEY", "")
 PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY", "")
 PIXABAY_API_KEY = os.environ.get("PIXABAY_API_KEY", "")
 JWT_SECRET = os.environ.get("JWT_SECRET", "dev-secret-change-me")
-NETLIFY_AUTH_URL = os.environ.get("NETLIFY_AUTH_URL", "")
 DEV_BYPASS_EMAIL = os.environ.get("DEV_BYPASS_EMAIL", "").strip().lower()
 # Manual studio grants — comma-separated list of email addresses that get
 # instant studio access without hitting Netlify. Used to hand-onboard founders
@@ -109,6 +108,44 @@ api = FastAPI()  # mounted at /api below
 
 
 # ---------------------------------------------------------------------------
+# Startup hooks — non-blocking pre-warm tasks.
+# ---------------------------------------------------------------------------
+@app.on_event("startup")
+async def _prewarm_heygen_caches() -> None:
+    """Kick off a background task that warms the HeyGen avatar + voice
+    caches so the first user after a redeploy doesn't wait 60+ seconds
+    for HeyGen's slow /v2/avatars endpoint. Non-blocking: startup returns
+    immediately, the cache fills asynchronously in the background.
+
+    Skips if HEYGEN_API_KEY isn't set (preview without integration) or if
+    the cache is already fresh (TTL 24h). Failures are logged but do not
+    bring down the app — picker endpoints will just refill on demand.
+    """
+    import asyncio  # noqa: PLC0415 — local import keeps startup latency low
+
+    async def _warm() -> None:
+        if not os.environ.get("HEYGEN_API_KEY"):
+            logger.info("[prewarm] HEYGEN_API_KEY not set; skipping cache warm")
+            return
+        for key, fetch in (
+            ("heygen_avatars_v2", _fetch_heygen_avatars),
+            ("heygen_voices_v3", _fetch_heygen_voices),
+        ):
+            try:
+                # _cached already short-circuits when the entry is fresh.
+                started = datetime.now(timezone.utc)
+                data = await _cached(key, 24, fetch)
+                elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+                logger.info(f"[prewarm] {key}: {len(data) if isinstance(data, list) else '?'} items in {elapsed:.1f}s")
+            except Exception as exc:  # noqa: BLE001 — never crash startup
+                logger.warning(f"[prewarm] {key} failed: {type(exc).__name__}: {exc}")
+
+    # Detach so startup returns immediately. The container is "ready" the
+    # moment the API can serve /health; the cache fills in the background.
+    asyncio.create_task(_warm())
+
+
+# ---------------------------------------------------------------------------
 # Models
 # ---------------------------------------------------------------------------
 class AuthUser(BaseModel):
@@ -123,7 +160,11 @@ class AuthUser(BaseModel):
 
 class LoginPayload(BaseModel):
     email: str
-    cookies: Optional[str] = None  # forwarded raw cookie header from frontend
+    # Vestigial — was used for the Netlify cross-origin handshake which is
+    # now retired. Frontend still sends `cookies: ""` so we accept the
+    # field as a no-op for backward compatibility. Safe to drop in a
+    # future frontend cleanup pass.
+    cookies: Optional[str] = None
 
 
 class RenderRequest(BaseModel):
@@ -207,25 +248,20 @@ async def health():
 
 
 @api.post("/auth/check")
-async def auth_check(payload: LoginPayload, request: Request):
+async def auth_check(payload: LoginPayload):
     """Verify a user has Studio access.
 
     Resolution order (first match wins):
       1. `DEV_BYPASS_EMAIL` — preview/local-only single-email bypass so devs
-         can hit the Studio UI without touching Netlify. Set ONLY in the
-         preview .env; never in production env vars.
+         can hit the Studio UI without touching production data. Set ONLY in
+         the preview .env; never in production env vars.
       2. `STUDIO_GRANT_EMAILS` — comma-separated list of hand-onboarded
-         founders that get instant access. Manual override for the window
-         before the Pinball → GHL → Netlify webhook chain is fully live.
-         Also acts as a permanent admin backstop if Netlify is down.
+         founders that get instant access. Permanent admin backstop.
       3. `db.buyers` lookup — admin-added buyers (Admin → Buyers UI) and
-         Pinball-webhook buyers (auto-populated on paid orders). This is
-         the live source of truth for paying customers since the
-         Netlify→Emergent migration.
-      4. Cross-origin handshake — forward the user's cookies (which the
-         Netlify reverse-proxy at faceless48.c3global.co/studio preserves
-         automatically) server-side to `NETLIFY_AUTH_URL`. Legacy fallback
-         for the brief window where Netlify is still the source of truth.
+         Pinball-webhook buyers (auto-populated on paid orders). LIVE
+         source of truth for paying customers since the Netlify→Emergent
+         migration. Returns a one-time `welcome` field on first sign-in
+         after a Pinball auto-grant so the UI can celebrate.
     """
     email = payload.email.strip().lower()
     if not email:
@@ -253,8 +289,6 @@ async def auth_check(payload: LoginPayload, request: Request):
     #    buyers. This is the SOURCE OF TRUTH for paying customers since the
     #    Netlify→Emergent migration. The admin Buyers UI writes here, and the
     #    Pinball webhook auto-populates this collection on every paid order.
-    #    Before this branch was added, customers granted access via the admin
-    #    panel could not sign in because auth_check never queried db.buyers.
     buyer = await db.buyers.find_one({"email": email})
     if buyer:
         ents = list(buyer.get("entitlements") or [])
@@ -266,63 +300,35 @@ async def auth_check(payload: LoginPayload, request: Request):
         if is_admin and not ents:
             ents = list(KNOWN_ENTITLEMENTS)
         if ents:
+            # First-sign-in welcome flag — set by the Pinball webhook when it
+            # auto-provisions a buyer. We read it ONCE on first sign-in and
+            # clear it atomically so the frontend can show a "Welcome — access
+            # granted" toast exactly once per Pinball grant.
+            welcome = None
+            if buyer.get("pending_welcome"):
+                welcome = {
+                    "entitlements": list(buyer.get("pending_welcome_ents") or ents),
+                    "source": "pinball",
+                }
+                await db.buyers.update_one(
+                    {"email": email},
+                    {"$unset": {"pending_welcome": "", "pending_welcome_ents": ""}},
+                )
             token = issue_jwt(email, ents, is_admin=is_admin)
-            return {
+            response = {
                 "token": token,
                 "user": {"email": email, "entitlements": ents, "isAdmin": is_admin},
             }
-        # Buyer record exists but no entitlements granted — fall through to
-        # the Netlify branch (which will 401 cleanly). Don't 403 here so
-        # the user gets the same "use the email you bought with" message
-        # and isn't tempted to assume the system is broken.
+            if welcome:
+                response["welcome"] = welcome
+            return response
 
-    # 4) Cross-origin auth-me handshake.
-    if not NETLIFY_AUTH_URL:
-        # No Netlify wired AND no manual grant — there's nothing left to try.
-        raise HTTPException(status_code=401, detail="Could not sign in. Use the email you bought with.")
-
-    # Cookies travel with the request as a standard `Cookie` header through
-    # the Netlify reverse-proxy. We forward that header verbatim to Netlify's
-    # auth-me endpoint. (Legacy: still honor `payload.cookies` body field for
-    # any callers that explicitly pass it — useful for server-to-server flows
-    # and the iter 22 e2e test harness.)
-    raw_cookies = request.headers.get("cookie") or payload.cookies or ""
-    if not raw_cookies:
-        raise HTTPException(status_code=401, detail="Could not sign in. Use the email you bought with.")
-
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.get(
-                NETLIFY_AUTH_URL,
-                headers={"Cookie": raw_cookies, "Accept": "application/json"},
-            )
-    except httpx.HTTPError as exc:
-        logger.warning(f"[auth] Netlify auth-me unreachable: {type(exc).__name__}: {exc}")
-        raise HTTPException(status_code=502, detail="Auth service unavailable. Please retry.")
-
-    if r.status_code != 200:
-        raise HTTPException(status_code=401, detail="Could not sign in. Use the email you bought with.")
-
-    data = r.json()
-    if not data.get("authenticated"):
-        raise HTTPException(status_code=401, detail="Could not sign in. Use the email you bought with.")
-
-    netlify_email = (data.get("email") or "").strip().lower()
-    ents = data.get("entitlements") or []
-    is_admin = bool(data.get("isAdmin")) or netlify_email in ADMIN_EMAILS
-
-    # Studio gate — Netlify is the source of truth for who's allowed in.
-    # Admins bypass the entitlement check so an owner with no purchase record
-    # (e.g. Charity herself) can still use the app.
-    if not is_admin and "studio" not in ents:
-        raise HTTPException(status_code=403, detail="Studio access required. Upgrade your account.")
-
-    final_email = netlify_email or email
-    token = issue_jwt(final_email, ents, is_admin=is_admin)
-    return {
-        "token": token,
-        "user": {"email": final_email, "entitlements": ents, "isAdmin": is_admin},
-    }
+    # 4) No remaining resolution path. The cross-origin Netlify auth-me
+    #    handshake was retired with the Netlify site itself — db.buyers is
+    #    now the single source of truth. Anyone who can't sign in here
+    #    either hasn't been admin-granted or hasn't completed a Pinball
+    #    purchase (or used a different email at checkout).
+    raise HTTPException(status_code=401, detail="Could not sign in. Use the email you bought with.")
 
 
 @api.get("/auth/me")
@@ -372,83 +378,80 @@ async def _cached(key: str, ttl_hours: int, fetch):
     return data
 
 
+async def _fetch_heygen_avatars() -> list[dict]:
+    """Fetch + normalize HeyGen avatars. Module-level so the startup
+    pre-warm task can call this without an authenticated request."""
+    raw = await _heygen_get("/avatars")
+    avatars = (raw.get("data") or {}).get("avatars") or []
+    out = []
+    for a in avatars:
+        name = (a.get("avatar_name") or "").lower()
+        # Heuristic aspect tagging based on the pose hint in the name.
+        # HeyGen v2 `aspect_ratio: "9:16"` only sets the output canvas —
+        # it does NOT crop or zoom a 16:9 source. So sitting / side /
+        # full-body poses get rendered into a portrait canvas with
+        # huge top/bottom padding. The picker MUST filter these out.
+        # Landscape keywords VETO portrait keywords (a "sofa front" is
+        # still a sitting shot, regardless of the "front" word).
+        landscape_only = any(t in name for t in (
+            " side", "sofa", "biztalk", "wide", "couch", "background",
+            "office", "sitting", "desk", "studio",
+        ))
+        portrait_ok = any(t in name for t in (
+            "upper body", "headshot", "close", "selfie", "portrait",
+        ))
+        if landscape_only:
+            aspect = "landscape"
+        elif portrait_ok:
+            aspect = "portrait"
+        else:
+            aspect = "both"
+        out.append({
+            "id": a.get("avatar_id"),
+            "name": a.get("avatar_name") or a.get("avatar_id"),
+            "preview_image_url": a.get("preview_image_url"),
+            "preview_video_url": a.get("preview_video_url"),
+            "gender": (a.get("gender") or "").lower() or "other",
+            "premium": bool(a.get("premium")),
+            "aspect": aspect,
+        })
+    return out
+
+
+async def _fetch_heygen_voices() -> list[dict]:
+    """Fetch + normalize HeyGen voices. Module-level for the startup
+    pre-warm task. Filters out custom voice clones (preview_audio=null
+    + support_locale=false) so users only see the global library."""
+    raw = await _heygen_get("/voices")
+    voices = (raw.get("data") or {}).get("voices") or []
+    out = []
+    for v in voices:
+        if not v.get("preview_audio") and not v.get("support_locale"):
+            continue
+        g = (v.get("gender") or "").lower()
+        if g not in ("female", "male"):
+            g = "other"
+        out.append({
+            "id": v.get("voice_id"),
+            "name": v.get("name") or v.get("voice_id"),
+            "gender": g,
+            "language": v.get("language") or "",
+            "preview_audio": v.get("preview_audio"),
+        })
+    return out
+
+
 @api.get("/studio/avatars")
 async def studio_avatars(user: AuthUser = Depends(current_user)):
     require_studio(user)
-
-    async def fetch():
-        raw = await _heygen_get("/avatars")
-        avatars = (raw.get("data") or {}).get("avatars") or []
-        out = []
-        for a in avatars:
-            name = (a.get("avatar_name") or "").lower()
-            # Heuristic aspect tagging based on the pose hint in the name.
-            # HeyGen v2 `aspect_ratio: "9:16"` only sets the output canvas —
-            # it does NOT crop or zoom a 16:9 source. So sitting / side /
-            # full-body poses get rendered into a portrait canvas with
-            # huge top/bottom padding. The picker MUST filter these out.
-            # Landscape keywords VETO portrait keywords (a "sofa front" is
-            # still a sitting shot, regardless of the "front" word).
-            landscape_only = any(t in name for t in (
-                " side", "sofa", "biztalk", "wide", "couch", "background",
-                "office", "sitting", "desk", "studio",
-            ))
-            portrait_ok = any(t in name for t in (
-                "upper body", "headshot", "close", "selfie", "portrait",
-            ))
-            if landscape_only:
-                aspect = "landscape"
-            elif portrait_ok:
-                aspect = "portrait"
-            else:
-                aspect = "both"
-            out.append({
-                "id": a.get("avatar_id"),
-                "name": a.get("avatar_name") or a.get("avatar_id"),
-                "preview_image_url": a.get("preview_image_url"),
-                "preview_video_url": a.get("preview_video_url"),
-                "gender": (a.get("gender") or "").lower() or "other",
-                "premium": bool(a.get("premium")),
-                "aspect": aspect,  # "portrait" | "landscape" | "both" — used by the picker filter
-            })
-        return out
-
-    avatars = await _cached("heygen_avatars_v2", 24, fetch)
+    avatars = await _cached("heygen_avatars_v2", 24, _fetch_heygen_avatars)
     return {"avatars": avatars}
 
 
 @api.get("/studio/voices")
 async def studio_voices(user: AuthUser = Depends(current_user)):
     require_studio(user)
-
-    async def fetch():
-        raw = await _heygen_get("/voices")
-        voices = (raw.get("data") or {}).get("voices") or []
-        out = []
-        for v in voices:
-            # Filter out custom/cloned voice uploads. Stock HeyGen voices
-            # always come with a preview_audio URL; custom voice clones
-            # uploaded by the account holder have preview_audio: null AND
-            # support_locale: false. We hide these so Studio users only see
-            # the global HeyGen voice library.
-            if not v.get("preview_audio") and not v.get("support_locale"):
-                continue
-            # HeyGen sometimes returns "unknown" or missing gender for ~3% of
-            # voices. Normalize anything outside the canonical pair to "other"
-            # so the picker's gender tab logic has a single bucket to surface.
-            g = (v.get("gender") or "").lower()
-            if g not in ("female", "male"):
-                g = "other"
-            out.append({
-                "id": v.get("voice_id"),
-                "name": v.get("name") or v.get("voice_id"),
-                "gender": g,
-                "language": v.get("language") or "",
-                "preview_audio": v.get("preview_audio"),
-            })
-        return out
-
-    voices = await _cached("heygen_voices_v3", 24, fetch)
+    voices = await _cached("heygen_voices_v3", 24, _fetch_heygen_voices)
     return {"voices": voices}
 
 

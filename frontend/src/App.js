@@ -84,7 +84,10 @@ function AuthProvider({ children }) {
     // back." for returning customers. Wiped only if the user clears site data.
     try { localStorage.setItem("f48_studio_returning", "1"); } catch {}
     setUser(r.data.user);
-    return r.data.user;
+    // Return the full response so callers can read the optional `welcome`
+    // field (set on first sign-in after a Pinball auto-grant). The Login
+    // page reads this to fire a one-shot "Welcome — access granted" toast.
+    return { user: r.data.user, welcome: r.data.welcome || null };
   }, []);
 
   const logout = useCallback(() => {

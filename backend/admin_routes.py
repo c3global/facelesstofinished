@@ -437,6 +437,76 @@ def register_admin_routes(
         )
         return {"ok": True, "result": result}
 
+    @api.post("/admin/pinball/test-webhook")
+    async def admin_pinball_test_webhook(
+        payload: dict = Body(default_factory=dict),
+        admin=Depends(require_admin),
+    ):
+        """Synthetic Pinball webhook ping — used by the Admin → Buyers UI's
+        "Test webhook" button to verify the live webhook is wired correctly
+        without bothering a real customer or running a paid test order.
+
+        Builds a realistic payload (defaults to the base 'Faceless to Finished'
+        product) and processes it through the SAME _process_pinball_event
+        helper the live webhook uses. Marks the resulting buyer with
+        `_synthetic: True` so admin reports can filter them out, and uses
+        an email of the form `webhook-test+<timestamp>@faceless48.test`
+        which never collides with a real customer.
+
+        Optional body overrides:
+          - `product_id`: defaults to the base product id (mapped to 'base')
+          - `email`: defaults to a synthetic timestamped email
+        """
+        import time  # noqa: PLC0415
+
+        product_id = (payload.get("product_id") or "01ks3pmetahzgx2mfg7q5crs0j").strip()
+        entitlement = PINBALL_PRODUCT_MAP.get(product_id)
+        if not entitlement:
+            raise HTTPException(
+                status_code=400,
+                detail=f"product_id {product_id!r} is not in PINBALL_PRODUCT_MAP",
+            )
+
+        ts = int(time.time())
+        email = (payload.get("email") or f"webhook-test+{ts}@faceless48.test").strip().lower()
+        line_item_id = f"test-line-{ts}"
+
+        try:
+            result = await _process_pinball_event(
+                product=entitlement,
+                body={
+                    "email": email,
+                    "total_amount": "700",
+                    "order_id": line_item_id,
+                },
+                source="admin-test",
+            )
+            # Tag the synthetic buyer so reports can filter it out.
+            await db.buyers.update_one(
+                {"email": email},
+                {"$set": {"_synthetic": True, "_test_run_by": admin.email}},
+            )
+            return {
+                "ok": True,
+                "result": result,
+                "test_email": email,
+                "test_product": entitlement,
+                "test_product_id": product_id,
+                "message": (
+                    f"Webhook is healthy. Synthetic buyer {email} created with "
+                    f"entitlement '{entitlement}'. Click 'Delete' on that row "
+                    "to clean up the test data."
+                ),
+            }
+        except HTTPException as exc:
+            return {
+                "ok": False,
+                "status_code": exc.status_code,
+                "detail": exc.detail,
+                "test_email": email,
+                "test_product_id": product_id,
+            }
+
     @api.delete("/admin/activity/{activity_id}")
     async def admin_delete_activity(activity_id: str, admin=Depends(require_admin)):
         r = await db.activity.delete_one({"id": activity_id})
@@ -550,6 +620,10 @@ def register_admin_routes(
 
         # Build the entitlement merge.
         new_ents = sorted(set((existing.get("entitlements") if existing else []) or []) | {product})
+        # Track which entitlements are newly granted by THIS event (used to
+        # show a one-shot welcome toast on the customer's next sign-in).
+        prev_ents = set((existing.get("entitlements") if existing else []) or [])
+        newly_granted = sorted({product} - prev_ents)
 
         set_doc: dict[str, Any] = {
             "email": email,
@@ -568,6 +642,13 @@ def register_admin_routes(
             set_doc["studio_status"] = "active"
             set_doc["studio_lifetime"] = True
             set_doc["studio_current_period_end"] = STUDIO_LIFETIME_PERIOD_END
+
+        # Pending welcome toast — flagged only when this webhook ADDS at least
+        # one new entitlement. auth_check reads & clears this on first sign-in
+        # so the customer sees a single "Welcome — access granted" celebration.
+        if newly_granted:
+            set_doc["pending_welcome"] = True
+            set_doc["pending_welcome_ents"] = newly_granted
 
         update: dict[str, Any] = {"$set": set_doc}
         if push_doc:

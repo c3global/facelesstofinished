@@ -3361,6 +3361,51 @@
   color: var(--text-soft);
 }
 
+/* Inline result banner — used by the Test-webhook button result and other
+   one-shot admin diagnostics. Sits between the toolbar and the table. */
+.admin-banner {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 14px 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: var(--bg-panel);
+  color: var(--text);
+}
+.admin-banner.is-ok {
+  border-color: rgba(46, 196, 132, 0.4);
+  background: rgba(46, 196, 132, 0.08);
+}
+.admin-banner.is-err {
+  border-color: rgba(229, 88, 88, 0.45);
+  background: rgba(229, 88, 88, 0.08);
+}
+.admin-banner-body {
+  flex: 1;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.admin-banner-body code {
+  background: rgba(255, 255, 255, 0.08);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 11px;
+}
+.admin-banner-close {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--text-soft);
+  padding: 4px;
+  border-radius: 6px;
+  display: inline-flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.admin-banner-close:hover { background: rgba(255, 255, 255, 0.08); color: var(--text); }
+
 .admin-table-wrap {
   background: var(--bg-panel);
   border: 1px solid var(--border-soft);

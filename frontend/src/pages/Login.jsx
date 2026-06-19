@@ -28,7 +28,16 @@ export default function Login() {
     setErr("");
     setBusy(true);
     try {
-      await login(email.trim());
+      const { welcome } = await login(email.trim());
+      // Stash the optional welcome payload (set on first sign-in after a
+      // Pinball auto-grant) so the Scripts page can fire a one-shot toast
+      // once it mounts. sessionStorage > localStorage here so the toast
+      // doesn't keep firing across browser sessions.
+      if (welcome) {
+        try {
+          sessionStorage.setItem("f48_pending_welcome", JSON.stringify(welcome));
+        } catch {}
+      }
       // Default landing on the Script Engine — Studio access is gated and
       // many customers only purchased Faceless to Finished (no Studio).
       nav("/scripts");
