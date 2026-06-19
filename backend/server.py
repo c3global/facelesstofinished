@@ -393,16 +393,22 @@ async def studio_voices(user: AuthUser = Depends(current_user)):
         voices = (raw.get("data") or {}).get("voices") or []
         out = []
         for v in voices:
+            # HeyGen sometimes returns "unknown" or missing gender for ~3% of
+            # voices. Normalize anything outside the canonical pair to "other"
+            # so the picker's gender tab logic has a single bucket to surface.
+            g = (v.get("gender") or "").lower()
+            if g not in ("female", "male"):
+                g = "other"
             out.append({
                 "id": v.get("voice_id"),
                 "name": v.get("name") or v.get("voice_id"),
-                "gender": (v.get("gender") or "").lower() or "other",
+                "gender": g,
                 "language": v.get("language") or "",
                 "preview_audio": v.get("preview_audio"),
             })
         return out
 
-    voices = await _cached("heygen_voices_v1", 24, fetch)
+    voices = await _cached("heygen_voices_v2", 24, fetch)
     return {"voices": voices}
 
 

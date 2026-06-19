@@ -15,6 +15,24 @@ paying customers + entitlements on the existing Netlify backend at
 `https://faceless48.c3global.co/api/auth-me` — the new Studio should call
 back to it for entitlement verification.
 
+## 2026-02-19 — Phase 3.5f: HeyGen voices — 76 missing voices recovered
+**Status:** SHIPPED.
+
+**Root cause**: HeyGen returns `gender: "unknown"` for ~3% of voices (76 of 2337 total — kid voices, special characters, custom uploads, non-English voices, etc). The backend was passing `"unknown"` straight through, but the frontend voice picker only had Female / Male / All tabs. The "unknown" voices were only reachable on the All tab; clicking Female or Male hid them permanently.
+
+**Fixes**:
+1. Backend (`/api/studio/voices`) normalizes anything outside `female`/`male` to `"other"` so the frontend has a single canonical bucket
+2. Cache key bumped `heygen_voices_v1` → `heygen_voices_v2` so the new normalization takes effect immediately (forced re-fetch)
+3. Frontend voice picker (`Pickers.jsx`) gains a 4th tab **"Neutral"** that surfaces the recovered 76 voices
+
+Verified via Playwright: All tab shows 2337, Female 1076, Male 1185, Neutral 76. Charity's custom voice uploads (Dr. CK Casual, Course Voiceover, Theranista, Jennifer Anderson, etc.) all visible under All.
+
+Files touched:
+- `/app/backend/server.py` — voice gender normalization + cache key bump
+- `/app/frontend/src/components/Pickers.jsx` — added "Neutral" tab + updated filter logic
+
+
+
 ## 2026-02-19 — Phase 3.5e: Shorts result layout → Bento grid
 **Status:** SHIPPED — verified via screenshot.
 

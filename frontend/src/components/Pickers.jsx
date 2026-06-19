@@ -191,7 +191,13 @@ export function VoicePicker({ open, onClose, value, onPick, source = "heygen" })
 
   const filtered = useMemo(() => {
     let list = voices;
-    if (tab !== "all") list = list.filter((v) => v.gender === tab);
+    if (tab === "female" || tab === "male") {
+      list = list.filter((v) => v.gender === tab);
+    } else if (tab === "other") {
+      // Show anything that isn't a clean female/male — HeyGen returns these
+      // as 'unknown' on ~3% of voices (kid voices, special characters, etc).
+      list = list.filter((v) => v.gender !== "female" && v.gender !== "male");
+    }
     if (langFilter !== "all") list = list.filter((v) => v.language === langFilter);
     if (search) {
       const q = search.toLowerCase();
@@ -204,6 +210,7 @@ export function VoicePicker({ open, onClose, value, onPick, source = "heygen" })
     { id: "all", label: "All" },
     { id: "female", label: "Female" },
     { id: "male", label: "Male" },
+    { id: "other", label: "Neutral" },
   ];
 
   return (
