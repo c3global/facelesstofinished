@@ -283,21 +283,41 @@
 }
 .login-hero {
   display: flex; flex-direction: column;
-  /* Mobile: hero comes first and stays compact. Desktop: pinned center. */
+  align-items: center;
+  text-align: center;
+}
+.login-hero-image-wrap {
+  /* Wrapper exists solely to host the soft neon glow that sits BEHIND
+     the device-mockup PNG. The image itself has a transparent background,
+     so the glow is a layered radial gradient on this wrapper. */
+  position: relative;
+  width: 100%;
+  max-width: 520px;
+  margin: 0 0 28px;
+  display: flex; justify-content: center;
+}
+.login-hero-image-wrap::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(60% 55% at 50% 52%, rgba(124, 92, 240, 0.42) 0%, rgba(124, 92, 240, 0.18) 36%, transparent 70%),
+    radial-gradient(40% 35% at 50% 60%, rgba(255, 162, 64, 0.22) 0%, transparent 70%);
+  filter: blur(28px);
+  pointer-events: none;
+  z-index: 0;
 }
 .login-hero-image {
+  position: relative;
+  z-index: 1;
   width: 100%;
-  max-width: 480px;
+  max-width: 520px;
   height: auto;
-  margin: 0 0 24px;
-  /* Soft drop shadow so the device mockup floats on the dark background
-     without a hard rectangular edge. Filter > box-shadow because the PNG
-     has transparency around the devices. */
-  filter: drop-shadow(0 24px 40px rgba(124, 92, 240, 0.18))
-          drop-shadow(0 6px 12px rgba(0, 0, 0, 0.35));
+  filter: drop-shadow(0 18px 32px rgba(0, 0, 0, 0.4));
 }
 @media (max-width: 880px) {
-  .login-hero-image { max-width: 360px; align-self: center; }
+  .login-hero-image-wrap { max-width: 360px; }
+  .login-hero-image { max-width: 360px; }
 }
 .login-hero-eyebrow {
   font-weight: 600; font-size: 11px;
@@ -314,7 +334,17 @@
   color: var(--text);
 }
 .login-hero-accent {
-  background: linear-gradient(180deg, #FFFFFF 0%, #F5E8DA 55%, #D8B79A 100%);
+  /* Dark-mode default: cream → amber. The light-mode override below
+     swaps in deeper amber→orange so the text actually contrasts on
+     the near-white background. */
+  background: linear-gradient(180deg, #F7E2C7 0%, #E0A458 60%, #C9956C 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+[data-theme="light"] .login-hero-accent {
+  background: linear-gradient(180deg, #C9711F 0%, #B0561B 60%, #8E3F12 100%);
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
@@ -324,20 +354,25 @@
   color: var(--muted);
   font-size: 15px;
   line-height: 1.6;
-  margin: 0 0 28px;
+  margin: 0 auto 28px;
   max-width: 460px;
 }
 .login-hero-features {
   list-style: none;
   padding: 0;
-  margin: 0 0 28px;
+  margin: 0 auto 28px;
   display: flex; flex-direction: column;
   gap: 14px;
+  align-items: stretch;
+  width: 100%;
+  max-width: 360px;
 }
 .login-hero-feature {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
+  justify-content: flex-start;
   gap: 14px;
+  text-align: left;
 }
 .login-hero-feature-icon {
   flex-shrink: 0;
@@ -372,11 +407,17 @@
 }
 .login-hero-link:hover { opacity: 0.8; }
 
-/* Tighten the login-card's vertical spacing when paired with hero */
-.login-grid .login-card { width: 100%; max-width: 440px; justify-self: center; }
+/* Tighten the login-card's vertical spacing when paired with hero +
+   center its inner text so it reads cleanly alongside the centered hero. */
+.login-grid .login-card {
+  width: 100%; max-width: 440px;
+  justify-self: center;
+  text-align: center;
+}
+.login-grid .login-card .login-form { align-items: stretch; }
 @media (min-width: 881px) {
-  .login-grid .login-card { justify-self: end; }
-  .login-grid .login-hero { justify-self: start; }
+  .login-grid .login-card { justify-self: center; }
+  .login-grid .login-hero { justify-self: center; }
 }
 
 /* ---------- Studio main ---------- */

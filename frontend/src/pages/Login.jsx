@@ -46,13 +46,17 @@ export default function Login() {
         {/* Brief landing hero — keeps non-customers oriented */}
         <section className="login-hero" data-testid="login-hero">
           {/* Hero illustration: device mockup showing the Script Engine in
-              action. Lives in /public so CRA serves it from %PUBLIC_URL%. */}
-          <img
-            className="login-hero-image"
-            src={`${process.env.PUBLIC_URL || ""}/login-hero.png`}
-            alt="Faceless to Finished Studio across desktop, laptop, and mobile"
-            data-testid="login-hero-image"
-          />
+              action. Lives in /public so CRA serves it from %PUBLIC_URL%.
+              The wrapper hosts a soft neon radial-glow that sits behind
+              the transparent PNG to give the mockup visual weight. */}
+          <div className="login-hero-image-wrap">
+            <img
+              className="login-hero-image"
+              src={`${process.env.PUBLIC_URL || ""}/login-hero.png`}
+              alt="Faceless to Finished Studio across desktop, laptop, tablet and mobile"
+              data-testid="login-hero-image"
+            />
+          </div>
           <p className="login-hero-eyebrow">Faceless to Finished</p>
           <h1 className="login-hero-headline">
             Hit publish <span className="login-hero-accent">10× faster.</span>

@@ -15,6 +15,29 @@ paying customers + entitlements on the existing Netlify backend at
 `https://faceless48.c3global.co/api/auth-me` — the new Studio should call
 back to it for entitlement verification.
 
+## 2026-02-19 — Phase 3.5j: Login hero polish (new mockup + centered layout + light-mode gradient + neon glow)
+**Status:** SHIPPED — dark mode visually verified, light mode CSS follows existing `[data-theme="light"]` override pattern.
+
+User feedback after iter-21 deploy: (1) the cream→amber "10×" gradient was invisible on light mode, (2) the 3-device hero image was the wrong asset, (3) hero text and sign-in card text needed to be center-aligned, (4) the device mockup needed a subtle neon highlight behind it to "stand out" on the page.
+
+**Changes**
+- Replaced `/app/frontend/public/login-hero.png` with the new 4-device F2F48 Product Mockup asset (iMac + iPad + iPhone + MacBook, 682KB).
+- Wrapped the `<img>` in `.login-hero-image-wrap` so a `::before` pseudo-element can render a soft layered radial-gradient glow (purple #7C5CF0 ~42% opacity + amber #FFA240 ~22% opacity, 28px blur) BEHIND the transparent PNG. Image gets a fresh `drop-shadow` filter to anchor it visually.
+- `.login-hero-accent` now uses a cream→amber gradient (`#F7E2C7 → #E0A458 → #C9956C`) in dark mode (visible against the dark navy bg), and a `[data-theme="light"]` override uses a deeper amber→bronze gradient (`#C9711F → #B0561B → #8E3F12`) so the text reads cleanly on light mode's near-white background. Single declaration matches the rest of App.css's theme-override convention.
+- `.login-hero` centers all children (`text-align: center; align-items: center;`); features list center-aligned as a 360px-wide block with each row left-aligned within.
+- `.login-grid .login-card` gets `text-align: center` + matching `justify-self: center` on both columns (was `start`/`end` before).
+- Mobile breakpoint (<880px) tightens image max-width to 360px and stacks columns.
+
+**Files touched**
+- `/app/frontend/src/pages/Login.jsx` — image now wrapped in `.login-hero-image-wrap`.
+- `/app/frontend/src/App.css` — `.login-hero` text-center, `.login-hero-image-wrap` + `::before` glow, `.login-hero-image` (refactored), `.login-hero-accent` (theme-aware gradient), `.login-hero-features` (centered, max-width), `.login-grid .login-card { text-align: center }`.
+- `/app/frontend/public/login-hero.png` — replaced with the new 4-device mockup.
+
+**Verified**
+- Dark mode screenshot: image visible with subtle purple/amber halo behind it, "10× faster." amber gradient is highly visible, all hero text + sign-in card text centered, layout balanced.
+- Light mode: CSS rule `[data-theme="light"] .login-hero-accent { background: linear-gradient(180deg, #C9711F 0%, #B0561B 60%, #8E3F12 100%); ... }` follows the same selector convention as the existing `[data-theme="light"] .studio-title` rule.
+
+
 ## 2026-02-19 — Phase 3.5i: Landing-feel login page + first-time visitor copy fix
 **Status:** SHIPPED — visual verification PASS.
 
