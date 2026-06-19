@@ -15,6 +15,38 @@ paying customers + entitlements on the existing Netlify backend at
 `https://faceless48.c3global.co/api/auth-me` — the new Studio should call
 back to it for entitlement verification.
 
+## 2026-02-19 — Phase 3.5g: Voice Favorites UI + B-roll inline-style clipboard fix
+**Status:** SHIPPED — 10/10 backend pytests + Playwright frontend verification PASS.
+
+Two finishing-touch items wrapped this session before the live customer rollout:
+
+**1. Voice Favorites UI** — backend endpoints (`GET/POST/DELETE /api/studio/voices/favorites`) were already live from the previous session but the frontend was never wired. Now:
+- New `Star` icon button at the leading edge of every voice row in the HeyGen voice picker (outlined → filled gold `#E0A458` when favorited).
+- New ★ tab in the modal-tabs row (HeyGen only — Kokoro TTS strips it since its catalog is only 10 voices).
+- Favorites are pinned to the TOP of the All/Female/Male/Neutral tabs (stable sort, keeps original API order otherwise).
+- Optimistic UI with revert-on-failure: clicking a star instantly flips the icon, fires `POST/DELETE`, reverts if the network call fails.
+- Per-session debounce via `favTogglingId` ref prevents rapid double-clicks from racing.
+- Persistence verified: reload the page, reopen the picker — the favorited voice is still pinned.
+
+**2. B-roll rich-text clipboard fix (P0)** — the long-standing complaint that copy-pasting a script into Google Docs / Notion / Word stripped the green B-roll cues and amber scene headers. Root cause: the clipboard's `text/html` payload was rendered with the same class-based `ReactMarkdown` components used on-screen, but external editors strip CSS classes and don't have access to our App.css. Fix: a separate `mdComponentsInline` component map that inlines `style={{color:'#1D9E75', fontFamily:'ui-monospace,...', fontWeight:600}}` on every `<span class='broll-cue'>` and `style={{color:'#C9956C', fontWeight:700, textTransform:'uppercase', ...}}` on every scene-header `<p>`. Used exclusively by `markdownToHtml()` which feeds the `ClipboardItem` text/html slot. On-screen rendering inside `SectionCard.body` continues to use the class-only `mdComponents` so App.css remains the on-screen source of truth.
+
+**Files touched in iter 3.5g**
+- `/app/frontend/src/components/Pickers.jsx` — VoicePicker: `favorites` Set state, `favoritesLoadedRef`, fetch on first open, `toggleFavorite` with optimistic UI, ★ tab conditional on `source==='heygen'`, star button per row, pin-to-top sort.
+- `/app/frontend/src/components/scripts/SectionCard.jsx` — new `mdComponentsInline` variant; `wrapBrollInChildren(children, inlineStyle)` second arg; `markdownToHtml` now uses inline variant.
+- `/app/frontend/src/App.css` — `.voice-fav`, `.voice-fav.is-on`, `.voice-row.is-favorite` styles (gold amber tints around #E0A458).
+- `/app/backend/tests/test_voice_favorites.py` (new — 10 pytests covering auth gating, CRUD, idempotency, 400 on empty voice_id, voice-list regression).
+
+**Verified (iter_19 report)**
+- 10/10 backend pytests PASS against live preview URL.
+- Playwright: voice picker loads 2329 voices, ★ tab visible only in HeyGen source, favorite persists across page reload, ★ tab filters correctly, unfavoriting empties the tab. No console errors.
+- B-roll inline-style code path verified via inspection — the clipboard HTML payload emits `style="color:#1D9E75"` directly on `<span class="broll-cue">`, which Google Docs/Notion will honor.
+
+**Backlog flagged by testing agent (deferred, non-blocking)**
+- `VoicePicker` should be split into `HeygenVoicePicker` + `KokoroVoicePicker` (the conditional source logic is creeping).
+- B-roll/scene-header hex colors duplicated between SectionCard.jsx + App.css — hoist to a shared `colors.js`.
+- Favorites stored on `db.buyers.favorite_voices` — admin Buyers list will surface non-buyer admins. Consider dedicated `db.user_prefs` later.
+
+
 ## 2026-02-19 — Phase 3.5f: HeyGen voices — 76 missing voices recovered
 **Status:** SHIPPED.
 
