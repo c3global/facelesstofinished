@@ -393,6 +393,13 @@ async def studio_voices(user: AuthUser = Depends(current_user)):
         voices = (raw.get("data") or {}).get("voices") or []
         out = []
         for v in voices:
+            # Filter out custom/cloned voice uploads. Stock HeyGen voices
+            # always come with a preview_audio URL; custom voice clones
+            # uploaded by the account holder have preview_audio: null AND
+            # support_locale: false. We hide these so Studio users only see
+            # the global HeyGen voice library.
+            if not v.get("preview_audio") and not v.get("support_locale"):
+                continue
             # HeyGen sometimes returns "unknown" or missing gender for ~3% of
             # voices. Normalize anything outside the canonical pair to "other"
             # so the picker's gender tab logic has a single bucket to surface.
@@ -408,8 +415,65 @@ async def studio_voices(user: AuthUser = Depends(current_user)):
             })
         return out
 
-    voices = await _cached("heygen_voices_v2", 24, fetch)
+    voices = await _cached("heygen_voices_v3", 24, fetch)
     return {"voices": voices}
+
+
+# ---------------------------------------------------------------------------
+# Voice favorites — pinned voices per user, stored in db.buyers.favorite_voices.
+# Reused across all voice pickers (HeyGen avatar voices today; could extend to
+# Kokoro TTS later).
+# ---------------------------------------------------------------------------
+class FavoriteVoiceRequest(BaseModel):
+    voice_id: str
+
+
+@api.get("/studio/voices/favorites")
+async def studio_voices_favorites(user: AuthUser = Depends(current_user)):
+    require_studio(user)
+    doc = await db.buyers.find_one({"email": user.email.lower()})
+    return {"favorites": (doc or {}).get("favorite_voices") or []}
+
+
+@api.post("/studio/voices/favorites")
+async def studio_voices_add_favorite(
+    payload: FavoriteVoiceRequest,
+    user: AuthUser = Depends(current_user),
+):
+    require_studio(user)
+    vid = (payload.voice_id or "").strip()
+    if not vid:
+        raise HTTPException(status_code=400, detail="voice_id required")
+    await db.buyers.update_one(
+        {"email": user.email.lower()},
+        {
+            "$addToSet": {"favorite_voices": vid},
+            "$setOnInsert": {
+                "email": user.email.lower(),
+                "addedAt": datetime.now(timezone.utc).isoformat(),
+                "source": "studio",
+            },
+            "$set": {"updatedAt": datetime.now(timezone.utc).isoformat()},
+        },
+        upsert=True,
+    )
+    return {"ok": True}
+
+
+@api.delete("/studio/voices/favorites/{voice_id}")
+async def studio_voices_remove_favorite(
+    voice_id: str,
+    user: AuthUser = Depends(current_user),
+):
+    require_studio(user)
+    await db.buyers.update_one(
+        {"email": user.email.lower()},
+        {
+            "$pull": {"favorite_voices": voice_id},
+            "$set": {"updatedAt": datetime.now(timezone.utc).isoformat()},
+        },
+    )
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------
