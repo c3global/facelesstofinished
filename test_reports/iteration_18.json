@@ -1,0 +1,37 @@
+{
+  "summary": "Iteration 18 — Verified all 4 enhancements from this task: (1) Backend Claude streaming with progressive db.scripts text updates, (2) 3 new long-form toggle switches (hooks/broll/production-notes) with conditional prompt sections, (3) gold ResultsNavBar CSS, (4) admin 'Add buyer' modal. All 14 existing admin_pinball pytests still pass + 3 new streaming/toggle pytests pass against the live preview URL. Admin Add Buyer modal verified end-to-end via Playwright (invalid-email toast + valid-email row creation with chosen entitlements). Long-form toggle UI verified present and ON by default; CSS gold styling for results-nav verified in App.css.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "verified_features": {
+    "pytest_admin_pinball_regression": "14/14 PASS — backend/tests/test_admin_pinball.py (Pinball webhook + admin grant/revoke/delete/bulk/import/activity/stats unchanged after iteration 18 changes)",
+    "pytest_iter18_new": "3/3 PASS — backend/tests/test_scripts_v18_streaming.py: (a) toggles all OFF -> HOOK VARIATIONS / B-ROLL SHOT LIST / PRODUCTION NOTES headers absent from generated text while VIDEO CONCEPT + FULL NARRATION SCRIPT remain; (b) toggles all ON -> all three section headers present; (c) /api/scripts/job/{id} polled every 500ms shows running status with growing partial text (sample sequence observed: 0,0,0,0,71,144,231,284,474,555,631,754,869,953,994,1155,1210,1290,1425,1537,... -> final 19236 chars complete). Streaming/drip works.",
+    "frontend_long_form_toggles": "PASS — all 3 toggle switches render in long-form mode with data-testid='toggle-include-hooks', 'toggle-include-broll', 'toggle-include-production-notes', all default checked=True (verified via Playwright is_checked() on each).",
+    "frontend_admin_add_buyer": "PASS — [data-testid='buyers-add'] opens [data-testid='add-buyer-overlay'] modal. Invalid email 'not-an-email' triggers red toast 'Enter a valid email address'. Valid email 'testbuyer{ts}@example.com' with base+studio entitlements creates new row (table count 29 -> 30; new row visible at top with both 'base' and 'studio' entitlement chips). Both grant API calls succeeded (modal calls PATCH /admin/buyers/{email}/grant once per selected entitlement).",
+    "results_nav_gold_styling": "PASS (CSS review) — /app/frontend/src/App.css lines 2544-2606: .results-nav uses gold linear-gradient (rgba(201,149,108,0.32) -> rgba(224,164,88,0.22) -> rgba(201,149,108,0.32)) with rgba(224,164,88,0.55) borders + box-shadow rgba(224,164,88,0.35); .results-nav-status uses color #E0A458 with text-transform:uppercase and letter-spacing 0.08em; .results-nav-btn uses #E0A458 text + gold border. Matches spec exactly.",
+    "drip_status_banner_present": "PASS (code review) — Scripts.jsx line 1232-1239 renders <div className='drip-status' data-testid='drip-status'> only when output.status === 'running'; shows spinner + currentStreamingPhase(output.text, output.mode) phase label + elapsed seconds. Banner appears above result body during streaming."
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_scripts_v18_streaming.py",
+    "/app/backend/tests/test_admin_pinball.py",
+    "/app/test_reports/pytest/iteration_18_admin.xml",
+    "/app/test_reports/pytest/iteration_18_streaming.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Scripts.jsx is now 1397 lines — already flagged in prev iterations, still recommended to split into a hook (useScriptEngine) + smaller view components. The new toggles + streaming logic add ~100 lines and the file is firmly past the 700-line threshold.",
+    "server.py _run_script_job() imports emergentintegrations inside the function (line 2216) on every job invocation. Minor: hoist to module top-level for a tiny speedup and to fail-fast at boot if the package is missing.",
+    "_run_script_job() ignores StreamDone.usage / cost metadata — if you later want to log per-script token spend for cost monitoring, capture StreamDone.usage and write to db.scripts.{prompt_tokens, completion_tokens, cost_usd}.",
+    "Throttle write interval (0.25s) is fine for short scripts but for long-length renders that take ~5min, the throttle still produces ~1200 writes — consider also bounding writes by minimum delta-bytes (e.g. only write if accumulated grew by >50 chars OR 250ms elapsed).",
+    "BuyersTab.jsx Add buyer modal makes N sequential PATCH calls (one per entitlement). For 3 entitlements that's 3 round-trips. Acceptable for an admin tool but could be a single 'create-buyer' endpoint that accepts entitlements[] in one call."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_scripts_v18_streaming.py (new — 3 tests covering toggle on/off + streaming/drip)"
+  ],
+  "success_rate": {"backend": "100% (14/14 regression + 3/3 new = 17/17 pytests)", "frontend": "100% (toggles render+default ON, admin Add Buyer flow end-to-end PASS, gold CSS + drip-status banner verified via CSS+code review)"},
+  "test_credentials": "Admin: drcharitycampbell@gmail.com (DEV_BYPASS passwordless, isAdmin=true via ADMIN_EMAILS, all entitlements). Non-admin with base: directkynections@gmail.com.",
+  "seed_data_creation": "Tests added one buyer 'testbuyer{ts}@example.com' with base+studio entitlements via the Add buyer modal (admin Buyers table grew 29 -> 30). Harmless leftover; uses unique timestamp so it won't collide on re-run.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All 4 iteration-18 features pass. Pytests to rerun: `REACT_APP_BACKEND_URL=https://f2f48-video-engine.preview.emergentagent.com python -m pytest /app/backend/tests/test_admin_pinball.py /app/backend/tests/test_scripts_v18_streaming.py -v` (admin runs in ~1s, streaming test takes ~5min total because it generates 3 short Claude scripts end-to-end — each ~80-100s). Key testids added in iter18: toggle-include-hooks, toggle-include-broll, toggle-include-production-notes, drip-status, buyers-add, add-buyer-overlay, add-buyer-email, add-buyer-ent-{base|shorts|studio}, add-buyer-submit, add-buyer-cancel. Note: the long-form 'pick angle' step calls kickoffGeneration(angleObj) directly on AngleCard click — there is NO separate 'Generate full script' button (a previous test thought there was; the AngleCard click IS the generate trigger).",
+  "rca of the issue": "No bugs found this iteration. Everything ships clean."
+}

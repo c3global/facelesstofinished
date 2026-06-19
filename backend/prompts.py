@@ -50,8 +50,34 @@ def build_angles_user_message(topic: str) -> str:
 # STEP 2 — Full script package locked to a chosen angle
 # ---------------------------------------------------------------------------
 
-def build_long_system_prompt(length: str = "medium") -> str:
+def build_long_system_prompt(
+    length: str = "medium",
+    *,
+    include_hooks: bool = True,
+    include_broll: bool = True,
+    include_production_notes: bool = True,
+) -> str:
     t = LENGTH_TARGETS.get(length, LENGTH_TARGETS["medium"])
+    hook_section = """### 🪝 HOOK VARIATIONS
+Write 5 distinct opening hooks (each 2–3 sentences) for the LOCKED angle. Label each with the style in brackets:
+1. [Curiosity Gap] — [hook text]
+2. [Bold Claim] — [hook text]
+3. [Story Opener] — [hook text]
+4. [Stat Punch] — [hook text]
+5. [Question] — [hook text]
+
+""" if include_hooks else ""
+    broll_section = """### 🎥 B-ROLL SHOT LIST
+A consolidated list of every B-roll cue from the script above, grouped by section, so the editor has a single sourcing checklist. Format:
+[Section title]
+- [Cue 1]
+- [Cue 2]
+
+""" if include_broll else ""
+    production_section = """### 💡 PRODUCTION NOTES
+Platform-specific tips, tone flags, voiceover direction notes, and optimization suggestions. Brief and bulletable.
+
+""" if include_production_notes else ""
     return f"""You are the Faceless Video Script Engine — an expert AI scriptwriter specializing in high-performing, faceless YouTube videos. You combine deep knowledge of YouTube algorithm behavior, viewer psychology, storytelling frameworks, and narration writing to produce scripts that hold attention from first second to last.
 
 TARGET VIDEO LENGTH FOR THIS REQUEST: {t['mins']} ({t['words']}). Calibrate the depth, section count, and pacing to this length. Do NOT pad to fit, do NOT cut short.
@@ -66,15 +92,7 @@ OUTPUT STRUCTURE — always follow this format exactly, using these section head
 **Core Promise to Viewer:** [What they walk away knowing or able to do]
 **Target Length:** {t['mins']}
 
-### 🪝 HOOK VARIATIONS
-Write 5 distinct opening hooks (each 2–3 sentences) for the LOCKED angle. Label each with the style in brackets:
-1. [Curiosity Gap] — [hook text]
-2. [Bold Claim] — [hook text]
-3. [Story Opener] — [hook text]
-4. [Stat Punch] — [hook text]
-5. [Question] — [hook text]
-
-### 🗺️ OUTLINE
+{hook_section}### 🗺️ OUTLINE
 A scannable section-by-section outline of the full video, in bullet form. One line per section with the section title, the beat, and the approximate timestamp.
 
 ### 🎙️ FULL NARRATION SCRIPT
@@ -100,16 +118,7 @@ Place a B-roll cue every 2–4 narration sentences. Cues must be specific and sh
 Provide one purpose-built transition line between each adjacent pair of sections in the script above. Format as:
 - [Section A] → [Section B]: "[Transition line, written for voiceover]"
 
-### 🎥 B-ROLL SHOT LIST
-A consolidated list of every B-roll cue from the script above, grouped by section, so the editor has a single sourcing checklist. Format:
-[Section title]
-- [Cue 1]
-- [Cue 2]
-
-### 💡 PRODUCTION NOTES
-Platform-specific tips, tone flags, voiceover direction notes, and optimization suggestions. Brief and bulletable.
-
-RULES YOU NEVER BREAK:
+{broll_section}{production_section}RULES YOU NEVER BREAK:
 - Never open with "In this video..." or "Hey guys, welcome back"
 - Never write passive, lifeless narration
 - Never use vague B-roll cues

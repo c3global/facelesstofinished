@@ -2546,21 +2546,33 @@
   top: 0;
   z-index: 20;
   margin: 0 -24px 18px;
-  padding: 10px 24px;
+  padding: 12px 24px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  background: color-mix(in srgb, var(--surface) 86%, transparent);
+  /* Bright gold highlight — Charity wanted the script-ready bar to truly
+     stand out (previous purple blended into the background). */
+  background: linear-gradient(
+    90deg,
+    rgba(201, 149, 108, 0.32) 0%,
+    rgba(224, 164, 88, 0.22) 50%,
+    rgba(201, 149, 108, 0.32) 100%
+  );
   backdrop-filter: saturate(140%) blur(10px);
   -webkit-backdrop-filter: saturate(140%) blur(10px);
-  border-bottom: 1px solid var(--border-soft);
+  border-top: 1px solid rgba(224, 164, 88, 0.55);
+  border-bottom: 1px solid rgba(224, 164, 88, 0.55);
+  box-shadow: 0 8px 24px -12px rgba(224, 164, 88, 0.35);
 }
 .results-nav-status {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text);
+  font-size: 13.5px;
+  font-weight: 700;
+  color: #E0A458;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
   white-space: nowrap;
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.4);
 }
 .results-nav-actions {
   display: flex;
@@ -2572,20 +2584,20 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 6px 10px;
-  background: transparent;
-  border: 1px solid var(--border-soft);
+  padding: 7px 13px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(224, 164, 88, 0.45);
   border-radius: 999px;
   font-size: 12px;
-  font-weight: 500;
-  color: var(--muted);
+  font-weight: 600;
+  color: #E0A458;
   cursor: pointer;
   transition: color .15s, background .15s, border-color .15s;
 }
 .results-nav-btn:hover {
-  color: var(--text);
-  background: var(--surface-hover);
-  border-color: var(--border);
+  color: #FFF1DC;
+  background: rgba(224, 164, 88, 0.18);
+  border-color: rgba(224, 164, 88, 0.85);
 }
 @media (max-width: 640px) {
   .results-nav { padding: 8px 16px; margin: 0 -16px 14px; }
@@ -3381,3 +3393,143 @@
   gap: 6px;
 }
 
+
+/* ============================================================
+   SCRIPT ENGINE — Include toggles + Drip status banner
+   ============================================================ */
+.include-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px 22px;
+  margin: 14px 0 4px;
+}
+.include-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text);
+  padding: 8px 14px 8px 10px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  transition: border-color 0.16s, background 0.16s;
+}
+.include-toggle:hover { border-color: var(--accent); }
+.include-toggle input { display: none; }
+.include-track {
+  position: relative;
+  width: 32px;
+  height: 18px;
+  background: rgba(127, 119, 221, 0.15);
+  border-radius: 999px;
+  border: 1px solid var(--border-soft);
+  transition: background 0.18s, border-color 0.18s;
+  flex-shrink: 0;
+}
+.include-thumb {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 14px;
+  height: 14px;
+  background: var(--text-soft);
+  border-radius: 50%;
+  transition: transform 0.18s, background 0.18s;
+}
+.include-toggle input:checked + .include-track {
+  background: rgba(127, 119, 221, 0.5);
+  border-color: var(--accent);
+}
+.include-toggle input:checked + .include-track .include-thumb {
+  transform: translateX(14px);
+  background: #FFF;
+}
+
+/* Drip status banner — shown at top of result view while job is streaming. */
+.drip-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 11px 18px;
+  background: linear-gradient(90deg, rgba(127, 119, 221, 0.16), rgba(127, 119, 221, 0.04));
+  border: 1px solid rgba(127, 119, 221, 0.42);
+  border-radius: 12px;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.drip-status .drip-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(127, 119, 221, 0.3);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: drip-spin 0.9s linear infinite;
+  flex-shrink: 0;
+}
+.drip-status .drip-elapsed {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: var(--text-soft);
+  font-weight: 500;
+}
+@keyframes drip-spin {
+  to { transform: rotate(360deg); }
+}
+
+
+
+/* ============================================================
+   ADMIN — Add buyer modal
+   ============================================================ */
+.add-buyer-card { max-width: 480px; }
+.add-buyer-card h3 { color: var(--accent) !important; }
+.add-buyer-field {
+  display: block;
+  margin-bottom: 16px;
+}
+.add-buyer-field > span {
+  display: block;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-soft);
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.add-buyer-field input[type="email"] {
+  width: 100%;
+  padding: 10px 14px;
+  background: var(--bg);
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  color: var(--text);
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.15s;
+  box-sizing: border-box;
+}
+.add-buyer-field input[type="email"]:focus { border-color: var(--accent); }
+.add-buyer-ents {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.ent-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px 6px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.ent-pick.is-on { border-color: var(--accent); background: rgba(127, 119, 221, 0.08); }
+.ent-pick input { margin: 0; }

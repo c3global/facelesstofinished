@@ -114,6 +114,10 @@ export default function BuyersTab() {
   const [importing, setImporting] = useState(false);
   const [csvHelp, setCsvHelp] = useState(false);
   const csvFileRef = useRef(null);
+  const [addModal, setAddModal] = useState(false);
+  const [newEmail, setNewEmail] = useState("");
+  const [newEnts, setNewEnts] = useState(() => new Set(["base"]));
+  const [adding, setAdding] = useState(false);
 
   const showToast = useCallback((msg, kind = "ok") => {
     setToast({ msg, kind });
@@ -285,6 +289,43 @@ export default function BuyersTab() {
     }
   };
 
+  const openAddBuyer = () => {
+    setNewEmail("");
+    setNewEnts(new Set(["base"]));
+    setAddModal(true);
+  };
+
+  const submitAddBuyer = async () => {
+    const email = newEmail.trim().toLowerCase();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+      showToast("Enter a valid email address", "err");
+      return;
+    }
+    if (newEnts.size === 0) {
+      showToast("Pick at least one entitlement", "err");
+      return;
+    }
+    setAdding(true);
+    try {
+      // Grant each entitlement sequentially. The grant endpoint upserts,
+      // so the first call creates the buyer record and subsequent calls
+      // attach additional entitlements.
+      for (const ent of newEnts) {
+        await apiClient.patch(
+          `/admin/buyers/${encodeURIComponent(email)}/grant`,
+          { entitlement: ent },
+        );
+      }
+      showToast(`Added ${email} with ${Array.from(newEnts).join(", ")}`);
+      setAddModal(false);
+      load();
+    } catch (e) {
+      showToast(e?.response?.data?.detail || "Failed to add buyer", "err");
+    } finally {
+      setAdding(false);
+    }
+  };
+
   return (
     <div className="admin-section" data-testid="buyers-tab">
       <div className="admin-toolbar">
@@ -312,6 +353,14 @@ export default function BuyersTab() {
         </select>
         <button className="admin-btn" onClick={load} data-testid="buyers-refresh">
           <RefreshCw size={13} /> Refresh
+        </button>
+        <button
+          className="admin-btn is-primary"
+          onClick={openAddBuyer}
+          data-testid="buyers-add"
+          title="Manually add a buyer email with entitlements"
+        >
+          <Plus size={13} /> Add buyer
         </button>
 
         {/* Hidden file input drives the CSV import button */}
@@ -464,6 +513,58 @@ export default function BuyersTab() {
           </tbody>
         </table>
       </div>
+
+      {addModal && (
+        <div className="admin-confirm-overlay" data-testid="add-buyer-overlay" onClick={() => !adding && setAddModal(false)}>
+          <div className="admin-confirm-card add-buyer-card" onClick={(e) => e.stopPropagation()}>
+            <h3 style={{ color: "var(--accent)" }}><Plus size={20} /> Add buyer manually</h3>
+            <p>
+              Use this when someone bought outside the funnel (refund replacement, manual comp, support exception).
+              The webhook still works for normal purchases — this is just the emergency lever.
+            </p>
+            <label className="add-buyer-field">
+              <span>Email</span>
+              <input
+                type="email"
+                value={newEmail}
+                onChange={(e) => setNewEmail(e.target.value)}
+                placeholder="buyer@example.com"
+                autoFocus
+                data-testid="add-buyer-email"
+              />
+            </label>
+            <div className="add-buyer-field">
+              <span>Entitlements</span>
+              <div className="add-buyer-ents">
+                {ENTITLEMENTS.map((ent) => (
+                  <label key={ent} className={`ent-pick ${newEnts.has(ent) ? "is-on" : ""}`}>
+                    <input
+                      type="checkbox"
+                      checked={newEnts.has(ent)}
+                      onChange={(e) => {
+                        const next = new Set(newEnts);
+                        if (e.target.checked) next.add(ent);
+                        else next.delete(ent);
+                        setNewEnts(next);
+                      }}
+                      data-testid={`add-buyer-ent-${ent}`}
+                    />
+                    <span className={`ent-chip ent-chip-${ent}`}>{ent}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div className="admin-confirm-actions">
+              <button className="admin-btn" onClick={() => setAddModal(false)} disabled={adding} data-testid="add-buyer-cancel">
+                Cancel
+              </button>
+              <button className="admin-btn is-primary" onClick={submitAddBuyer} disabled={adding} data-testid="add-buyer-submit">
+                {adding ? "Adding…" : "Add buyer"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {csvHelp && (
         <div className="admin-confirm-overlay" data-testid="csv-help-overlay" onClick={() => setCsvHelp(false)}>

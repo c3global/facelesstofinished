@@ -2209,14 +2209,49 @@ async def saved_angles_delete(angle_id: str, user: AuthUser = Depends(current_us
 
 
 async def _run_script_job(script_id: str, system_prompt: str, user_message: str):
-    """Background worker — runs Claude, writes result back onto the script record."""
+    """Background worker — streams Claude's response, writing accumulating text
+    back onto the script record so the frontend can render sections as they
+    appear (drip / progressive reveal pattern). Falls back to single-shot if
+    streaming isn't available on the model."""
+    from emergentintegrations.llm.chat import LlmChat, UserMessage, TextDelta, StreamDone  # noqa: E402
+    if not EMERGENT_LLM_KEY:
+        await db.scripts.update_one(
+            {"id": script_id},
+            {"$set": {"status": "failed", "error": "LLM key missing",
+                      "completed_at": datetime.now(timezone.utc).isoformat()}},
+        )
+        return
     try:
-        text = await _claude_complete(system_prompt, user_message, session_id=script_id)
+        chat = (
+            LlmChat(
+                api_key=EMERGENT_LLM_KEY,
+                session_id=script_id,
+                system_message=system_prompt,
+            )
+            .with_model("anthropic", CLAUDE_MODEL)
+        )
+        accumulated = ""
+        last_write = 0.0
+        loop = asyncio.get_event_loop()
+        async for event in chat.stream_message(UserMessage(text=user_message)):
+            if isinstance(event, TextDelta):
+                accumulated += event.content
+                # Throttle writes to ~250ms to keep Mongo load sane while still
+                # feeling live in the UI.
+                now = loop.time()
+                if now - last_write >= 0.25:
+                    await db.scripts.update_one(
+                        {"id": script_id},
+                        {"$set": {"text": accumulated}},
+                    )
+                    last_write = now
+            elif isinstance(event, StreamDone):
+                break
         await db.scripts.update_one(
             {"id": script_id},
             {"$set": {
                 "status": "complete",
-                "text": text,
+                "text": accumulated,
                 "completed_at": datetime.now(timezone.utc).isoformat(),
             }},
         )
@@ -2268,6 +2303,9 @@ class LongScriptRequest(BaseModel):
     length: str = "medium"  # "short" | "medium" | "long"
     angle: Optional[str] = None  # legacy free-text hint
     chosen_angle: Optional[dict] = None  # {name, framing, category} — locked angle from step 1
+    include_hooks: bool = True
+    include_broll: bool = True
+    include_production_notes: bool = True
 
 
 def _angle_clause(chosen: Optional[dict], free_text: Optional[str]) -> str:
@@ -2292,14 +2330,24 @@ async def scripts_long(payload: LongScriptRequest, user: AuthUser = Depends(curr
     if payload.length not in LENGTH_VALID:
         raise HTTPException(status_code=400, detail="Invalid length")
 
-    system = build_long_system_prompt(payload.length)
+    system = build_long_system_prompt(
+        payload.length,
+        include_hooks=payload.include_hooks,
+        include_broll=payload.include_broll,
+        include_production_notes=payload.include_production_notes,
+    )
     user_msg = f"Generate the full faceless YouTube long-form script package (skipping the angle step) for topic: {payload.topic.strip()}"
     user_msg += _angle_clause(payload.chosen_angle, payload.angle)
 
     return await _enqueue_script(
         user=user, mode="long", topic=payload.topic,
         system_prompt=system, user_message=user_msg,
-        extra={"length": payload.length, "angle": payload.angle, "chosen_angle": payload.chosen_angle},
+        extra={
+            "length": payload.length, "angle": payload.angle, "chosen_angle": payload.chosen_angle,
+            "include_hooks": payload.include_hooks,
+            "include_broll": payload.include_broll,
+            "include_production_notes": payload.include_production_notes,
+        },
     )
 
 

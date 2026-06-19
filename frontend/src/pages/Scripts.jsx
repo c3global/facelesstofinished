@@ -58,6 +58,48 @@ const TAGLINES = [
 const angleKey = (a) =>
   `${(a?.name || "").toLowerCase()}::${(a?.framing || "").toLowerCase()}`;
 
+// Ordered map of section headers Claude emits → friendly status text.
+// Used by the drip-banner to show "Writing hook variations…" etc. while
+// streaming. The LATEST header found in the partial text wins.
+const LONG_PHASES = [
+  ["VIDEO CONCEPT", "Drafting video concept…"],
+  ["HOOK VARIATIONS", "Writing hook variations…"],
+  ["OUTLINE", "Building outline…"],
+  ["FULL NARRATION SCRIPT", "Writing narration…"],
+  ["TRANSITIONS", "Composing transitions…"],
+  ["B-ROLL SHOT LIST", "Compiling B-roll shot list…"],
+  ["PRODUCTION NOTES", "Adding production notes…"],
+];
+const SHORTS_PHASES = [
+  ["HOOK", "Drafting hook…"],
+  ["SCRIPT", "Writing the short…"],
+  ["CAPTION", "Generating caption…"],
+  ["HASHTAGS", "Picking hashtags…"],
+  ["B-ROLL", "Listing B-roll…"],
+  ["PRODUCTION NOTES", "Adding production notes…"],
+];
+const SPRINT_PHASES = [
+  ["VARIANT 1", "Drafting variant 1 of 5…"],
+  ["VARIANT 2", "Drafting variant 2 of 5…"],
+  ["VARIANT 3", "Drafting variant 3 of 5…"],
+  ["VARIANT 4", "Drafting variant 4 of 5…"],
+  ["VARIANT 5", "Drafting variant 5 of 5…"],
+];
+
+function currentStreamingPhase(text, mode) {
+  if (!text) return "Thinking…";
+  const phases =
+    mode === "sprint" ? SPRINT_PHASES :
+    mode === "shorts" ? SHORTS_PHASES :
+    LONG_PHASES;
+  let lastMatch = phases[0][1];
+  const upper = text.toUpperCase();
+  for (const [header, label] of phases) {
+    if (upper.includes(header)) lastMatch = label;
+  }
+  return lastMatch;
+}
+
 export default function Scripts() {
   const { user } = useAuth();
   const nav = useNavigate();
@@ -73,6 +115,10 @@ export default function Scripts() {
   const [platform, setPlatform] = useState("youtube");
   const [sprint, setSprint] = useState(false);
   const [multiPlatform, setMultiPlatform] = useState(false);
+  // Output toggles (long-form Netlify parity)
+  const [includeHooks, setIncludeHooks] = useState(true);
+  const [includeBroll, setIncludeBroll] = useState(true);
+  const [includeProductionNotes, setIncludeProductionNotes] = useState(true);
 
   // Apply platform accent CSS variable
   useEffect(() => {
@@ -315,7 +361,11 @@ export default function Scripts() {
   };
 
   // ---- Generic job polling ----
-  const pollJob = (id, onDone) => {
+  // Drip-friendly polling: ticks every 500ms. Whenever the server returns
+  // partial text mid-stream, we update `output` so the result view renders
+  // whatever sections have completed so far. The job is considered "done"
+  // only when status flips to `complete` or `failed`.
+  const pollJob = (id, onDone, onPartial) => {
     if (pollRef.current) clearInterval(pollRef.current);
     if (elapsedRef.current) clearInterval(elapsedRef.current);
     const startedAt = Date.now();
@@ -332,6 +382,9 @@ export default function Scripts() {
           clearInterval(elapsedRef.current);
           elapsedRef.current = null;
           onDone(r.data);
+        } else if (r.data.text && onPartial) {
+          // Live stream — push partial text into the UI.
+          onPartial(r.data);
         }
       } catch (e) {
         clearInterval(pollRef.current);
@@ -343,7 +396,7 @@ export default function Scripts() {
           error: e?.response?.data?.detail || "Network error",
         });
       }
-    }, 2500);
+    }, 500);
   };
 
   // ---- Multi-platform polling: tracks N jobs at once ----
@@ -438,7 +491,14 @@ export default function Scripts() {
       const url = mode === MODES.LONG ? "/scripts/long" : "/scripts/shorts";
       const body =
         mode === MODES.LONG
-          ? { topic: effectiveTopic, length, chosen_angle: angleObj || undefined }
+          ? {
+              topic: effectiveTopic,
+              length,
+              chosen_angle: angleObj || undefined,
+              include_hooks: includeHooks,
+              include_broll: includeBroll,
+              include_production_notes: includeProductionNotes,
+            }
           : {
               topic: effectiveTopic,
               platform,
@@ -446,24 +506,33 @@ export default function Scripts() {
               sprint,
             };
       const r = await apiClient.post(url, body);
-      pollJob(r.data.id, (final) => {
-        if (final.status === "complete") {
-          setOutput(final);
-          setStep(STEPS.RESULT);
-          loadHistory();
-          setTimeout(
-            () =>
-              document.getElementById("scripts-output")?.scrollIntoView({
-                behavior: "smooth",
-                block: "start",
-              }),
-            100
-          );
-        } else {
-          setErr(final.error || "Generation failed. Try again.");
-          setStep(skipAngleStep ? STEPS.TOPIC : STEPS.ANGLES);
-        }
-      });
+      pollJob(
+        r.data.id,
+        (final) => {
+          if (final.status === "complete") {
+            setOutput(final);
+            setStep(STEPS.RESULT);
+            loadHistory();
+            setTimeout(
+              () =>
+                document.getElementById("scripts-output")?.scrollIntoView({
+                  behavior: "smooth",
+                  block: "start",
+                }),
+              100
+            );
+          } else {
+            setErr(final.error || "Generation failed. Try again.");
+            setStep(skipAngleStep ? STEPS.TOPIC : STEPS.ANGLES);
+          }
+        },
+        (partial) => {
+          // Drip: as soon as the stream starts producing text, swap to the
+          // result view so sections appear as they complete.
+          setOutput(partial);
+          if (step !== STEPS.RESULT) setStep(STEPS.RESULT);
+        },
+      );
     } catch (e) {
       setErr(e?.response?.data?.detail || "Could not start generation.");
       setStep(skipAngleStep ? STEPS.TOPIC : STEPS.ANGLES);
@@ -754,8 +823,11 @@ export default function Scripts() {
         const isLong = output.mode === "long";
         const hasShorts = isSprint && sprintVariants.length > 0;
         const hasScript = isLong || isShorts;
+        const isStreaming = output.status === "running";
         let status;
-        if (isSprint) {
+        if (isStreaming) {
+          status = currentStreamingPhase(output.text, output.mode);
+        } else if (isSprint) {
           status = sprintVariants.length
             ? `Sprint ready · ${sprintVariants.length} Shorts`
             : "Sprint ready";
@@ -871,6 +943,38 @@ export default function Scripts() {
                     <span className="length-desc">{l.desc}</span>
                   </button>
                 ))}
+              </div>
+              <div className="include-toggles" data-testid="include-toggles">
+                <label className="include-toggle">
+                  <input
+                    type="checkbox"
+                    checked={includeHooks}
+                    onChange={(e) => setIncludeHooks(e.target.checked)}
+                    data-testid="toggle-include-hooks"
+                  />
+                  <span className="include-track"><span className="include-thumb" /></span>
+                  <span>Include hook variations</span>
+                </label>
+                <label className="include-toggle">
+                  <input
+                    type="checkbox"
+                    checked={includeBroll}
+                    onChange={(e) => setIncludeBroll(e.target.checked)}
+                    data-testid="toggle-include-broll"
+                  />
+                  <span className="include-track"><span className="include-thumb" /></span>
+                  <span>Include B-roll shot list</span>
+                </label>
+                <label className="include-toggle">
+                  <input
+                    type="checkbox"
+                    checked={includeProductionNotes}
+                    onChange={(e) => setIncludeProductionNotes(e.target.checked)}
+                    data-testid="toggle-include-production-notes"
+                  />
+                  <span className="include-track"><span className="include-thumb" /></span>
+                  <span>Include production notes</span>
+                </label>
               </div>
             </div>
           ) : (
@@ -1123,6 +1227,16 @@ export default function Scripts() {
               )}
             </div>
           </div>
+
+          {/* Drip status banner — only while streaming. Shows which section
+              Claude is currently writing, plus elapsed seconds. */}
+          {output.status === "running" && (
+            <div className="drip-status" data-testid="drip-status">
+              <span className="drip-spinner" />
+              <span>{currentStreamingPhase(output.text, output.mode)}</span>
+              <span className="drip-elapsed">{elapsed}s</span>
+            </div>
+          )}
 
           {/* Multi-platform tabs */}
           {multiJobs.length > 0 && (
