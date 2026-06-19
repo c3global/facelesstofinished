@@ -15,6 +15,23 @@ paying customers + entitlements on the existing Netlify backend at
 `https://faceless48.c3global.co/api/auth-me` — the new Studio should call
 back to it for entitlement verification.
 
+## 2026-02-19 — Phase 3.5e: Shorts result layout → Bento grid
+**Status:** SHIPPED — verified via screenshot.
+
+Replaced the lopsided 3-column shorts result layout (Plan | Phone | Distribute) with a bento grid:
+- **Phone hero** anchored at the top center as the visual anchor
+- **3-column responsive bento grid** below the phone with all 8 auxiliary cards
+- **Pinned top row**: Hook Variations + Caption + B-Roll Shot List (per Charity's spec — these are the cards she copy/pastes first)
+- **Production Notes** spans 2 columns (the densest card) so the bottom row has visual rhythm
+- **Grid auto-flow: dense** so any empty gaps get filled by smaller cards
+- **Mobile (<720px)**: everything stacks 1-col under the phone
+
+Files touched:
+- `/app/frontend/src/pages/Scripts.jsx` — replaced `.shorts-layout` 3-column DOM with `.shorts-bento` (hero + grid). Card order reflects pinned-row spec.
+- `/app/frontend/src/App.css` — removed `.shorts-layout` / `.shorts-col` rules, added `.shorts-bento` / `.shorts-bento-hero` / `.shorts-bento-grid` with responsive breakpoints.
+
+
+
 ## 2026-02-19 — Phase 3.5d: Pinball direct + Script formatting polish
 **Status:** SHIPPED — all visual fixes verified via screenshots; webhook live end-to-end with real token.
 

@@ -1235,10 +1235,17 @@ export default function Scripts() {
               onCopyAll={copyAllShorts}
             />
           ) : output.mode === "shorts" ? (
-            <div className="shorts-layout" data-testid="shorts-layout">
-              {/* PLAN column */}
-              <div className="shorts-col">
-                <h4 className="shorts-col-head">Plan</h4>
+            <div className="shorts-bento" data-testid="shorts-layout">
+              {/* HERO — phone preview anchored at top center */}
+              <div id="shorts-script-column" className="shorts-bento-hero">
+                <PhoneFrame platform={output.platform || platform}>
+                  <ShortPhoneBody shortBody={sections.shortScript?.body || ""} />
+                </PhoneFrame>
+              </div>
+              {/* BENTO GRID — pinned row first (Hook Variations, Caption, B-Roll Shot List),
+                  then everything else flows below. Cards auto-balance by spanning rows
+                  in the 3-col grid; on mobile they stack 1-col under the phone. */}
+              <div className="shorts-bento-grid">
                 {sections.hooks && (
                   <SectionCard
                     keyName="hooks"
@@ -1249,44 +1256,23 @@ export default function Scripts() {
                     onToggle={toggleSection}
                   />
                 )}
-                {sections.titleVariants && (
-                  <SectionCard
-                    keyName="titleVariants"
-                    section={sections.titleVariants}
-                    testid="section-titleVariants"
-                    revealIndex={1}
-                    collapsed={collapsedSections.has("titleVariants")}
-                    onToggle={toggleSection}
-                  />
-                )}
-                {sections.coverPrompts && (
-                  <SectionCard
-                    keyName="coverPrompts"
-                    section={sections.coverPrompts}
-                    testid="section-coverPrompts"
-                    revealIndex={2}
-                    collapsed={collapsedSections.has("coverPrompts")}
-                    onToggle={toggleSection}
-                  />
-                )}
-              </div>
-              {/* SCRIPT column — phone */}
-              <div id="shorts-script-column" className="shorts-col shorts-col-center">
-                <h4 className="shorts-col-head">Script</h4>
-                <PhoneFrame platform={output.platform || platform}>
-                  <ShortPhoneBody shortBody={sections.shortScript?.body || ""} />
-                </PhoneFrame>
-              </div>
-              {/* DISTRIBUTE column */}
-              <div className="shorts-col">
-                <h4 className="shorts-col-head">Distribute</h4>
                 {sections.caption && (
                   <SectionCard
                     keyName="caption"
                     section={sections.caption}
                     testid="section-caption"
-                    revealIndex={3}
+                    revealIndex={1}
                     collapsed={collapsedSections.has("caption")}
+                    onToggle={toggleSection}
+                  />
+                )}
+                {sections.broll && (
+                  <SectionCard
+                    keyName="broll"
+                    section={sections.broll}
+                    testid="section-broll"
+                    revealIndex={2}
+                    collapsed={collapsedSections.has("broll")}
                     onToggle={toggleSection}
                   />
                 )}
@@ -1295,7 +1281,7 @@ export default function Scripts() {
                     keyName="hashtags"
                     section={sections.hashtags}
                     testid="section-hashtags"
-                    revealIndex={4}
+                    revealIndex={3}
                     collapsed={collapsedSections.has("hashtags")}
                     onToggle={toggleSection}
                   />
@@ -1305,18 +1291,28 @@ export default function Scripts() {
                     keyName="onScreen"
                     section={sections.onScreen}
                     testid="section-onScreen"
-                    revealIndex={5}
+                    revealIndex={4}
                     collapsed={collapsedSections.has("onScreen")}
                     onToggle={toggleSection}
                   />
                 )}
-                {sections.broll && (
+                {sections.titleVariants && (
                   <SectionCard
-                    keyName="broll"
-                    section={sections.broll}
-                    testid="section-broll"
+                    keyName="titleVariants"
+                    section={sections.titleVariants}
+                    testid="section-titleVariants"
+                    revealIndex={5}
+                    collapsed={collapsedSections.has("titleVariants")}
+                    onToggle={toggleSection}
+                  />
+                )}
+                {sections.coverPrompts && (
+                  <SectionCard
+                    keyName="coverPrompts"
+                    section={sections.coverPrompts}
+                    testid="section-coverPrompts"
                     revealIndex={6}
-                    collapsed={collapsedSections.has("broll")}
+                    collapsed={collapsedSections.has("coverPrompts")}
                     onToggle={toggleSection}
                   />
                 )}
