@@ -1,9 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Search, Plus, Trash2, Download, RefreshCw, X, FileUp, HelpCircle } from "lucide-react";
+import { Search, Plus, Trash2, RefreshCw, X, FileUp, HelpCircle } from "lucide-react";
 import { apiClient } from "../../App";
 
 const ENTITLEMENTS = ["base", "shorts", "studio"];
-const NETLIFY_BUYERS_URL = "https://faceless48.c3global.co/api/admin-buyers";
 
 // Minimal RFC-4180 CSV parser. Handles quoted fields with commas + escaped
 // double-quotes ("a,b" → a,b ; "say ""hi""" → say "hi"). Returns array of
@@ -226,40 +225,6 @@ export default function BuyersTab() {
     }
   };
 
-  const importFromNetlify = async () => {
-    if (importing) return;
-    setImporting(true);
-    try {
-      // Step 1: same-origin fetch to Netlify using the admin's cookie session.
-      // Works when this UI is served from faceless48.c3global.co/studio behind
-      // the reverse-proxy; during dev/preview this will fail CORS unless the
-      // user opens the production URL. Surface the failure clearly.
-      const resp = await fetch(NETLIFY_BUYERS_URL, { credentials: "include" });
-      if (!resp.ok) throw new Error(`Netlify returned ${resp.status}`);
-      const data = await resp.json();
-      const buyers = Array.isArray(data) ? data : data.buyers || data.items || [];
-      if (!Array.isArray(buyers) || buyers.length === 0) {
-        showToast("No buyers found in Netlify response", "err");
-        return;
-      }
-      // Step 2: POST batch to our import endpoint.
-      const r = await apiClient.post("/admin/buyers/import", { buyers });
-      const { imported, merged, skipped, errors } = r.data;
-      showToast(
-        `Import done — ${imported} new · ${merged} merged · ${skipped} skipped` +
-          (errors?.length ? ` · ${errors.length} errors` : ""),
-      );
-      load();
-    } catch (e) {
-      const msg = e?.message?.includes("Failed to fetch")
-        ? "Couldn't reach Netlify. Open this page on faceless48.c3global.co/studio so cookies are same-origin."
-        : e?.message || "Import failed";
-      showToast(msg, "err");
-    } finally {
-      setImporting(false);
-    }
-  };
-
   const importFromCSV = async (file) => {
     if (!file || importing) return;
     setImporting(true);
@@ -389,15 +354,6 @@ export default function BuyersTab() {
           title="Show CSV format help"
         >
           <HelpCircle size={13} />
-        </button>
-        <button
-          className="admin-btn"
-          onClick={importFromNetlify}
-          disabled={importing}
-          data-testid="buyers-import-netlify"
-          title="Same-origin fetch to Netlify's /api/admin-buyers using your existing session cookie, then POST to /api/admin/buyers/import"
-        >
-          <Download size={13} /> Sync from Netlify
         </button>
         {selected.size > 0 && (
           <button
