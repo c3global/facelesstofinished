@@ -15,6 +15,34 @@ paying customers + entitlements on the existing Netlify backend at
 `https://faceless48.c3global.co/api/auth-me` — the new Studio should call
 back to it for entitlement verification.
 
+## 2026-02-19 — Phase 3.5l: CRITICAL auth fix — admin-granted buyers couldn't sign in
+**Status:** SHIPPED — 26/26 backend pytests PASS (6 new + 20 regression).
+
+**Customer-facing bug**: Real production customer (`tonychristmas.work@gmail.com`) hit "Could not sign in. Use the email you bought with." even though the admin granted access via Admin → Buyers UI.
+
+**Root cause**: `POST /api/auth/check` had 3 resolution paths — `DEV_BYPASS_EMAIL`, `STUDIO_GRANT_EMAILS` (env var list), and the dead Netlify cross-origin handshake. **None of them queried `db.buyers`** — the collection that the Admin UI and the Pinball webhook both write to. So every admin grant + every paid Pinball order landed in MongoDB but the auth function ignored it. Missed wire from the Netlify→Emergent migration.
+
+**Fix** (`server.py` `auth_check`): added a 3rd resolution step between `STUDIO_GRANT_EMAILS` and the Netlify fallback that:
+- queries `await db.buyers.find_one({"email": email})` (email already normalized via `.strip().lower()`)
+- if buyer found AND has ≥1 entitlement → issues JWT with those exact entitlements + `isAdmin = email in ADMIN_EMAILS`
+- if buyer record exists but has zero entitlements → falls through to 401 (admin can re-grant via UI; no silent bypass)
+- if admin email is in db.buyers with empty entitlements → admin still gets KNOWN_ENTITLEMENTS so owner can use the app without a purchase record
+
+Followed the integration_playbook_expert_v2 guidance for email-based custom auth: email normalization, no-empty-entitlements bypass, admin-flag preservation, JWT issuance via existing `issue_jwt()` helper.
+
+**New tests** (`/app/backend/tests/test_auth_buyers_branch.py` — 6 cases):
+1. Non-buyer email returns 401 (control)
+2. Buyer with full 3 entitlements signs in successfully
+3. Buyer with partial entitlements signs in with only those (frontend paywall handles per-feature gating)
+4. Buyer with zero entitlements falls through to 401 (no silent bypass)
+5. Case-insensitive email match (CUSTOMER@example.com signs in for customer@example.com record)
+6. Admin email gets `isAdmin: true` even through this branch
+
+**Files touched**
+- `/app/backend/server.py` — `auth_check` gets the new `db.buyers` lookup branch + updated docstring with the new resolution order.
+- `/app/backend/tests/test_auth_buyers_branch.py` — new pytest file (6 cases).
+
+
 ## 2026-02-19 — Phase 3.5k: Login layout restructure (centered hero image on top, text + sign-in side-by-side)
 **Status:** SHIPPED — visually verified.
 

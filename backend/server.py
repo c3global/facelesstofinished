@@ -218,11 +218,14 @@ async def auth_check(payload: LoginPayload, request: Request):
          founders that get instant access. Manual override for the window
          before the Pinball → GHL → Netlify webhook chain is fully live.
          Also acts as a permanent admin backstop if Netlify is down.
-      3. Cross-origin handshake — forward the user's cookies (which the
+      3. `db.buyers` lookup — admin-added buyers (Admin → Buyers UI) and
+         Pinball-webhook buyers (auto-populated on paid orders). This is
+         the live source of truth for paying customers since the
+         Netlify→Emergent migration.
+      4. Cross-origin handshake — forward the user's cookies (which the
          Netlify reverse-proxy at faceless48.c3global.co/studio preserves
-         automatically) server-side to `NETLIFY_AUTH_URL`. Netlify is the
-         single source of truth: any future founder purchase auto-grants
-         via the existing webhook chain — no code change here required.
+         automatically) server-side to `NETLIFY_AUTH_URL`. Legacy fallback
+         for the brief window where Netlify is still the source of truth.
     """
     email = payload.email.strip().lower()
     if not email:
@@ -246,7 +249,34 @@ async def auth_check(payload: LoginPayload, request: Request):
             "user": {"email": email, "entitlements": KNOWN_ENTITLEMENTS, "isAdmin": is_admin},
         }
 
-    # 3) Cross-origin auth-me handshake.
+    # 3) Database-backed buyer lookup — admin-added buyers + Pinball-webhook
+    #    buyers. This is the SOURCE OF TRUTH for paying customers since the
+    #    Netlify→Emergent migration. The admin Buyers UI writes here, and the
+    #    Pinball webhook auto-populates this collection on every paid order.
+    #    Before this branch was added, customers granted access via the admin
+    #    panel could not sign in because auth_check never queried db.buyers.
+    buyer = await db.buyers.find_one({"email": email})
+    if buyer:
+        ents = list(buyer.get("entitlements") or [])
+        is_admin = email in ADMIN_EMAILS
+        # Admins can sign in even with no entitlements (so an owner without
+        # a purchase record can still use the app). Everyone else needs at
+        # least one entitlement on file. Empty-entitlement buyers are
+        # treated as "revoked" — admin can re-grant via the Buyers UI.
+        if is_admin and not ents:
+            ents = list(KNOWN_ENTITLEMENTS)
+        if ents:
+            token = issue_jwt(email, ents, is_admin=is_admin)
+            return {
+                "token": token,
+                "user": {"email": email, "entitlements": ents, "isAdmin": is_admin},
+            }
+        # Buyer record exists but no entitlements granted — fall through to
+        # the Netlify branch (which will 401 cleanly). Don't 403 here so
+        # the user gets the same "use the email you bought with" message
+        # and isn't tempted to assume the system is broken.
+
+    # 4) Cross-origin auth-me handshake.
     if not NETLIFY_AUTH_URL:
         # No Netlify wired AND no manual grant — there's nothing left to try.
         raise HTTPException(status_code=401, detail="Could not sign in. Use the email you bought with.")
