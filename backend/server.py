@@ -310,7 +310,10 @@ async def auth_me(user: AuthUser = Depends(current_user)):
 async def _heygen_get(path: str) -> dict:
     if not HEYGEN_API_KEY:
         raise HTTPException(status_code=500, detail="HeyGen key missing")
-    async with httpx.AsyncClient(timeout=30) as client:
+    # HeyGen v2 /avatars can take ~60s for the full 1281-avatar response on a
+    # cache miss. Voices upstream is fast (<10s). Use 90s read timeout to cover
+    # both; cached for 24h afterwards so this hit only happens once per day.
+    async with httpx.AsyncClient(timeout=httpx.Timeout(90.0, connect=10.0)) as client:
         r = await client.get(
             f"https://api.heygen.com/v2{path}",
             headers={"X-Api-Key": HEYGEN_API_KEY, "Accept": "application/json"},
@@ -470,6 +473,63 @@ async def studio_voices_remove_favorite(
         {"email": user.email.lower()},
         {
             "$pull": {"favorite_voices": voice_id},
+            "$set": {"updatedAt": datetime.now(timezone.utc).isoformat()},
+        },
+    )
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Avatar favorites — pinned avatars per user, stored in
+# db.buyers.favorite_avatars. Same shape as voice favorites; with 1281 HeyGen
+# avatars available, pinning the 5-10 the user actually uses saves scrolling.
+# ---------------------------------------------------------------------------
+class FavoriteAvatarRequest(BaseModel):
+    avatar_id: str
+
+
+@api.get("/studio/avatars/favorites")
+async def studio_avatars_favorites(user: AuthUser = Depends(current_user)):
+    require_studio(user)
+    doc = await db.buyers.find_one({"email": user.email.lower()})
+    return {"favorites": (doc or {}).get("favorite_avatars") or []}
+
+
+@api.post("/studio/avatars/favorites")
+async def studio_avatars_add_favorite(
+    payload: FavoriteAvatarRequest,
+    user: AuthUser = Depends(current_user),
+):
+    require_studio(user)
+    aid = (payload.avatar_id or "").strip()
+    if not aid:
+        raise HTTPException(status_code=400, detail="avatar_id required")
+    await db.buyers.update_one(
+        {"email": user.email.lower()},
+        {
+            "$addToSet": {"favorite_avatars": aid},
+            "$setOnInsert": {
+                "email": user.email.lower(),
+                "addedAt": datetime.now(timezone.utc).isoformat(),
+                "source": "studio",
+            },
+            "$set": {"updatedAt": datetime.now(timezone.utc).isoformat()},
+        },
+        upsert=True,
+    )
+    return {"ok": True}
+
+
+@api.delete("/studio/avatars/favorites/{avatar_id}")
+async def studio_avatars_remove_favorite(
+    avatar_id: str,
+    user: AuthUser = Depends(current_user),
+):
+    require_studio(user)
+    await db.buyers.update_one(
+        {"email": user.email.lower()},
+        {
+            "$pull": {"favorite_avatars": avatar_id},
             "$set": {"updatedAt": datetime.now(timezone.utc).isoformat()},
         },
     )

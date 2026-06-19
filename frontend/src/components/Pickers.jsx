@@ -16,6 +16,10 @@ export function AvatarPicker({ open, onClose, value, onPick, currentAspect = "9_
   // "Choose your avatar shows the same list for every aspect" bug.
   const [aspectFilter, setAspectFilter] = useState(currentAspect);
   const [search, setSearch] = useState("");
+  // Favorites parity with VoicePicker: pin the user's most-used avatars
+  // (out of 1281 HeyGen avatars) to the top + dedicated ★ tab.
+  const [favorites, setFavorites] = useState(() => new Set());
+  const [favTogglingId, setFavTogglingId] = useState(null);
 
   // Keep the filter in sync if the Studio's aspect changes while the modal
   // is mounted (closed). Opening the modal then will default to the latest.
@@ -32,8 +36,59 @@ export function AvatarPicker({ open, onClose, value, onPick, currentAspect = "9_
       .finally(() => setLoading(false));
   }, [open, avatars.length]);
 
+  // Load the user's favorite avatars the first time the picker opens.
+  // Same pattern as VoicePicker: fetch once, mutate through the modal
+  // only, so the in-memory Set stays canonical for the session.
+  const favoritesLoadedRef = useRef(false);
+  useEffect(() => {
+    if (!open || favoritesLoadedRef.current) return;
+    favoritesLoadedRef.current = true;
+    apiClient.get("/studio/avatars/favorites")
+      .then((r) => setFavorites(new Set(r.data.favorites || [])))
+      .catch(() => {});
+  }, [open]);
+
+  const toggleFavorite = async (avatarId) => {
+    if (!avatarId || favTogglingId === avatarId) return;
+    const isFav = favorites.has(avatarId);
+    setFavTogglingId(avatarId);
+    setFavorites((prev) => {
+      const next = new Set(prev);
+      if (isFav) next.delete(avatarId);
+      else next.add(avatarId);
+      return next;
+    });
+    try {
+      if (isFav) {
+        await apiClient.delete(`/studio/avatars/favorites/${encodeURIComponent(avatarId)}`);
+      } else {
+        await apiClient.post("/studio/avatars/favorites", { avatar_id: avatarId });
+      }
+    } catch {
+      setFavorites((prev) => {
+        const next = new Set(prev);
+        if (isFav) next.add(avatarId);
+        else next.delete(avatarId);
+        return next;
+      });
+    } finally {
+      setFavTogglingId(null);
+    }
+  };
+
   const filtered = useMemo(() => {
     let list = avatars;
+    // Favorites tab: only avatars in the favorites Set (no aspect/gender
+    // filters applied — favorites surface across all aspects so the user
+    // doesn't lose their pins when flipping between 9:16 and 16:9).
+    if (tab === "favorites") {
+      list = list.filter((a) => favorites.has(a.id));
+      if (search) {
+        const q = search.toLowerCase();
+        list = list.filter((a) => (a.name || "").toLowerCase().includes(q));
+      }
+      return list;
+    }
     if (tab !== "all") list = list.filter((a) => a.gender === tab);
     // 9:16 is strict: ONLY truly portrait-framed avatars (no "both"). "Both"
     // is a permissive bucket that leaked sit/wide-pose avatars into 9:16
@@ -48,10 +103,18 @@ export function AvatarPicker({ open, onClose, value, onPick, currentAspect = "9_
       const q = search.toLowerCase();
       list = list.filter((a) => (a.name || "").toLowerCase().includes(q));
     }
+    // Pin favorites to the top of every non-favorites tab. Stable sort.
+    if (favorites.size > 0) {
+      list = [
+        ...list.filter((a) => favorites.has(a.id)),
+        ...list.filter((a) => !favorites.has(a.id)),
+      ];
+    }
     return list;
-  }, [avatars, tab, aspectFilter, search]);
+  }, [avatars, tab, aspectFilter, search, favorites]);
 
   const tabs = [
+    { id: "favorites", label: "★", title: `Favorites${favorites.size ? ` (${favorites.size})` : ""}` },
     { id: "all", label: "All" },
     { id: "female", label: "Female" },
     { id: "male", label: "Male" },
@@ -73,7 +136,8 @@ export function AvatarPicker({ open, onClose, value, onPick, currentAspect = "9_
                 className={`modal-tab ${tab === t.id ? "is-active" : ""}`}
                 data-testid={`avatar-tab-${t.id}`}
                 onClick={() => setTab(t.id)}
-              >{t.label}</button>
+                title={t.title || t.label}
+              >{t.label}{t.id === "favorites" && favorites.size > 0 ? ` ${favorites.size}` : ""}</button>
             ))}
           </div>
           <select
@@ -81,6 +145,7 @@ export function AvatarPicker({ open, onClose, value, onPick, currentAspect = "9_
             data-testid="avatar-aspect-filter"
             value={aspectFilter}
             onChange={(e) => setAspectFilter(e.target.value)}
+            disabled={tab === "favorites"}
           >
             <option value="all">Any aspect</option>
             <option value="9_16">9:16 vertical</option>
@@ -100,8 +165,10 @@ export function AvatarPicker({ open, onClose, value, onPick, currentAspect = "9_
         <div className="modal-empty">Loading avatars…</div>
       ) : filtered.length === 0 ? (
         <div className="modal-empty" data-testid="avatar-empty">
-          No avatars match these filters.
-          {aspectFilter !== "all" && (
+          {tab === "favorites"
+            ? "No favorite avatars yet — tap the star on any avatar to pin it here."
+            : "No avatars match these filters."}
+          {tab !== "favorites" && aspectFilter !== "all" && (
             <span style={{ display: "block", marginTop: 6, fontSize: 12, opacity: 0.7 }}>
               Switch the aspect filter to "Any aspect" to widen the search.
             </span>
@@ -109,27 +176,45 @@ export function AvatarPicker({ open, onClose, value, onPick, currentAspect = "9_
         </div>
       ) : (
         <div className="avatar-grid" data-testid="avatar-grid">
-          {filtered.map((a) => (
-            <button
-              key={a.id}
-              className={`avatar-card ${value?.id === a.id ? "is-selected" : ""}`}
-              data-testid={`avatar-card-${a.id}`}
-              onClick={() => { onPick(a); onClose(); }}
-            >
-              {a.preview_image_url ? (
-                <img className="avatar-thumb" src={a.preview_image_url} alt={a.name} loading="lazy" />
-              ) : (
-                <div className="avatar-thumb-empty"><ImageIcon size={28} /></div>
-              )}
-              <div className="avatar-meta">
-                <div className="avatar-name">{a.name}</div>
-                <div className="avatar-sub">{a.gender}</div>
-              </div>
-              {value?.id === a.id && (
-                <div className="avatar-check" data-testid={`avatar-check-${a.id}`}><Check size={14} /></div>
-              )}
-            </button>
-          ))}
+          {filtered.map((a) => {
+            const isFav = favorites.has(a.id);
+            return (
+              <button
+                key={a.id}
+                className={`avatar-card ${value?.id === a.id ? "is-selected" : ""} ${isFav ? "is-favorite" : ""}`}
+                data-testid={`avatar-card-${a.id}`}
+                onClick={() => { onPick(a); onClose(); }}
+              >
+                {a.preview_image_url ? (
+                  <img className="avatar-thumb" src={a.preview_image_url} alt={a.name} loading="lazy" />
+                ) : (
+                  <div className="avatar-thumb-empty"><ImageIcon size={28} /></div>
+                )}
+                <div className="avatar-meta">
+                  <div className="avatar-name">{a.name}</div>
+                  <div className="avatar-sub">{a.gender}</div>
+                </div>
+                <button
+                  type="button"
+                  className={`avatar-fav ${isFav ? "is-on" : ""}`}
+                  data-testid={`avatar-fav-${a.id}`}
+                  onClick={(e) => { e.stopPropagation(); toggleFavorite(a.id); }}
+                  aria-label={isFav ? "Remove from favorites" : "Add to favorites"}
+                  aria-pressed={isFav}
+                  title={isFav ? "Remove from favorites" : "Add to favorites"}
+                >
+                  <Star
+                    size={16}
+                    fill={isFav ? "#E0A458" : "none"}
+                    color={isFav ? "#E0A458" : "currentColor"}
+                  />
+                </button>
+                {value?.id === a.id && (
+                  <div className="avatar-check" data-testid={`avatar-check-${a.id}`}><Check size={14} /></div>
+                )}
+              </button>
+            );
+          })}
         </div>
       )}
     </Modal>

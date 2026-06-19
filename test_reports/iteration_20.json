@@ -1,0 +1,46 @@
+{
+  "summary": "Iter-20 — Avatar Favorites end-to-end PASS. Backend: 10/10 pytests pass (auth gating, CRUD with persistence, $addToSet idempotency, 400 on empty avatar_id, cleanup, voice-favs regression). Frontend: full E2E flow verified via Playwright on live preview URL — modal opens with 27 avatar-cards (9:16 filter on), 27 avatar-fav star buttons in top-left, ★ tab present; star click flips to is-on/aria-pressed=true with card.is-favorite WITHOUT closing the modal (stopPropagation works); ★ tab shows only the favorited card with aspect-filter dropdown disabled; reload persists the favorite via backend; pin-to-top on All tab puts the favorite at index 0. Found and FIXED a blocking bug on /api/studio/avatars — httpx timeout=30 was insufficient for HeyGen's 1281-avatar response (upstream takes ~65s), so the cache could never populate and the endpoint always 500'd. Bumped to httpx.Timeout(90,connect=10). After cache warm, public URL serves in <200ms.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/studio/avatars", "issue": "Cold cache fetch from HeyGen takes ~60-65s which exceeds the public ingress 60s limit — first request after a 24h cache expiry will return ingress 502 to the browser even though the backend successfully completes and stores the cache. Backend httpx timeout fixed (30→90s) so the cache write succeeds; subsequent public calls are then served from cache in <200ms. Consider adding a startup task / cron that warms heygen_avatars_v2 + heygen_voices in the background so users never see a cold-miss latency."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "AvatarPicker modal", "issues": ["React console warning: validateDOMNesting — <button class='avatar-fav'> is nested inside the avatar-card <button>. Functionally works (stopPropagation handles the event correctly) but invalid HTML. Replace the outer <button class='avatar-card'> with a <div role='button' tabIndex={0}> + onKeyDown handler, or render the star OUTSIDE the card button as an absolutely-positioned sibling."]}
+    ]
+  },
+  "verified_features": {
+    "avatar_favorites_backend": "10/10 PASS — /app/backend/tests/test_avatar_favorites.py. GET /api/studio/avatars/favorites returns {favorites:[]}; POST adds idempotently ($addToSet); POST with empty avatar_id returns 400; DELETE removes; all three return 401 without bearer; voice-favs endpoint unaffected.",
+    "avatar_favorites_frontend": "E2E PASS via Playwright on live preview. After login as drcharitycampbell@gmail.com + localStorage f48_studio_mode_chosen=1, clicking [data-testid=mode-avatar] then [data-testid=chip-avatar] opens the picker with 27 cards (filtered by default 9:16). Each card has [data-testid=avatar-fav-{id}] in top-LEFT and the picker has [data-testid=avatar-tab-favorites]. Click star -> btnClass='avatar-fav is-on', aria-pressed='true', card class includes 'is-favorite', modal stays open (stopPropagation verified). Switch to ★ tab -> exactly 1 card visible, aspect <select> .disabled=true. Reload page + reopen picker + ★ tab -> favorite persisted via backend (card still there, star still is-on). Switch to All tab -> favorited Abigail card is first in grid with is-favorite class (pin-to-top). Search 'abigail' regression filters by name. Final unfavorite empties ★ tab.",
+    "studio_avatars_endpoint_fix": "BUG FOUND + FIXED — /api/studio/avatars 500'd every request due to httpx ReadTimeout=30 against HeyGen's slow /v2/avatars upstream (measured ~65s for 1281 avatars, 512KB payload). Changed timeout to httpx.Timeout(90, connect=10) in _heygen_get. Cache now populates correctly; subsequent serve from Mongo cache.db in 20ms locally / <200ms via public URL."
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_avatar_favorites.py",
+    "/app/test_reports/pytest/iteration_20_avatar_favorites.xml"
+  ],
+  "action_items": [
+    "Optional: add a startup or scheduled task to pre-warm heygen_avatars_v2 / heygen_voices cache so the first user of the day doesn't hit a 60s+ HeyGen cold call (currently the public ingress can 502 even though backend completes).",
+    "Fix React validateDOMNesting warning in AvatarPicker — refactor either the card or the star to not be a <button> inside a <button> (semantic + a11y win)."
+  ],
+  "critical_code_review_comments": [
+    "Pickers.jsx is now ~800 LOC with VoicePicker + AvatarPicker sharing near-identical favorites logic (favorites Set, favTogglingId, favoritesLoadedRef, toggleFavorite, pin-to-top sort, fav-tab gating). Extract a useFavorites(endpoint) custom hook to dedupe. The favorites loading effect is duplicated almost line-for-line between the two pickers.",
+    "Backend: avatar-favorites and voice-favorites endpoints share 95% identical code (4 endpoints × ~12 lines each = 48 LOC of near-duplication on db.buyers updates with the same $addToSet/$pull/$setOnInsert/$set shape). Factor into a single _toggle_favorite(field, value) helper.",
+    "_heygen_get is the only HeyGen client wrapper and is now used by /avatars, /voices, render polling, etc. The 90s timeout is conservative for /avatars but excessive for the latency-sensitive render-status polls. Consider passing per-call timeout overrides.",
+    "Cache miss UX: the AvatarPicker modal shows 'Loading avatars...' for 60+ seconds on first call of the day with no progress indicator or error fallback. Add a 502/timeout retry banner so users don't think the app is broken."
+  ],
+  "updated_files": [
+    "/app/backend/server.py (httpx timeout bump in _heygen_get: 30s -> httpx.Timeout(90.0, connect=10.0) to handle HeyGen's slow /v2/avatars upstream for 1281-avatar payload)",
+    "/app/backend/tests/test_avatar_favorites.py (new — 10 tests mirroring the iter-19 voice-favorites suite: auth gating, CRUD with persistence, $addToSet idempotency, 400-on-empty, cleanup, voice-favs regression)"
+  ],
+  "success_rate": {"backend": "100% (10/10 avatar-favs pytests + voice-favs regression intact)", "frontend": "100% (avatar favorites full E2E flow including reload persistence + pin-to-top + stopPropagation verified)"},
+  "test_credentials": "Admin: drcharitycampbell@gmail.com (DEV_BYPASS, isAdmin via ADMIN_EMAILS, studio entitlement).",
+  "seed_data_creation": "Test temporarily added avatar_id 'Abigail_expressive_2024112501' to drcharitycampbell@gmail.com favorites, then cleaned up at end (verified via DELETE -> GET returns {favorites:[]}). Pytest TEST_avatar_pytest_iter20 / _b cleaned up by test_cleanup.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Avatar Favorites parallels voice favorites: db.buyers.favorite_avatars array, $addToSet/$pull, studio-entitlement gated, returns {favorites:[]} on GET and {ok:true} on mutations. Frontend testids: avatar-tab-favorites (★ tab at index 0), avatar-fav-{id} star button on every card (top-LEFT, opposite to .avatar-check select indicator at top-right). The card class toggles to 'is-favorite' and the star to 'avatar-fav is-on' + aria-pressed='true' when active. ★ tab disables the aspect-filter dropdown so favorites surface across all aspects. CRITICAL infra note: /api/studio/avatars has a 60s+ HeyGen cold-fetch latency that can exceed the public ingress 60s cap — fixed the backend httpx timeout but the ingress race remains; if the cache key 'heygen_avatars_v2' expires (24h TTL), the next public call may 502 even though the backend completes successfully and writes the cache. Workaround: hit http://localhost:8001/api/studio/avatars to warm the cache, or wait and retry. Pytest cmd: `REACT_APP_BACKEND_URL=https://f2f48-video-engine.preview.emergentagent.com python -m pytest /app/backend/tests/test_avatar_favorites.py -v` (~2.4s when cached).",
+  "rca of the issue": "Pre-existing /api/studio/avatars bug surfaced during this iter's frontend test: httpx.AsyncClient(timeout=30) in _heygen_get() at server.py L313 was too tight for HeyGen v2 /avatars which returns 1281 avatars (~512KB) in ~65s. Result: every cache-miss request raised httpx.ReadTimeout -> 500 from FastAPI -> 'Loading avatars...' forever in the picker. Reproduction: GET /api/studio/avatars with valid bearer when cache is empty -> consistent 500 at ~30s. Mitigation applied: raised timeout to httpx.Timeout(90, connect=10) -- enough headroom for HeyGen's measured 65s. Side-effect on public ingress: first cold request from the browser will still get a 502 if it crosses the ingress 60s cap, but the backend now completes and writes the cache, so the second request succeeds in <200ms. Long-term fix recommended: background pre-warm of the HeyGen avatars/voices caches on backend startup."
+}

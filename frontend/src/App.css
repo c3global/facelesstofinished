@@ -1060,6 +1060,27 @@
   display: inline-flex; align-items: center; justify-content: center;
   box-shadow: 0 4px 10px var(--accent-ring);
 }
+/* Favorite star toggle on avatar cards — top-left corner so it doesn't
+   collide with the top-right .avatar-check selected indicator. Same gold
+   amber tint (#E0A458) as the voice-fav button for visual consistency. */
+.avatar-fav {
+  position: absolute; top: 8px; left: 8px;
+  width: 28px; height: 28px;
+  border-radius: 999px;
+  background: rgba(15, 10, 30, 0.6);
+  backdrop-filter: blur(4px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.85);
+  display: inline-flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  transition: color .15s, background .15s, border-color .15s, transform .12s;
+  z-index: 2;
+}
+.avatar-fav:hover { color: #E0A458; border-color: rgba(224, 164, 88, 0.55); background: rgba(15, 10, 30, 0.78); }
+.avatar-fav:active { transform: scale(0.92); }
+.avatar-fav.is-on { color: #E0A458; border-color: rgba(224, 164, 88, 0.7); background: rgba(15, 10, 30, 0.75); }
+.avatar-card.is-favorite { border-color: rgba(224, 164, 88, 0.4); }
+.avatar-card.is-favorite:hover { border-color: rgba(224, 164, 88, 0.6); }
 
 /* voice list */
 .voice-list { display: flex; flex-direction: column; gap: 6px; }
