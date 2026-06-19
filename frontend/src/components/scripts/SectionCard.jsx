@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Copy, ChevronDown } from "lucide-react";
 import ReactMarkdown from "react-markdown";
+import { renderToStaticMarkup } from "react-dom/server";
 import remarkGfm from "remark-gfm";
 
 export const SECTION_LABEL = {
@@ -12,7 +13,122 @@ export const SECTION_LABEL = {
   titleVariants: "Title / Thumbnail Variants", coverPrompts: "Cover Image Prompts",
 };
 
-export function CopyButton({ text, testid }) {
+// Regex that captures a bracketed B-roll cue like [B-ROLL: pouring espresso].
+const BROLL_RE = /\[B-ROLL:[^\]]*\]/gi;
+// Regex for narration scene headers like [HOOK — 0:00–0:30] or
+// [INTRO BRIDGE — 0:30–1:00]. Match all-caps text inside brackets followed
+// optionally by an em-dash and timecode. Excludes B-ROLL so they don't double-match.
+const SCENE_HEADER_RE = /^\s*\[(?!B-ROLL)([A-Z0-9 +,&'#–—\-:]{2,}(?:\s*[—-]\s*\d[\d:–\- ]*)?)\]\s*$/;
+
+// Wrap B-roll cues in styled spans inside any inline children. Walks the
+// children array; for each string, splits on BROLL_RE and wraps matches.
+function wrapBrollInChildren(children) {
+  return React.Children.toArray(children).flatMap((child, i) => {
+    if (typeof child !== "string") return [child];
+    const parts = child.split(BROLL_RE);
+    const matches = child.match(BROLL_RE) || [];
+    const out = [];
+    parts.forEach((part, idx) => {
+      if (part) out.push(part);
+      if (matches[idx]) {
+        out.push(
+          <span key={`broll-${i}-${idx}`} className="broll-cue">
+            {matches[idx]}
+          </span>
+        );
+      }
+    });
+    return out;
+  });
+}
+
+// Recursively pull plain text out of React children — handles strings,
+// arrays, and elements with .props.children. Used by the scene-header
+// detector below since Claude often emits headers wrapped in **bold**
+// (which becomes a nested <strong> element, not a top-level string).
+function extractText(node) {
+  if (node == null || typeof node === "boolean") return "";
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(extractText).join("");
+  if (node.props && node.props.children !== undefined) return extractText(node.props.children);
+  return "";
+}
+
+const mdComponents = {
+  p({ node, children, ...props }) {
+    // Detect a scene-header paragraph (bracketed all-caps), promote to
+    // styled h-mini. Works even when Claude wraps it in **bold**.
+    const text = extractText(children).trim();
+    if (SCENE_HEADER_RE.test(text)) {
+      return <p className="scene-header" {...props}>{text}</p>;
+    }
+    return <p {...props}>{wrapBrollInChildren(children)}</p>;
+  },
+  li({ node, children, ...props }) {
+    // Unconditional: if any child is a <p>-like wrapper, hoist its inner
+    // children up so '1.' + content render on a single line. react-markdown
+    // v10 turns single-paragraph li-children into a <p> by default — this
+    // strips that wrapper everywhere it appears.
+    const out = React.Children.toArray(children).flatMap((c) => {
+      if (typeof c === "string") return [c];
+      if (React.isValidElement(c)) {
+        const isPara =
+          c.type === "p" ||
+          c.props?.node?.type === "paragraph" ||
+          // Our overridden <p> renders as a real <p> too. Detect by checking
+          // for the className the override sets (none on plain paragraphs).
+          (c.props?.className == null && c.props?.children != null);
+        if (isPara) return React.Children.toArray(c.props.children);
+      }
+      return [c];
+    });
+    return <li {...props}>{wrapBrollInChildren(out)}</li>;
+  },
+};
+
+// Convert section markdown → HTML string for the clipboard's text/html slot.
+// Uses the SAME ReactMarkdown configuration so what the user pastes matches
+// what they see on screen (headings preserved, B-roll cues highlighted).
+function markdownToHtml(md) {
+  try {
+    return renderToStaticMarkup(
+      <div>
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+          {md}
+        </ReactMarkdown>
+      </div>
+    );
+  } catch {
+    return `<pre>${(md || "").replace(/&/g, "&amp;").replace(/</g, "&lt;")}</pre>`;
+  }
+}
+
+// Best-effort dual-format clipboard write. Falls back to plain-text on
+// browsers that don't support ClipboardItem (older Safari, Firefox <94).
+async function copyRichText(plain, html) {
+  try {
+    if (window.ClipboardItem && navigator.clipboard?.write) {
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          "text/plain": new Blob([plain], { type: "text/plain" }),
+          "text/html": new Blob([html], { type: "text/html" }),
+        }),
+      ]);
+      return true;
+    }
+    await navigator.clipboard.writeText(plain);
+    return true;
+  } catch {
+    try {
+      await navigator.clipboard.writeText(plain);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+export function CopyButton({ text, html, testid }) {
   const [copied, setCopied] = useState(false);
   return (
     <button
@@ -21,11 +137,12 @@ export function CopyButton({ text, testid }) {
       data-testid={testid}
       onClick={async (e) => {
         e.stopPropagation();
-        try {
-          await navigator.clipboard.writeText(text);
+        const richHtml = html || markdownToHtml(text);
+        const ok = await copyRichText(text, richHtml);
+        if (ok) {
           setCopied(true);
           setTimeout(() => setCopied(false), 1500);
-        } catch {}
+        }
       }}
     >
       <Copy size={12} /> {copied ? "Copied!" : "Copy"}
@@ -86,7 +203,9 @@ export function SectionCard({ keyName, section, testid, revealIndex, collapsed =
       </header>
       {!collapsed && (
         <div className="section-card-body markdown">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{section.body}</ReactMarkdown>
+          <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+            {section.body}
+          </ReactMarkdown>
         </div>
       )}
     </section>
@@ -106,3 +225,7 @@ export function SkeletonCard({ keyName }) {
     </section>
   );
 }
+
+// Re-export the markdown→HTML helper so the "Copy full script" button in
+// Scripts.jsx can write rich HTML alongside plain text.
+export { markdownToHtml, copyRichText };

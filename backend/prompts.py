@@ -59,12 +59,15 @@ def build_long_system_prompt(
 ) -> str:
     t = LENGTH_TARGETS.get(length, LENGTH_TARGETS["medium"])
     hook_section = """### 🪝 HOOK VARIATIONS
-Write 5 distinct opening hooks (each 2–3 sentences) for the LOCKED angle. Label each with the style in brackets:
-1. [Curiosity Gap] — [hook text]
-2. [Bold Claim] — [hook text]
-3. [Story Opener] — [hook text]
-4. [Stat Punch] — [hook text]
-5. [Question] — [hook text]
+Write 5 distinct opening hooks (each 2–3 sentences) for the LOCKED angle. Format each on a SINGLE LINE with no blank line between the number prefix and the body — use this exact pattern so markdown renders cleanly:
+
+**Hook 1 — [Curiosity Gap]:** [hook text]
+**Hook 2 — [Bold Claim]:** [hook text]
+**Hook 3 — [Story Opener]:** [hook text]
+**Hook 4 — [Stat Punch]:** [hook text]
+**Hook 5 — [Question]:** [hook text]
+
+Separate hooks with ONE blank line. Do NOT use ordered-list syntax (`1.`, `2.`) — write them as bolded standalone paragraphs exactly as shown above.
 
 """ if include_hooks else ""
     broll_section = """### 🎥 B-ROLL SHOT LIST

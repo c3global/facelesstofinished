@@ -1682,13 +1682,18 @@
 }
 
 /* ---------- Markdown rendering inside section cards ---------- */
-.markdown { font-size: 14px; line-height: 1.7; color: var(--text); }
-.markdown p { margin: 0 0 12px; }
+.markdown { font-size: 14px; line-height: 1.55; color: var(--text); white-space: normal; }
+.markdown p { margin: 0 0 7px; }
 .markdown p:last-child { margin-bottom: 0; }
 .markdown strong { font-weight: 700; color: var(--text); }
 .markdown em { font-style: italic; }
-.markdown ul, .markdown ol { margin: 0 0 12px; padding-left: 22px; }
-.markdown li { margin-bottom: 4px; }
+.markdown ul, .markdown ol { margin: 0 0 8px; padding-left: 22px; }
+.markdown li { margin-bottom: 2px; }
+/* Critical fix: react-markdown wraps `<li>` content in a `<p>` (block),
+   which pushes the text to a new line below the list marker. Force inline
+   so '1. [Style] — content' flows on a single line. */
+.markdown li > p { margin: 0; display: inline; }
+.markdown li > p + p { display: block; margin-top: 4px; }
 .markdown h1, .markdown h2, .markdown h3, .markdown h4 {
   font-weight: 700; letter-spacing: -0.01em;
   margin: 14px 0 6px;
@@ -1716,6 +1721,46 @@
 .markdown a { color: var(--info); }
 .markdown table { width: 100%; border-collapse: collapse; margin-bottom: 12px; font-size: 13px; }
 .markdown th, .markdown td { border: 1px solid var(--border-soft); padding: 6px 10px; text-align: left; }
+
+/* B-roll cue — green highlight wherever `[B-ROLL: ...]` appears inline in
+   narration or in the dedicated shot-list section. Stands out at-a-glance
+   so editors can scan visual cues without parsing prose. */
+.markdown .broll-cue {
+  color: #4ADE80;
+  background: rgba(74, 222, 128, 0.08);
+  border-left: 2px solid #4ADE80;
+  padding: 2px 8px 2px 10px;
+  margin: 0 2px;
+  border-radius: 0 4px 4px 0;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  word-break: break-word;
+}
+.markdown p .broll-cue {
+  display: inline-block;
+  margin: 2px 0;
+}
+.markdown li .broll-cue {
+  display: inline;
+  border-left: none;
+  padding: 1px 6px;
+}
+
+/* Section dividers inside narration — bracketed all-caps headers like
+   [HOOK — 0:00–0:30] become visually distinct mini-headers. */
+.markdown .scene-header {
+  display: block;
+  font-weight: 700;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 13px;
+  margin: 14px 0 4px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border-soft);
+}
 
 /* ---------- Platform-themed CTA + cards (Shorts only) ---------- */
 .cta-btn.is-platform {

@@ -11,9 +11,22 @@ const KNOWN_SECTION_KEYS = new Set([
   "broll", "notes",
 ]);
 
+// Safety net: occasionally Claude emits ordered-list items with a blank line
+// between the number marker and its bracketed style label, which markdown
+// renders as a number alone on one row and the content on the next. Collapse
+// those back into a single line so the hook list reads cleanly.
+// Match: `1.` (or `1.<space>`), then 1+ blank lines, then `**[Style]**` or `[Style]`.
+function normalizeHookList(text) {
+  return text.replace(
+    /^(\d{1,2})\.\s*\n\s*\n+(\s*\*?\*?\[)/gm,
+    (_, n, rest) => `${n}. ${rest}`,
+  );
+}
+
 export function parseSections(raw) {
   if (!raw) return {};
-  const lines = raw.split("\n");
+  const cleaned = normalizeHookList(raw);
+  const lines = cleaned.split("\n");
   const sections = {};
   let current = null;
   let buffer = [];

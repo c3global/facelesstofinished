@@ -15,6 +15,36 @@ paying customers + entitlements on the existing Netlify backend at
 `https://faceless48.c3global.co/api/auth-me` — the new Studio should call
 back to it for entitlement verification.
 
+## 2026-02-19 — Phase 3.5d: Pinball direct + Script formatting polish
+**Status:** SHIPPED — all visual fixes verified via screenshots; webhook live end-to-end with real token.
+
+**Pinball direct webhook** (`POST /api/pinball/order-completed?token=`):
+- Single URL receives full Pinball.dev order.completed payload — no GHL splitter needed
+- Iterates `data.items[]`, maps each `product_id` to entitlement via `PINBALL_PRODUCT_MAP` env var (defaults to 4 known product IDs)
+- Per-item dedupe via `line_item.id` (so partial refunds stay clean later)
+- Unknown product_ids logged as `webhook_failed` for admin visibility; rest of items still process
+- Token `pb_8f3a72e1c94b5d6028e9f4a17b3c5d8e` set live in `/app/backend/.env`
+- Verified end-to-end: wrong-token→401, real Daniel-style payload→200 granted 4 entitlements, replay→duplicate with no double-charge
+
+**Script Engine formatting overhaul**:
+1. Tightened spacing — line-height 1.7→1.55; paragraph margin 12px→7px; list-item margin 4px→2px
+2. Hook variations rendering bug fixed — react-markdown wraps loose-list `<li>` content in `<p>`, which combined with `.section-card-body { white-space: pre-wrap }` caused literal `\n` between `<li>` and content to render as a visible line break. Fixed by: (a) custom `<li>` renderer that unwraps `<p>` children; (b) `.markdown { white-space: normal }` override on the markdown wrapper
+3. B-roll cues `[B-ROLL: ...]` now styled green with monospace + left border (custom mdast renderer wraps matches in `<span class="broll-cue">`)
+4. Scene headers `[HOOK — 0:00–0:30]`, `[INTRO BRIDGE — ...]` etc auto-detected via regex on extracted text content (recursive children walker handles bolded variants), rendered as styled scene-header paragraphs with accent color + bottom border
+5. Rich HTML clipboard — `Copy Script` button now writes BOTH `text/plain` AND `text/html` via `ClipboardItem` API so pasting into Google Docs preserves headings, formatting, and B-roll cue styling
+6. Prompt updated: hook variations now requested as `**Hook 1 — [Style]:** content` standalone-bold pattern instead of ordered list, sidestepping markdown loose-list quirks for new generations
+
+Files touched:
+- `/app/backend/admin_routes.py` — added `POST /pinball/order-completed` (+~95 lines) + `PINBALL_PRODUCT_MAP` env var loader
+- `/app/backend/.env` — `PINBALL_WEBHOOK_TOKEN` set to real value
+- `/app/backend/prompts.py` — hook variations format change
+- `/app/frontend/src/components/scripts/SectionCard.jsx` — custom `mdComponents` for `<p>` and `<li>`, B-roll/scene-header detection, recursive `extractText`, `markdownToHtml` + `copyRichText` exports
+- `/app/frontend/src/pages/Scripts.jsx` — `copyAll` + `copyAllShorts` use `copyRichText` with HTML payload
+- `/app/frontend/src/utils/parser.js` — `normalizeHookList` regex safety net for any legacy `\d.\n\n[Style]` pattern
+- `/app/frontend/src/App.css` — markdown tightening + `.broll-cue`/`.scene-header` styles + `white-space: normal` override
+
+
+
 ## 2026-02-19 — Phase 3.5c: Script-engine drip + toggles + admin Add-buyer + gold nav
 **Status:** SHIPPED — 17/17 pytests pass (14 admin regression + 3 new streaming/toggle); admin Add-buyer flow verified end-to-end via Playwright.
 

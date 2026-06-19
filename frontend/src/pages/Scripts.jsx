@@ -21,7 +21,7 @@ import {
 } from "../utils/parser";
 import PhoneFrame from "../components/PhoneFrame";
 import Toast from "../components/Toast";
-import { SectionCard, SkeletonCard } from "../components/scripts/SectionCard";
+import { SectionCard, SkeletonCard, markdownToHtml, copyRichText } from "../components/scripts/SectionCard";
 import { AngleCard } from "../components/scripts/AngleCard";
 import ShortPhoneBody from "../components/scripts/ShortPhoneBody";
 import SavedAnglesPanel from "../components/scripts/SavedAnglesPanel";
@@ -640,34 +640,17 @@ export default function Scripts() {
     }
   };
 
-  // ---- Copy all sections (markdown) ----
+  // ---- Copy all sections (markdown + rich HTML for Google Docs) ----
+  // Writes BOTH text/plain and text/html so pasting into Google Docs /
+  // Word / Notion preserves headings, B-roll cue colors, and section
+  // structure. Falls back to plain-text on browsers without ClipboardItem.
   const copyAll = async () => {
     if (!output?.text) return;
-    let copied = false;
-    try {
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(output.text);
-        copied = true;
-      }
-    } catch {
-      /* fall through */
-    }
-    if (!copied) {
-      try {
-        const ta = document.createElement("textarea");
-        ta.value = output.text;
-        ta.setAttribute("readonly", "");
-        ta.style.position = "fixed";
-        ta.style.opacity = "0";
-        document.body.appendChild(ta);
-        ta.select();
-        copied = document.execCommand("copy");
-        document.body.removeChild(ta);
-      } catch {}
-    }
+    const html = markdownToHtml(output.text);
+    const copied = await copyRichText(output.text, html);
     setToast(
       copied
-        ? "Copied entire script."
+        ? "Copied — paste into Google Docs to keep headings + colors."
         : "Copy failed — try selecting & copying manually."
     );
   };
@@ -679,26 +662,8 @@ export default function Scripts() {
   const copyAllShorts = async () => {
     const text = sprintAllToClipboardText(sprintVariants);
     if (!text) return;
-    let ok = false;
-    try {
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(text);
-        ok = true;
-      }
-    } catch {}
-    if (!ok) {
-      try {
-        const ta = document.createElement("textarea");
-        ta.value = text;
-        ta.setAttribute("readonly", "");
-        ta.style.position = "fixed";
-        ta.style.opacity = "0";
-        document.body.appendChild(ta);
-        ta.select();
-        ok = document.execCommand("copy");
-        document.body.removeChild(ta);
-      } catch {}
-    }
+    const html = markdownToHtml(text);
+    const ok = await copyRichText(text, html);
     setToast(
       ok
         ? `Copied all ${sprintVariants.length} Shorts.`
