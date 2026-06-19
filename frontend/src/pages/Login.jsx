@@ -42,39 +42,40 @@ export default function Login() {
 
   return (
     <div className="login-wrap" data-testid="login-page">
-      <div className="login-grid">
-        {/* Brief landing hero — keeps non-customers oriented */}
-        <section className="login-hero" data-testid="login-hero">
-          {/* Hero illustration: device mockup showing the Script Engine in
-              action. Lives in /public so CRA serves it from %PUBLIC_URL%.
-              The wrapper hosts a soft neon radial-glow that sits behind
-              the transparent PNG to give the mockup visual weight. */}
-          <div className="login-hero-image-wrap">
-            <img
-              className="login-hero-image"
-              src={`${process.env.PUBLIC_URL || ""}/login-hero.png`}
-              alt="Faceless to Finished Studio across desktop, laptop, tablet and mobile"
-              data-testid="login-hero-image"
-            />
-          </div>
-          <p className="login-hero-eyebrow">Faceless to Finished</p>
-          <h1 className="login-hero-headline">
-            Hit publish <span className="login-hero-accent">10× faster.</span>
-          </h1>
-          <p className="login-hero-sub">
-            AI-assisted scripts, avatar videos, and faceless renders — purpose-built
-            for Faceless to Finished customers. Sign in with the email you purchased
-            with to access the Studio.
-          </p>
+      <div className="login-stack">
+        {/* Top: full-width centered hero image. Sits ABOVE the 2-col grid
+            so it visually anchors the page; the text + sign-in form sit
+            side-by-side on the same vertical level beneath it. */}
+        <div className="login-hero-image-wrap" data-testid="login-hero-image-wrap">
+          <img
+            className="login-hero-image"
+            src={`${process.env.PUBLIC_URL || ""}/login-hero.png`}
+            alt="Faceless to Finished Studio across desktop, laptop, tablet and mobile"
+            data-testid="login-hero-image"
+          />
+        </div>
 
-          <ul className="login-hero-features">
-            <li className="login-hero-feature">
-              <span className="login-hero-feature-icon"><Zap size={16} /></span>
-              <div>
-                <div className="login-hero-feature-title">Script Engine</div>
-                <div className="login-hero-feature-sub">Long-form + Shorts with topic-angle AI.</div>
-              </div>
-            </li>
+        <div className="login-grid">
+          {/* Brief landing hero text — left column */}
+          <section className="login-hero" data-testid="login-hero">
+            <p className="login-hero-eyebrow">Faceless to Finished</p>
+            <h1 className="login-hero-headline">
+              Hit publish <span className="login-hero-accent">10× faster.</span>
+            </h1>
+            <p className="login-hero-sub">
+              AI-assisted scripts, avatar videos, and faceless renders — purpose-built
+              for Faceless to Finished customers. Sign in with the email you purchased
+              with to access the Studio.
+            </p>
+
+            <ul className="login-hero-features">
+              <li className="login-hero-feature">
+                <span className="login-hero-feature-icon"><Zap size={16} /></span>
+                <div>
+                  <div className="login-hero-feature-title">Script Engine</div>
+                  <div className="login-hero-feature-sub">Long-form + Shorts with topic-angle AI.</div>
+                </div>
+              </li>
             <li className="login-hero-feature">
               <span className="login-hero-feature-icon"><Mic size={16} /></span>
               <div>
@@ -138,6 +139,7 @@ export default function Login() {
             {err && <p className="login-error" data-testid="login-error">{err}</p>}
           </div>
         </form>
+        </div>
       </div>
     </div>
   );

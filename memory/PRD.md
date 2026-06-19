@@ -15,6 +15,22 @@ paying customers + entitlements on the existing Netlify backend at
 `https://faceless48.c3global.co/api/auth-me` — the new Studio should call
 back to it for entitlement verification.
 
+## 2026-02-19 — Phase 3.5k: Login layout restructure (centered hero image on top, text + sign-in side-by-side)
+**Status:** SHIPPED — visually verified.
+
+User feedback: "the image isn't centered at the top of the page. You can enlarge the picture a bit and make the text and sign-in on the same level."
+
+**Changes**
+- Moved the `.login-hero-image-wrap` OUT of the left column and into a new top-level `.login-stack` flex container so the image now sits centered ABOVE both columns instead of inside the left one.
+- Enlarged the image from 520px → 720px max-width (still scales down to 420px on mobile).
+- The hero text (left column) and sign-in card (right column) now sit side-by-side at the same vertical level — `.login-grid { align-items: start }` aligns their top edges so the "FACELESS TO FINISHED" eyebrow on the left visually lines up with the "STUDIO ACCESS" eyebrow on the right.
+- New CSS class `.login-stack` (flex column, centered, gap: 36px) wraps the whole hero — keeps the image and grid as a single visually-cohesive block.
+
+**Files touched**
+- `/app/frontend/src/pages/Login.jsx` — restructured JSX: `.login-stack > [image-wrap + .login-grid > [hero + card]]` (image was previously inside `.login-hero` inside `.login-grid`).
+- `/app/frontend/src/App.css` — new `.login-stack` flex container; `.login-hero-image-wrap` max-width 520→720; `.login-grid { align-items: start }` (was `center`); responsive breakpoint adjusts image to 420px on mobile.
+
+
 ## 2026-02-19 — Phase 3.5j: Login hero polish (new mockup + centered layout + light-mode gradient + neon glow)
 **Status:** SHIPPED — dark mode visually verified, light mode CSS follows existing `[data-theme="light"]` override pattern.
 

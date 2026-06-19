@@ -266,13 +266,22 @@
 }
 
 /* ---------- Login hero (landing-feel left column) ---------- */
+.login-stack {
+  width: 100%;
+  max-width: 1180px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 36px;
+}
 .login-grid {
   width: 100%;
-  max-width: 1080px;
   display: grid;
-  grid-template-columns: 1.1fr 0.9fr;
+  grid-template-columns: 1.05fr 0.95fr;
   gap: 64px;
-  align-items: center;
+  /* Align top edges of both columns so the hero eyebrow lines up with
+     the sign-in card eyebrow — "same level" as the user requested. */
+  align-items: start;
 }
 @media (max-width: 880px) {
   .login-grid {
@@ -289,12 +298,13 @@
 .login-hero-image-wrap {
   /* Wrapper exists solely to host the soft neon glow that sits BEHIND
      the device-mockup PNG. The image itself has a transparent background,
-     so the glow is a layered radial gradient on this wrapper. */
+     so the glow is a layered radial gradient on this wrapper. Lives at the
+     top of the login-stack so the image is centered above both columns. */
   position: relative;
   width: 100%;
-  max-width: 520px;
-  margin: 0 0 28px;
+  max-width: 720px;
   display: flex; justify-content: center;
+  margin: 0 auto;
 }
 .login-hero-image-wrap::before {
   content: "";
@@ -311,13 +321,13 @@
   position: relative;
   z-index: 1;
   width: 100%;
-  max-width: 520px;
+  max-width: 720px;
   height: auto;
   filter: drop-shadow(0 18px 32px rgba(0, 0, 0, 0.4));
 }
 @media (max-width: 880px) {
-  .login-hero-image-wrap { max-width: 360px; }
-  .login-hero-image { max-width: 360px; }
+  .login-hero-image-wrap { max-width: 420px; }
+  .login-hero-image { max-width: 420px; }
 }
 .login-hero-eyebrow {
   font-weight: 600; font-size: 11px;
