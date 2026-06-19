@@ -12,6 +12,7 @@ declarative and import-cycle-free.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -27,6 +28,22 @@ logger = logging.getLogger("f48.admin")
 # Shared secret for Pinball.dev → emergent webhook. Single gate, no HMAC.
 # Same value Netlify uses, so both sides can run in parallel during cutover.
 PINBALL_WEBHOOK_TOKEN = os.environ.get("PINBALL_WEBHOOK_TOKEN", "").strip()
+
+# Pinball product_id → entitlement mapping. JSON map in env var so the
+# user can edit without code changes when she launches new products.
+# Default falls back to Charity's current 4 products.
+DEFAULT_PINBALL_PRODUCT_MAP = {
+    "01ks3pmetahzgx2mfg7q5crs0j": "base",    # Faceless to Finished in 48 (main)
+    "01ks3tjfdy0pmpbkzrj6vtg9r7": "base",    # Niche & Topic Vault (bump → bundled with base)
+    "01ksgx97wad7vcc27ycvw0erg7": "shorts",  # Faceless Shorts (upsell 1)
+    "01kv67kgk9z028tn0hy1kzk92r": "studio",  # Studio Founder Lifetime (upsell 2)
+}
+try:
+    _env_map = os.environ.get("PINBALL_PRODUCT_MAP", "").strip()
+    PINBALL_PRODUCT_MAP = json.loads(_env_map) if _env_map else DEFAULT_PINBALL_PRODUCT_MAP
+except json.JSONDecodeError:
+    logger.warning("PINBALL_PRODUCT_MAP env var is not valid JSON, falling back to defaults")
+    PINBALL_PRODUCT_MAP = DEFAULT_PINBALL_PRODUCT_MAP
 
 # Studio "lifetime" entitlement metadata when granted via Pinball.
 STUDIO_LIFETIME_PERIOD_END = "2099-01-01T00:00:00Z"
@@ -529,5 +546,124 @@ def register_admin_routes(
             raise HTTPException(status_code=400, detail="Malformed JSON")
 
         return await _process_pinball_event(product=product, body=body, source="pinball")
+
+    # ---- Direct Pinball receiver (full payload, one URL) -----------------
+    @api.post("/pinball/order-completed")
+    async def pinball_order_completed(
+        request: Request,
+        token: str = Query(...),
+    ):
+        """Receive the full Pinball.dev `order.completed` webhook payload at
+        a SINGLE URL — no per-product query params required, no GHL forwarder
+        needed. Iterates `data.items[]`, maps each `product_id` to an
+        entitlement via PINBALL_PRODUCT_MAP, and grants each independently
+        (line-item `id` is used as the dedupe key so partial refunds remain
+        clean later). Unknown product_ids are logged as `webhook_failed` and
+        skipped — the rest of the items still process."""
+        # 1) Token gate
+        if not PINBALL_WEBHOOK_TOKEN or token != PINBALL_WEBHOOK_TOKEN:
+            try:
+                body = await request.json()
+            except Exception:
+                body = {"_raw": (await request.body()).decode("utf-8", "replace")[:1000]}
+            await log_activity(
+                "webhook_failed",
+                "",
+                {"reason": "invalid token", "payload": body, "source": "pinball-direct"},
+            )
+            raise HTTPException(status_code=401, detail="Invalid token")
+
+        # 2) Parse
+        try:
+            body = await request.json()
+        except Exception:
+            await log_activity(
+                "webhook_failed",
+                "",
+                {"reason": "malformed json", "source": "pinball-direct"},
+            )
+            raise HTTPException(status_code=400, detail="Malformed JSON")
+
+        data = body.get("data") or {}
+        customer = data.get("customer") or {}
+        email = (customer.get("email") or "").strip().lower()
+        items = data.get("items") or []
+
+        if not email:
+            await log_activity(
+                "webhook_failed",
+                "",
+                {"reason": "missing customer.email", "payload": body, "source": "pinball-direct"},
+            )
+            raise HTTPException(status_code=400, detail="Missing data.customer.email")
+
+        if not isinstance(items, list) or not items:
+            await log_activity(
+                "webhook_failed",
+                email,
+                {"reason": "no items in payload", "payload": body, "source": "pinball-direct"},
+            )
+            raise HTTPException(status_code=400, detail="No data.items in payload")
+
+        # 3) Iterate items, grant per product_id
+        results: list[dict] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            product_id = (item.get("product_id") or "").strip()
+            entitlement = PINBALL_PRODUCT_MAP.get(product_id)
+            line_item_id = (item.get("id") or "").strip()
+            amount = item.get("amount") or 0
+
+            if not entitlement:
+                await log_activity(
+                    "webhook_failed",
+                    email,
+                    {
+                        "reason": "unmapped product_id",
+                        "product_id": product_id,
+                        "product_name": item.get("product_name"),
+                        "item": item,
+                        "source": "pinball-direct",
+                    },
+                )
+                results.append({"product_id": product_id, "status": "unmapped"})
+                continue
+
+            try:
+                result = await _process_pinball_event(
+                    product=entitlement,
+                    body={
+                        "email": email,
+                        "total_amount": str(amount),
+                        "order_id": line_item_id,
+                    },
+                    source="pinball-direct",
+                )
+                results.append({
+                    "product_id": product_id,
+                    "entitlement": entitlement,
+                    **result,
+                })
+            except HTTPException as exc:
+                results.append({
+                    "product_id": product_id,
+                    "entitlement": entitlement,
+                    "status": "error",
+                    "detail": exc.detail,
+                })
+
+        ok_count = sum(1 for r in results if r.get("status") == "ok")
+        dup_count = sum(1 for r in results if r.get("status") == "duplicate")
+        unmapped_count = sum(1 for r in results if r.get("status") == "unmapped")
+        return {
+            "ok": True,
+            "email": email,
+            "items_processed": len(results),
+            "granted": ok_count,
+            "duplicates": dup_count,
+            "unmapped": unmapped_count,
+            "results": results,
+        }
 
     return {"process_pinball_event": _process_pinball_event}
