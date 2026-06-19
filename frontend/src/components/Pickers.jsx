@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Check, Play, Pause, Image as ImageIcon, Film, Sparkles, Layers, Captions, CaptionsOff } from "lucide-react";
+import { Check, Play, Pause, Image as ImageIcon, Film, Sparkles, Layers, Captions, CaptionsOff, Star } from "lucide-react";
 import Modal from "./Modal";
 import { apiClient } from "../App";
 
@@ -148,6 +148,12 @@ export function VoicePicker({ open, onClose, value, onPick, source = "heygen" })
   const [langFilter, setLangFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [playingId, setPlayingId] = useState(null);
+  // Favorites are user-pinned voice ids. Persisted server-side under the
+  // buyer doc so they survive logout/login. Available for HeyGen voices
+  // only (the Kokoro TTS list is only 10 entries — favorites would be
+  // visual noise). Stored as a Set for O(1) lookup during pin sorting.
+  const [favorites, setFavorites] = useState(() => new Set());
+  const [favTogglingId, setFavTogglingId] = useState(null);
   const audioRef = useRef(null);
 
   useEffect(() => {
@@ -160,6 +166,51 @@ export function VoicePicker({ open, onClose, value, onPick, source = "heygen" })
       .catch(() => setVoices([]))
       .finally(() => setLoading(false));
   }, [open, source, voices.length]);
+
+  // Load the user's favorites the first time the picker opens for the
+  // HeyGen voices source. We don't reload every open — favorites mutate
+  // through this picker only, so the in-memory Set is the source of truth
+  // once the initial fetch completes.
+  const favoritesLoadedRef = useRef(false);
+  useEffect(() => {
+    if (!open || source !== "heygen" || favoritesLoadedRef.current) return;
+    favoritesLoadedRef.current = true;
+    apiClient.get("/studio/voices/favorites")
+      .then((r) => setFavorites(new Set(r.data.favorites || [])))
+      .catch(() => {});
+  }, [open, source]);
+
+  // Toggle a voice in/out of the user's favorites. Optimistically updates
+  // the Set; reverts on API failure. Re-clicking the same row before the
+  // first request settles is debounced by the favTogglingId guard.
+  const toggleFavorite = async (voiceId) => {
+    if (!voiceId || favTogglingId === voiceId) return;
+    const isFav = favorites.has(voiceId);
+    setFavTogglingId(voiceId);
+    setFavorites((prev) => {
+      const next = new Set(prev);
+      if (isFav) next.delete(voiceId);
+      else next.add(voiceId);
+      return next;
+    });
+    try {
+      if (isFav) {
+        await apiClient.delete(`/studio/voices/favorites/${encodeURIComponent(voiceId)}`);
+      } else {
+        await apiClient.post("/studio/voices/favorites", { voice_id: voiceId });
+      }
+    } catch {
+      // Revert on failure
+      setFavorites((prev) => {
+        const next = new Set(prev);
+        if (isFav) next.add(voiceId);
+        else next.delete(voiceId);
+        return next;
+      });
+    } finally {
+      setFavTogglingId(null);
+    }
+  };
 
   // stop audio when closing
   useEffect(() => {
@@ -191,7 +242,10 @@ export function VoicePicker({ open, onClose, value, onPick, source = "heygen" })
 
   const filtered = useMemo(() => {
     let list = voices;
-    if (tab === "female" || tab === "male") {
+    // Favorites tab: only voices in the favorites Set.
+    if (tab === "favorites") {
+      list = list.filter((v) => favorites.has(v.id));
+    } else if (tab === "female" || tab === "male") {
       list = list.filter((v) => v.gender === tab);
     } else if (tab === "other") {
       // Show anything that isn't a clean female/male — HeyGen returns these
@@ -203,15 +257,34 @@ export function VoicePicker({ open, onClose, value, onPick, source = "heygen" })
       const q = search.toLowerCase();
       list = list.filter((v) => (v.name || "").toLowerCase().includes(q));
     }
+    // Pin favorites to the top in every tab except the Favorites tab
+    // itself (which is already a favorites-only list). Stable sort so
+    // within each bucket the original API order is preserved.
+    if (tab !== "favorites" && favorites.size > 0) {
+      list = [
+        ...list.filter((v) => favorites.has(v.id)),
+        ...list.filter((v) => !favorites.has(v.id)),
+      ];
+    }
     return list;
-  }, [voices, tab, langFilter, search]);
+  }, [voices, tab, langFilter, search, favorites]);
 
-  const tabs = [
-    { id: "all", label: "All" },
-    { id: "female", label: "Female" },
-    { id: "male", label: "Male" },
-    { id: "other", label: "Neutral" },
-  ];
+  // Tabs adapt per-source. Kokoro TTS has no favorites concept (only 10
+  // voices total) — strip the ⭐ tab there to keep the UI honest.
+  const tabs = source === "heygen"
+    ? [
+        { id: "favorites", label: "★", title: `Favorites${favorites.size ? ` (${favorites.size})` : ""}` },
+        { id: "all", label: "All" },
+        { id: "female", label: "Female" },
+        { id: "male", label: "Male" },
+        { id: "other", label: "Neutral" },
+      ]
+    : [
+        { id: "all", label: "All" },
+        { id: "female", label: "Female" },
+        { id: "male", label: "Male" },
+        { id: "other", label: "Neutral" },
+      ];
 
   return (
     <Modal
@@ -228,7 +301,8 @@ export function VoicePicker({ open, onClose, value, onPick, source = "heygen" })
                 className={`modal-tab ${tab === t.id ? "is-active" : ""}`}
                 data-testid={`voice-tab-${t.id}`}
                 onClick={() => setTab(t.id)}
-              >{t.label}</button>
+                title={t.title || t.label}
+              >{t.label}{t.id === "favorites" && favorites.size > 0 ? ` ${favorites.size}` : ""}</button>
             ))}
           </div>
           <select
@@ -254,41 +328,65 @@ export function VoicePicker({ open, onClose, value, onPick, source = "heygen" })
       {loading ? (
         <div className="modal-empty">Loading voices…</div>
       ) : filtered.length === 0 ? (
-        <div className="modal-empty">No voices match. Try clearing filters.</div>
+        <div className="modal-empty">
+          {tab === "favorites"
+            ? "No favorites yet — tap the star on any voice to pin it here."
+            : "No voices match. Try clearing filters."}
+        </div>
       ) : (
         <div className="voice-list" data-testid="voice-list">
-          {filtered.map((v) => (
-            <div
-              key={v.id}
-              className={`voice-row ${value?.id === v.id ? "is-selected" : ""}`}
-              data-testid={`voice-row-${v.id}`}
-            >
-              <button
-                className="voice-info"
-                style={{ background: "transparent", textAlign: "left", flex: 1 }}
-                onClick={() => { onPick(v); onClose(); }}
-                data-testid={`voice-pick-${v.id}`}
+          {filtered.map((v) => {
+            const isFav = favorites.has(v.id);
+            return (
+              <div
+                key={v.id}
+                className={`voice-row ${value?.id === v.id ? "is-selected" : ""} ${isFav ? "is-favorite" : ""}`}
+                data-testid={`voice-row-${v.id}`}
               >
-                <div className="voice-name">{v.name}</div>
-                <div className="voice-sub">{[v.gender, v.language].filter(Boolean).join(" · ")}</div>
-              </button>
-              <div className="voice-side">
-                {v.preview_audio && (
+                {source === "heygen" && (
                   <button
-                    className={`voice-play ${playingId === v.id ? "is-playing" : ""}`}
-                    data-testid={`voice-play-${v.id}`}
-                    onClick={() => togglePreview(v)}
-                    aria-label="Preview voice"
+                    type="button"
+                    className={`voice-fav ${isFav ? "is-on" : ""}`}
+                    data-testid={`voice-fav-${v.id}`}
+                    onClick={(e) => { e.stopPropagation(); toggleFavorite(v.id); }}
+                    aria-label={isFav ? "Remove from favorites" : "Add to favorites"}
+                    aria-pressed={isFav}
+                    title={isFav ? "Remove from favorites" : "Add to favorites"}
                   >
-                    {playingId === v.id ? <Pause size={14} /> : <Play size={14} />}
+                    <Star
+                      size={16}
+                      fill={isFav ? "#E0A458" : "none"}
+                      color={isFav ? "#E0A458" : "currentColor"}
+                    />
                   </button>
                 )}
-                {value?.id === v.id && (
-                  <div className="avatar-check" style={{ position: "static" }}><Check size={14} /></div>
-                )}
+                <button
+                  className="voice-info"
+                  style={{ background: "transparent", textAlign: "left", flex: 1 }}
+                  onClick={() => { onPick(v); onClose(); }}
+                  data-testid={`voice-pick-${v.id}`}
+                >
+                  <div className="voice-name">{v.name}</div>
+                  <div className="voice-sub">{[v.gender, v.language].filter(Boolean).join(" · ")}</div>
+                </button>
+                <div className="voice-side">
+                  {v.preview_audio && (
+                    <button
+                      className={`voice-play ${playingId === v.id ? "is-playing" : ""}`}
+                      data-testid={`voice-play-${v.id}`}
+                      onClick={() => togglePreview(v)}
+                      aria-label="Preview voice"
+                    >
+                      {playingId === v.id ? <Pause size={14} /> : <Play size={14} />}
+                    </button>
+                  )}
+                  {value?.id === v.id && (
+                    <div className="avatar-check" style={{ position: "static" }}><Check size={14} /></div>
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </Modal>

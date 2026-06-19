@@ -22,7 +22,10 @@ const SCENE_HEADER_RE = /^\s*\[(?!B-ROLL)([A-Z0-9 +,&'#–—\-:]{2,}(?:\s*[—-
 
 // Wrap B-roll cues in styled spans inside any inline children. Walks the
 // children array; for each string, splits on BROLL_RE and wraps matches.
-function wrapBrollInChildren(children) {
+// `inlineStyle` controls whether the inline CSS for clipboard-friendly
+// rendering is applied (true) — defaults to false so the on-screen
+// version uses CSS classes from App.css.
+function wrapBrollInChildren(children, inlineStyle = false) {
   return React.Children.toArray(children).flatMap((child, i) => {
     if (typeof child !== "string") return [child];
     const parts = child.split(BROLL_RE);
@@ -32,9 +35,24 @@ function wrapBrollInChildren(children) {
       if (part) out.push(part);
       if (matches[idx]) {
         out.push(
-          <span key={`broll-${i}-${idx}`} className="broll-cue">
-            {matches[idx]}
-          </span>
+          inlineStyle ? (
+            <span
+              key={`broll-${i}-${idx}`}
+              className="broll-cue"
+              style={{
+                color: "#1D9E75",
+                fontFamily:
+                  "ui-monospace, SFMono-Regular, Menlo, monospace",
+                fontWeight: 600,
+              }}
+            >
+              {matches[idx]}
+            </span>
+          ) : (
+            <span key={`broll-${i}-${idx}`} className="broll-cue">
+              {matches[idx]}
+            </span>
+          )
         );
       }
     });
@@ -86,14 +104,60 @@ const mdComponents = {
   },
 };
 
+// Clipboard variant of mdComponents: identical structure, but injects
+// inline CSS on every styled element so Google Docs / Notion / Word
+// preserve B-roll green + scene-header accent on paste. (External apps
+// strip class-based CSS but honor inline styles.)
+const mdComponentsInline = {
+  p({ node, children, ...props }) {
+    const text = extractText(children).trim();
+    if (SCENE_HEADER_RE.test(text)) {
+      return (
+        <p
+          className="scene-header"
+          style={{
+            color: "#C9956C",
+            fontWeight: 700,
+            textTransform: "uppercase",
+            letterSpacing: "0.04em",
+            borderBottom: "1px solid rgba(201,149,108,0.35)",
+            paddingBottom: "4px",
+            marginTop: "14px",
+          }}
+          {...props}
+        >
+          {text}
+        </p>
+      );
+    }
+    return <p {...props}>{wrapBrollInChildren(children, true)}</p>;
+  },
+  li({ node, children, ...props }) {
+    const out = React.Children.toArray(children).flatMap((c) => {
+      if (typeof c === "string") return [c];
+      if (React.isValidElement(c)) {
+        const isPara =
+          c.type === "p" ||
+          c.props?.node?.type === "paragraph" ||
+          (c.props?.className == null && c.props?.children != null);
+        if (isPara) return React.Children.toArray(c.props.children);
+      }
+      return [c];
+    });
+    return <li {...props}>{wrapBrollInChildren(out, true)}</li>;
+  },
+};
+
 // Convert section markdown → HTML string for the clipboard's text/html slot.
-// Uses the SAME ReactMarkdown configuration so what the user pastes matches
-// what they see on screen (headings preserved, B-roll cues highlighted).
+// Uses the INLINE-STYLED ReactMarkdown configuration so what the user
+// pastes into Google Docs / Notion / Word preserves the B-roll green
+// and scene-header accent colors. (External apps strip class-based CSS
+// but honor inline `style="..."` attributes.)
 function markdownToHtml(md) {
   try {
     return renderToStaticMarkup(
       <div>
-        <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponentsInline}>
           {md}
         </ReactMarkdown>
       </div>

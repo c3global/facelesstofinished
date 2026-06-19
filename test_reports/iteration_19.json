@@ -1,0 +1,32 @@
+{
+  "summary": "Iteration 19 — Verified both features from this session: (1) Voice Favorites end-to-end works — star toggles persist via backend, ★ tab visible only for HeyGen, 2329 voices loaded, favorite restores across page reload. (2) B-roll rich-text clipboard fix verified at code level — mdComponentsInline emits inline style='color:#1D9E75' on broll-cue spans and color:#C9956C on scene-header paragraphs, used exclusively by markdownToHtml() which feeds the clipboard text/html payload. 10/10 new backend pytests pass against live preview URL (auth gating, CRUD with persistence, idempotency, 400 on empty voice_id, cleanup, and voice-list regression with 2300+ voices intact).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "verified_features": {
+    "voice_favorites_backend": "10/10 PASS — /app/backend/tests/test_voice_favorites.py: auth gating (401 on all 3 endpoints without bearer), GET returns favorites array, POST adds + GET shows it, POST is idempotent ($addToSet), POST with empty voice_id returns 400, DELETE removes + GET no longer shows it, cleanup. Voice list regression: /api/studio/voices still returns 2300+ voices with id/name/gender/language fields.",
+    "voice_favorites_frontend": "PASS via Playwright — login as drcharitycampbell@gmail.com, navigate to /studio, click [data-testid=mode-avatar], click [data-testid=chip-voice], modal opens with 2329 [data-testid=voice-fav-*] star buttons and exactly 1 [data-testid=voice-tab-favorites] ★ tab. Click first star -> class becomes 'voice-fav is-on' + aria-pressed=true. Switch to ★ tab -> only 1 voice shown (the favorited one). Reload page, re-open picker, click ★ tab -> SAME voice still favorited (class still 'voice-fav is-on', persistence confirmed). Unfavorite -> ★ tab empties. No console errors thrown during the flow.",
+    "broll_clipboard_inline_styles_code_review": "PASS via code inspection of /app/frontend/src/components/scripts/SectionCard.jsx: (1) wrapBrollInChildren(children, true) at lines 38-50 emits <span className='broll-cue' style={{color:'#1D9E75', fontFamily:'ui-monospace,...', fontWeight:600}}>. (2) mdComponentsInline.p at lines 114-131 detects scene-header via SCENE_HEADER_RE and emits <p className='scene-header' style={{color:'#C9956C', fontWeight:700, textTransform:'uppercase', letterSpacing:'0.04em', borderBottom:'1px solid rgba(201,149,108,0.35)', paddingBottom:'4px', marginTop:'14px'}}>. (3) markdownToHtml() at lines 156-168 wires mdComponentsInline into renderToStaticMarkup, and the copyRichText path at line 204 uses richHtml=markdownToHtml(text) for the clipboard's text/html slot. On-screen rendering inside SectionCard.body continues to use the class-only mdComponents (no inline styles) — the split is correct.",
+    "scripts_page_loads_clean": "PASS — /scripts route loads with zero error elements present in DOM."
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_voice_favorites.py",
+    "/app/test_reports/pytest/iteration_19_favorites.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Pickers.jsx VoicePicker remains coupled — the favorites feature is correctly gated to source==='heygen', but the same modal component handles HeyGen + Kokoro pickers via a single 800+ line component. Worth splitting into HeygenVoicePicker + KokoroVoicePicker now that they have diverging feature sets.",
+    "Backend /api/studio/voices/favorites endpoints store favorites on the buyers collection — for non-buyer users (admins without a buyer doc), upsert creates a buyer record with source='studio'. That's fine functionally but inflates the buyers admin-list. Consider a dedicated db.user_prefs collection keyed by email so admin Buyers table stays clean.",
+    "SectionCard.jsx now carries TWO ReactMarkdown component maps (mdComponents + mdComponentsInline) with near-duplicate code (~75 LOC duplicated between the on-screen and clipboard variants). Refactor by extracting a buildMdComponents(inlineStyle) factory that returns one of the two variants — currently any future fix to li-hoisting logic has to be applied in two places.",
+    "B-roll/scene-header colors (#1D9E75 / #C9956C) are inlined as string literals across SectionCard.jsx AND probably duplicated in App.css. Hoist to a small shared constants file (e.g. /app/frontend/src/components/scripts/colors.js) so a single change updates both the on-screen and clipboard payloads."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_voice_favorites.py (new — 10 tests covering auth + CRUD + persistence + idempotency + voices list regression)"
+  ],
+  "success_rate": {"backend": "100% (10/10 favorites pytests + 2300+ voices regression intact)", "frontend": "100% (Voice Favorites end-to-end PASS including reload-persistence; B-roll inline-style fix verified at code level)"},
+  "test_credentials": "Admin: drcharitycampbell@gmail.com (DEV_BYPASS, isAdmin via ADMIN_EMAILS, all entitlements).",
+  "seed_data_creation": "Test added voice_id 'f38a635bee7a4d1f9b0a654a31d050d2' to drcharitycampbell@gmail.com favorites then unfavorited it — net-zero leftover. Pytest TEST_voice_pytest_iter19 / _b are cleaned up by test_cleanup at end of suite.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Voice favorites feature: backend uses db.buyers.favorite_voices array with $addToSet/$pull, gated by studio entitlement, returns {favorites:[]} list and {ok:true} on mutations. Frontend testids added in iter19: voice-tab-favorites (★ tab), voice-fav-{voice_id} on every star button. Star class toggles to 'voice-fav is-on' + aria-pressed='true' when active. Favorites persist via backend GET on picker first-open. The B-roll clipboard fix path is: SectionCard.jsx -> Copy button -> copyRichText() -> markdownToHtml(text) -> renderToStaticMarkup(<ReactMarkdown components={mdComponentsInline}>). To functionally e2e the clipboard you'd need to generate a real script via /api/scripts/angles + /api/scripts/long (~$0.10 Claude spend) then click Copy and call navigator.clipboard.read() — code-level review here was sufficient and avoided the cost. Pytests to run: `REACT_APP_BACKEND_URL=https://f2f48-video-engine.preview.emergentagent.com python -m pytest /app/backend/tests/test_voice_favorites.py -v` (3.4s).",
+  "rca of the issue": "No bugs found. Both iteration-19 features ship clean."
+}
