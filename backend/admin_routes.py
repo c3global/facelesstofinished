@@ -48,6 +48,77 @@ except json.JSONDecodeError:
 # Studio "lifetime" entitlement metadata when granted via Pinball.
 STUDIO_LIFETIME_PERIOD_END = "2099-01-01T00:00:00Z"
 
+
+# ---------------------------------------------------------------------------
+# Lenient payload extractors — Pinball / GHL webhooks ship the same
+# *semantic* data under different *shapes* depending on which workflow node
+# fires (raw checkout, OTO, replay, etc). The legacy Netlify handler
+# (/app/legacy_netlify/netlify/functions/pinball-webhook.mjs) accepted six
+# email paths + four items paths + six order-id paths. We mirror that
+# tolerance here so workflows that worked on Netlify keep working on Emergent
+# without any Pinball-side reconfiguration.
+# ---------------------------------------------------------------------------
+def _extract_email(p: dict) -> str:
+    paths = [
+        ("customer", "email"),
+        ("data", "customer", "email"),
+        ("data", "email"),
+        ("order", "customer", "email"),
+        ("data", "order", "customer", "email"),
+        ("email",),
+        ("contact", "email"),
+        ("data", "contact", "email"),
+    ]
+    for path in paths:
+        node = p
+        for key in path:
+            if not isinstance(node, dict):
+                node = None
+                break
+            node = node.get(key)
+        if isinstance(node, str) and node.strip():
+            return node.strip().lower()
+    return ""
+
+
+def _extract_items(p: dict) -> list:
+    for path in [
+        ("items",),
+        ("data", "items"),
+        ("order", "items"),
+        ("data", "order", "items"),
+    ]:
+        node = p
+        for key in path:
+            if not isinstance(node, dict):
+                node = None
+                break
+            node = node.get(key)
+        if isinstance(node, list) and node:
+            return node
+    return []
+
+
+def _extract_order_id(p: dict) -> str:
+    for path in [
+        ("order", "id"),
+        ("data", "order", "id"),
+        ("order_id",),
+        ("data", "order_id"),
+        ("id",),
+        ("data", "id"),
+    ]:
+        node = p
+        for key in path:
+            if not isinstance(node, dict):
+                node = None
+                break
+            node = node.get(key)
+        if node:
+            return str(node).strip()
+    return ""
+
+
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
@@ -584,10 +655,14 @@ def register_admin_routes(
             )
             raise HTTPException(status_code=400, detail="Malformed JSON")
 
-        data = body.get("data") or {}
-        customer = data.get("customer") or {}
-        email = (customer.get("email") or "").strip().lower()
-        items = data.get("items") or []
+        # Parse the FULL Pinball payload. The Pinball workflow may fire under
+        # several different shapes (raw checkout, OTO, replay, etc.) — extract
+        # email/items via the lenient helpers so we match every shape the
+        # legacy Netlify handler accepted. The original strict
+        # `data.customer.email`-only check rejected real Pinball traffic
+        # where the email lived at `customer.email` or `email`.
+        email = _extract_email(body)
+        items = _extract_items(body)
 
         if not email:
             await log_activity(
@@ -595,15 +670,15 @@ def register_admin_routes(
                 "",
                 {"reason": "missing customer.email", "payload": body, "source": "pinball-direct"},
             )
-            raise HTTPException(status_code=400, detail="Missing data.customer.email")
+            raise HTTPException(status_code=400, detail="Missing customer email in payload")
 
-        if not isinstance(items, list) or not items:
+        if not items:
             await log_activity(
                 "webhook_failed",
                 email,
                 {"reason": "no items in payload", "payload": body, "source": "pinball-direct"},
             )
-            raise HTTPException(status_code=400, detail="No data.items in payload")
+            raise HTTPException(status_code=400, detail="No items in payload")
 
         # 3) Iterate items, grant per product_id
         results: list[dict] = []

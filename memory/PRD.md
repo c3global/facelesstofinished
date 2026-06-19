@@ -15,6 +15,28 @@ paying customers + entitlements on the existing Netlify backend at
 `https://faceless48.c3global.co/api/auth-me` — the new Studio should call
 back to it for entitlement verification.
 
+## 2026-02-19 — Phase 3.5m: CRITICAL Pinball webhook fix — Emergent rejected real Pinball traffic
+**Status:** SHIPPED — 34/34 backend pytests PASS (8 new + 26 regression).
+
+**Customer-facing bug**: Live Pinball workflow tested webhooks to Emergent vs Netlify — Netlify accepted the payload and granted entitlements (`{"ok":true,"email":"test@test2.com","results":[{"product":"base","action":"granted"}]}`), but Emergent returned `400 {"detail":"Missing data.customer.email"}` for the SAME payload. Result: no buyer auto-provisioning from Pinball orders on production.
+
+**Root cause**: `/api/pinball/order-completed` was strict — it only accepted `body.data.customer.email` + `body.data.items`. But Pinball/GHL workflows fire under multiple shapes depending on the workflow node (raw checkout, OTO, replay, etc.). The legacy Netlify handler (`/app/legacy_netlify/netlify/functions/pinball-webhook.mjs`) accepted **6 email paths + 4 items paths**. We were too strict to match the real Pinball traffic.
+
+**Fix** (`admin_routes.py`): added 3 lenient extractor helpers — `_extract_email`, `_extract_items`, `_extract_order_id` — that walk multiple known payload paths in priority order. Mirrors the legacy Netlify tolerance exactly. Now accepts (among others):
+- `data.customer.email` + `data.items` (original strict shape)
+- `customer.email` + `items` (Pinball OTO root shape — THE missing one)
+- `email` + `order.items` (legacy GHL shape)
+- `data.email` + `data.items` (flattened shape)
+- Plus `contact.email`, `data.contact.email`, `data.order.customer.email` (defense-in-depth)
+
+**End-to-end verification**:
+- Pinball workflow → Emergent webhook → buyer auto-created in `db.buyers` → buyer can immediately sign in via the auth-buyers branch from iter-3.5l → frontend gates by their entitlements. Full chain green.
+
+**Files touched**
+- `/app/backend/admin_routes.py` — added `_extract_email`/`_extract_items`/`_extract_order_id` lenient helpers; `pinball_order_completed` now uses them. Error messages updated from "Missing data.customer.email" → "Missing customer email in payload" (more honest since we accept many paths).
+- `/app/backend/tests/test_pinball_webhook_shapes.py` — new pytest file (8 cases: 4 payload shapes accepted, missing-email/items 400s, wrong-token 401, end-to-end sign-in after webhook grant).
+
+
 ## 2026-02-19 — Phase 3.5l: CRITICAL auth fix — admin-granted buyers couldn't sign in
 **Status:** SHIPPED — 26/26 backend pytests PASS (6 new + 20 regression).
 
