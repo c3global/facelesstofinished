@@ -1184,3 +1184,39 @@ The `/api/studio/stock-candidates` endpoint shipped in 3.5q is now mounted in `S
 **Testids:** `fetch-candidates-btn`, `scene-candidates-{i}`, `scene-candidate-{i}-{candidate_id}`, `candidates-err`.
 
 **Why this matters:** users now commit to specific footage *before* paying for a render — eliminates the "I rendered and the stock pick was wrong" failure mode. The B-roll keyword extraction work from 3.5o already made Pexels ranking smart; this UI surfaces that intelligence to the user.
+
+## 2026-02-22c — Phase 3.5s: Kling 2.1 i2v replaces ken-burns (real AI motion)
+
+**Status:** SHIPPED — 10/10 backend pytest PASS, 9/9 frontend Playwright PASS.
+
+After researching the fal.ai compose schema (Keyframe ONLY accepts `{timestamp, duration, url}` — no filter expressions) and discussing with Charity, picked OPTION C: replace ken-burns with **Kling 2.1 standard image-to-video** for real AI motion on Flux scenes.
+
+### What shipped
+- **New `_fal_kling_i2v_generate`** in `server.py` — queue/submit/poll pattern for `fal-ai/kling-video/v2.1/standard/image-to-video`. Submits Flux still URL + prompt; outputs 5s or 10s MP4 with real motion.
+- **`_make_i2v_clip`** cache-first wrapper. Cache key = `sha256(flux_url|aspect|duration_bucket)`. Re-renders → instant. Cache lives in `db.kling_i2v_cache`.
+- **Cascading fallback** — if Kling i2v fails/times out, the render gracefully falls back to ken-burns ffmpeg so a single fal.ai outage can't kill the whole render.
+- **Two engine modes** in the AI Engine picker:
+  - `flux` (default) → Flux still + Kling i2v real motion — ~$0.29/scene
+  - `flux_static` → Flux still + cheap ken-burns — ~$0.04/scene (budget option)
+- **Cost telemetry parity** — both the estimator AND the actual-cost accumulator branch on `ai_engine`. `flux_static` correctly skips the Kling charge in both places.
+- **Frontend** — chip label maps `flux → "Engine · Flux + Kling i2v"`, `flux_static → "Engine · Flux Static"`. Storyboard placeholders display engine-specific subtitles ("AI still + i2v motion", "AI still", "AI video · kling/veo3/pika").
+
+### Files touched
+- `/app/backend/server.py` (+~130 lines: Kling i2v + cache + fallback + estimator)
+- `/app/frontend/src/components/Pickers.jsx` (5 engine options instead of 4)
+- `/app/frontend/src/pages/Studio.jsx` (engine label map + storyboard subtitle)
+- `/app/backend/tests/test_kling_i2v_v23.py` (new — 10 pytests covering estimator, cache hit/write, queue insertion for both engines, T2V regression)
+
+### Testid additions
+`ai-engine-flux_static` (matches existing `ai-engine-flux` etc.).
+
+### Trade-offs
+- Default render cost up from ~$0.04/scene to ~$0.29/scene. Comfortably under the silent $5 backstop for typical 8-scene renders (~$2.30 total).
+- 30-60s extra wall-clock per scene for Kling generation. Cache makes re-renders instant.
+- Old ken-burns path preserved both as the explicit `flux_static` mode AND as the failure fallback for `flux`.
+
+### Backlog (deferred)
+- **P2** TTL index on `db.kling_i2v_cache.cached_at` so stale fal output URLs get re-generated (some FAL CDN URLs expire after ~7 days).
+- **P2** Bump Kling fallback events to a metric counter (`db.kling_i2v_failures`) for admin telemetry on systemic fal outages.
+- **P2** Faceless caption burn-in via fal compose second pass.
+- **P3** Server.py modularization (still 3100+ lines).
