@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { UserCircle2, Mic, Ratio, Film, ChevronDown, Play, Trash2, Sparkles, Wand2, Loader2, RotateCw, Cpu, FolderOpen } from "lucide-react";
+import { UserCircle2, Mic, Ratio, Film, ChevronDown, Play, Trash2, Sparkles, Wand2, Loader2, RotateCw, Cpu, FolderOpen, Image as ImageIcon, Check } from "lucide-react";
 import { apiClient, useAuth } from "../App";
 import {
   AvatarPicker,
@@ -242,6 +242,13 @@ export default function Studio() {
   // the user clicks "Open library" on an "uploaded" source scene. idx -1
   // means just show the library without picking (no scene context).
   const [libraryModal, setLibraryModal] = useState({ open: false, idx: -1 });
+  // 3-thumbnail-per-scene candidates. Map of scene-idx → [{thumb, video_url, source, duration}].
+  // Populated by clicking "Preview clips" — fans out to /api/studio/stock-candidates,
+  // grouped by source so each external API call is dense. Cleared whenever
+  // scenes are regenerated.
+  const [sceneCandidates, setSceneCandidates] = useState({});
+  const [loadingCandidates, setLoadingCandidates] = useState(false);
+  const [candidatesErr, setCandidatesErr] = useState("");
 
   const closeModal = () => setModal(null);
 
@@ -546,10 +553,71 @@ export default function Studio() {
       setSceneOverrides(lines.map(() => ({})));
       autoPromptsRef.current = lines;
       autoWeightsRef.current = weights;
+      // Stale candidates from the previous script are no longer relevant —
+      // the prompt → thumbnail mapping is positional.
+      setSceneCandidates({});
+      setCandidatesErr("");
     } catch (e) {
       setPromptsErr(e?.response?.data?.detail || "Could not generate prompts. Try again.");
     } finally {
       setGeneratingPrompts(false);
+    }
+  };
+
+  // Fetch 3 candidate clips per scene from Pexels/Pixabay. We split the
+  // scene list into one bundle per source (Pexels-batch + Pixabay-batch)
+  // so the backend's fan-out hits each provider once with all queries in
+  // parallel — that's ~2s end-to-end for the typical 5-7 scene case vs
+  // 12+ seconds if we called once per scene.
+  const fetchCandidates = async () => {
+    // Only scenes whose source is pexels/pixabay AND have a prompt.
+    const eligible = scenes
+      .map((s, i) => ({ s, i }))
+      .filter(({ s }) => (s.source === "pexels" || s.source === "pixabay") && s.prompt);
+    if (eligible.length === 0) {
+      setCandidatesErr("No Pexels/Pixabay scenes to preview. Set a stock source on at least one scene first.");
+      return;
+    }
+    setCandidatesErr("");
+    setLoadingCandidates(true);
+    try {
+      const orientation = aspect === "9_16" ? "portrait" : "landscape";
+      const groups = {
+        pexels: eligible.filter(({ s }) => s.source === "pexels"),
+        pixabay: eligible.filter(({ s }) => s.source === "pixabay"),
+      };
+      const reqs = [];
+      for (const src of ["pexels", "pixabay"]) {
+        if (groups[src].length === 0) continue;
+        reqs.push(
+          apiClient.post("/studio/stock-candidates", {
+            prompts: groups[src].map(({ s }) => s.prompt),
+            source: src,
+            orientation,
+          }).then((r) => ({ src, payload: r.data.candidates || [], group: groups[src] }))
+        );
+      }
+      const results = await Promise.all(reqs);
+      const merged = {};
+      for (const { payload, group } of results) {
+        // Backend returns candidates in the same order we sent prompts, with
+        // {idx, prompt, candidates}. Remap each row back to the original
+        // scene index using the group order we preserved.
+        payload.forEach((row) => {
+          const sceneIdx = group[row.idx]?.i;
+          if (sceneIdx !== undefined && row.candidates) {
+            merged[sceneIdx] = row.candidates;
+          }
+        });
+      }
+      setSceneCandidates(merged);
+      if (Object.keys(merged).length === 0) {
+        setCandidatesErr("No candidates returned. Try simpler prompts or a different stock source.");
+      }
+    } catch (e) {
+      setCandidatesErr(e?.response?.data?.detail || "Could not load candidates. Try again.");
+    } finally {
+      setLoadingCandidates(false);
     }
   };
 
@@ -776,6 +844,17 @@ export default function Studio() {
                 {generatingPrompts ? <Loader2 size={12} className="spin" /> : <Wand2 size={12} />}
                 {generatingPrompts ? "Generating…" : "Generate from script"}
               </button>
+              <button
+                type="button"
+                className="generate-prompts-btn is-secondary"
+                data-testid="fetch-candidates-btn"
+                disabled={loadingCandidates || scenes.length === 0}
+                onClick={fetchCandidates}
+                title={scenes.length === 0 ? "Generate prompts first" : "Preview 3 thumbnail candidates per stock scene"}
+              >
+                {loadingCandidates ? <Loader2 size={12} className="spin" /> : <ImageIcon size={12} />}
+                {loadingCandidates ? "Loading…" : "Preview clips"}
+              </button>
               <span className="scene-section-count" data-testid="scene-count">
                 <strong>{sceneLines.length}</strong> {sceneLines.length === 1 ? "scene" : "scenes"}
                 {scenes.length > 0 && scenes.every((s) => s.weight)
@@ -785,6 +864,7 @@ export default function Studio() {
             </div>
           </div>
           {promptsErr && <p className="cta-error" data-testid="prompts-err">{promptsErr}</p>}
+          {candidatesErr && <p className="cta-error" data-testid="candidates-err">{candidatesErr}</p>}
           <textarea
             className="bulk-prompts"
             data-testid="bulk-prompts"
@@ -861,6 +941,45 @@ export default function Studio() {
                       <span style={{ color: "var(--warning)" }}>Pick a source for this scene.</span>
                     )}
                   </div>
+                  {sceneCandidates[i] && sceneCandidates[i].length > 0 && (
+                    <div
+                      className="scene-candidates"
+                      data-testid={`scene-candidates-${i}`}
+                      role="radiogroup"
+                      aria-label={`Choose a clip for scene ${i + 1}`}
+                    >
+                      {sceneCandidates[i].slice(0, 3).map((c) => {
+                        const isPicked = s.pick?.video_url === c.video_url;
+                        return (
+                          <button
+                            type="button"
+                            key={c.id}
+                            role="radio"
+                            aria-checked={isPicked}
+                            className={`scene-candidate ${isPicked ? "is-picked" : ""}`}
+                            data-testid={`scene-candidate-${i}-${c.id}`}
+                            onClick={() => setScenePick(i, c)}
+                            title={isPicked ? "Currently picked" : "Use this clip"}
+                          >
+                            <div className={`scene-candidate-thumb ${aspect === "16_9" ? "is-landscape" : ""}`}>
+                              {c.thumb ? (
+                                <img src={c.thumb} alt="" loading="lazy" />
+                              ) : (
+                                <div className="scene-candidate-noimg"><Film size={20} /></div>
+                              )}
+                              <span className="scene-candidate-src">{c.source === "pexels" ? "Pexels" : "Pixabay"}</span>
+                              {isPicked && (
+                                <span className="scene-candidate-check"><Check size={14} /></span>
+                              )}
+                              {c.duration ? (
+                                <span className="scene-candidate-dur">{Math.round(c.duration)}s</span>
+                              ) : null}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

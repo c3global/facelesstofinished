@@ -1141,3 +1141,46 @@ Two big landings in this iteration. Verified live via `/app/test_reports/iterati
 2. Wire the real fal.ai Kokoro + Flux + ffmpeg compose pipeline
 3. Add the auth cookie-forward path verification once Studio is on `studio.c3global.co`
 4. Port Script Engine + Admin from `/app/legacy_netlify/`
+
+## 2026-02-22 — Phase 3.5q: User uploads UI + voice recording + Flux cache + stock candidates (Bundle Phase 2)
+
+**Status:** SHIPPED — backend 8/8 pytest PASS, frontend 12/13 Playwright PASS (1 PARTIAL — validation-chain ordering by design). Testing agent fixed 2 latent GridFS bugs in `uploads_routes.py`.
+
+### What shipped
+1. **Voice recorder in the TTS Voice modal** — `/app/frontend/src/components/VoiceRecorder.jsx`. Browser-native `MediaRecorder` (webm/opus, 44.1 kHz), live timer, preview before upload, retry. Posts to `POST /api/studio/uploads/voiceover` (GridFS). When set, the Faceless render pipeline silently skips Kokoro TTS and streams the user clip instead.
+2. **Your-media B-roll source** — `/app/frontend/src/components/MediaLibrary.jsx`. Drag-and-drop modal (MP4/MOV/WEBM/PNG/JPG/WEBP/GIF up to 100 MB) + per-scene picker. Adds a 4th option `"uploaded"` to `BRollSourcePicker`; chip label reads "B-Roll · Yours"; scene hint shows "Pick from your library"; storyboard renders a YOU badge.
+3. **`POST /api/studio/stock-candidates`** — new endpoint. Body: `{prompts: [...], source: "pexels"|"pixabay"|"mix", orientation}`. Returns top-3 ranked candidates per prompt with order preserved. Powers a future thumbnail-preview UI (endpoint live; UI deferred — see Backlog).
+4. **Flux content-hash cache** — `db.flux_cache` keyed by `sha256(aspect|prompt)[:32]`. Identical re-renders return the previously generated URL instantly; new prompts write-through. Saves 20-60s on regen flows.
+5. **Render persistence fix** — `user_voiceover_url` is now stored on both `/api/studio/render` and `/api/studio/render/both-aspects` docs (was being passed to the runner but lost on the doc — couldn't be inspected via history).
+
+### Frontend wiring
+- `Studio.jsx`: `userVoiceoverUrl` state, `libraryModal`, validation block requiring a `pick.video_url` on every `uploaded` scene before render-enable.
+- `Pickers.jsx`: `VoicePicker` accepts `userVoiceoverUrl` + `onUserVoiceoverChange` for `source="tts"`. `BRollSourcePicker` has the new "Your media" option.
+- New testids: `voice-recorder-start|stop|play|upload|reset|saved|clear|timer`, `media-library-modal|dropzone|dropzone-btn|file-input|grid|empty|error|card-{id}|pick-{id}|delete-{id}`, `scene-library-{i}`, `broll-uploaded`.
+
+### Bugs fixed by testing agent
+- `GET /api/studio/uploads` was 500-ing — `fs.find()` yields GridOut objects, not dicts. Fix queries `db['uploads.files']` directly.
+- `GET /api/files/{id}` was 500-ing — Motor 3.x's `GridOut.close()` returns `None` synchronously; awaiting it raised `TypeError`. Fix guards on coroutine type.
+
+### Backlog (deferred from this round)
+- **P1** — Push ken-burns + stock-trim into fal.ai compose filter expressions (currently runs locally and bottlenecks CPU).
+- **P1** — Build the 3-thumbnail-per-scene preview UI (endpoint is live; needs frontend grid mounted before "Render").
+- **P2** — Faceless caption burn-in (subtitle pass via fal.ai compose).
+- **P2** — Real composite orchestration (HeyGen avatar + B-roll cutaways).
+- **P2** — Cron sweep purging soft-deleted GridFS docs older than N days.
+- **P3** — Split `server.py` (2800+ lines) into routes/services.
+
+## 2026-02-22b — Phase 3.5r: 3-thumbnail-per-scene preview UI
+
+**Status:** SHIPPED — verified end-to-end via screenshot (Pexels search → 3 ranked thumbs per scene → click-to-pick → storyboard updates).
+
+The `/api/studio/stock-candidates` endpoint shipped in 3.5q is now mounted in `Studio.jsx`:
+- New **"Preview clips"** button next to "Generate from script" (testid `fetch-candidates-btn`).
+- For every Pexels/Pixabay scene, fetches top-3 ranked candidates in parallel (grouped by source — one backend call per provider, not per scene → ~2s vs 12s).
+- Renders a 3-up grid (`scene-candidates`) under each scene-card with source badge, duration, and a purple check on the picked option.
+- Click → calls `setScenePick` → storyboard thumbnail updates instantly → render request uses the chosen `video_url` (skips backend auto-pick).
+- Stale candidates auto-clear when prompts are regenerated.
+
+**Testids:** `fetch-candidates-btn`, `scene-candidates-{i}`, `scene-candidate-{i}-{candidate_id}`, `candidates-err`.
+
+**Why this matters:** users now commit to specific footage *before* paying for a render — eliminates the "I rendered and the stock pick was wrong" failure mode. The B-roll keyword extraction work from 3.5o already made Pexels ranking smart; this UI surfaces that intelligence to the user.

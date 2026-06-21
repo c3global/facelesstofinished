@@ -4224,3 +4224,107 @@
   background: var(--accent);
   color: white;
 }
+
+/* =========================================================================
+ * 3-thumbnail-per-scene candidates strip — appears under each Pexels/Pixabay
+ * scene after the user clicks "Preview clips". Pre-rendering thumbnails
+ * before kicking off a render is a massive perceived-quality win — users
+ * commit to specific footage rather than discovering surprises post-render.
+ * ========================================================================= */
+.scene-candidates {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border-soft);
+}
+.scene-candidate {
+  position: relative;
+  padding: 0;
+  background: transparent;
+  border: 2px solid transparent;
+  border-radius: 10px;
+  cursor: pointer;
+  overflow: hidden;
+  transition: all 0.15s ease;
+}
+.scene-candidate:hover { transform: translateY(-1px); }
+.scene-candidate.is-picked {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.scene-candidate-thumb {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 9 / 16;
+  background: #0F0A1E;
+  overflow: hidden;
+  border-radius: 8px;
+}
+.scene-candidate-thumb.is-landscape { aspect-ratio: 16 / 9; }
+.scene-candidate-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.scene-candidate-noimg {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  color: var(--text-muted);
+}
+.scene-candidate-src {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  padding: 2px 6px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: rgba(0,0,0,0.7);
+  color: white;
+  border-radius: 3px;
+  backdrop-filter: blur(3px);
+}
+.scene-candidate-dur {
+  position: absolute;
+  bottom: 4px;
+  right: 4px;
+  padding: 2px 6px;
+  font-size: 9px;
+  font-weight: 600;
+  background: rgba(0,0,0,0.7);
+  color: white;
+  border-radius: 3px;
+  backdrop-filter: blur(3px);
+  font-family: ui-monospace, monospace;
+}
+.scene-candidate-check {
+  position: absolute;
+  inset: auto auto 4px 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: white;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+}
+
+/* Secondary variant of the generate-prompts button — used for "Preview clips". */
+.generate-prompts-btn.is-secondary {
+  background: transparent;
+  border: 1px solid var(--border-soft);
+  color: var(--text-muted);
+}
+.generate-prompts-btn.is-secondary:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.generate-prompts-btn.is-secondary:disabled { opacity: 0.45; cursor: not-allowed; }
