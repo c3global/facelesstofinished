@@ -690,7 +690,8 @@ export default function Studio() {
   // The picker explains that the choice only applies to AI scenes; pure stock
   // renders will simply ignore the setting.
   const aiEngineLabel = {
-    flux: "Engine · Flux + Motion",
+    flux: "Engine · Flux + Kling i2v",
+    flux_static: "Engine · Flux Static",
     kling: "Engine · Kling 2.1",
     veo3: "Engine · Veo 3.1",
     pika: "Engine · Pika 2.1",
@@ -1018,7 +1019,11 @@ export default function Studio() {
                       {s.source === "ai" ? (
                         <>
                           <Sparkles size={22} />
-                          <span className="storyboard-thumb-engine">AI visual</span>
+                          <span className="storyboard-thumb-engine">
+                            {aiEngine === "flux_static" ? "AI still"
+                              : aiEngine === "flux" ? "AI still + i2v motion"
+                              : `AI video · ${aiEngine}`}
+                          </span>
                         </>
                       ) : s.source === "pexels" || s.source === "pixabay" ? (
                         <>

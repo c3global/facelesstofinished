@@ -1121,6 +1121,146 @@ async def _make_t2v_clip(prompt: str, aspect: str, duration_ms: int, engine: str
     return await _trim_t2v_clip(raw_url, duration_ms, scene_idx)
 
 
+# --- AI Image-to-Video (Kling i2v) -----------------------------------------
+# Replaces the previous "Flux still → ken-burns'd MP4" path with REAL AI
+# motion. Architecture:
+#   1. Flux generates the still (already done in step 2 of _run_render_faceless,
+#      and the URL is content-hash cached in db.flux_cache).
+#   2. Kling i2v takes that still + the original scene prompt and produces a
+#      5-or-10s MP4 with real camera/subject motion (vs the previous fake
+#      ken-burns zoom).
+#   3. We trim the clip to the exact `duration_ms` slot via _trim_t2v_clip.
+#   4. Result is cached in db.kling_i2v_cache keyed by
+#      sha256(flux_url|aspect|duration_bucket) so re-renders of the same
+#      script + aspect become instant (Flux cache already does the same for
+#      step 1).
+#
+# Cost: Kling 2.1 STANDARD i2v ≈ $0.25 / 5s clip, $0.50 / 10s clip on fal.
+# For a typical 8-scene Faceless render that's ~$2 extra in spend — well
+# under the silent $5 backstop in _run_render_faceless.
+#
+# Fallback: if Kling fails or times out, the caller falls back to the
+# original ken-burns ffmpeg path so a single i2v outage doesn't kill the
+# whole render.
+KLING_I2V_MODEL = "fal-ai/kling-video/v2.1/standard/image-to-video"
+KLING_I2V_COST_CENTS_5S = 25
+KLING_I2V_COST_CENTS_10S = 50
+KLING_I2V_MAX_WAIT_S = 600
+
+
+async def _fal_kling_i2v_generate(
+    image_url: str,
+    prompt: str,
+    aspect: str,
+    duration_ms: int,
+) -> Optional[str]:
+    """Submit a Flux still + prompt to Kling 2.1 standard i2v and poll for
+    the resulting MP4. Returns the raw MP4 URL or None on any failure.
+    Same queue/poll pattern as `_fal_t2v_generate` — kept separate so the
+    duration buckets + the cost telemetry stay clean per engine."""
+    if not FAL_API_KEY or not image_url:
+        return None
+    fal_headers = {"Authorization": f"Key {FAL_API_KEY}"}
+    # Kling supports 5 or 10 seconds only; round up so we always have at least
+    # `duration_ms` of source material to trim from.
+    duration_s_str = "10" if (duration_ms / 1000.0) > 5.5 else "5"
+    payload = {
+        "prompt": prompt,
+        "image_url": image_url,
+        "duration": duration_s_str,
+        "aspect_ratio": "9:16" if aspect == "9_16" else "16:9",
+        # Looser cfg lets Kling express creative motion without ignoring the
+        # source still. 0.5 is fal's default; we lift to 0.6 to keep the
+        # output closer to the prompt's described action.
+        "cfg_scale": 0.6,
+        "negative_prompt": (
+            "blurry, low quality, distorted, ugly, watermark, text overlay, "
+            "deformed, bad anatomy, oversaturated, grainy, jpeg artifacts, "
+            "static image, motionless"
+        ),
+    }
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            sub = await client.post(
+                f"https://queue.fal.run/{KLING_I2V_MODEL}",
+                headers=fal_headers,
+                json=payload,
+            )
+            if sub.status_code not in (200, 202):
+                logger.warning(f"[i2v] kling submit FAIL {sub.status_code}: {sub.text[:200]}")
+                return None
+            sub_body = sub.json()
+            status_url = sub_body.get("status_url")
+            result_url = sub_body.get("response_url")
+            if not status_url or not result_url:
+                logger.warning(f"[i2v] kling submit malformed: {str(sub_body)[:200]}")
+                return None
+            deadline = asyncio.get_event_loop().time() + KLING_I2V_MAX_WAIT_S
+            while asyncio.get_event_loop().time() < deadline:
+                await asyncio.sleep(2)
+                stat = await client.get(status_url, headers=fal_headers)
+                if stat.status_code != 200:
+                    continue
+                st = stat.json().get("status", "")
+                if st == "COMPLETED":
+                    res = await client.get(result_url, headers=fal_headers)
+                    if res.status_code != 200:
+                        return None
+                    out = res.json()
+                    return (out.get("video") or {}).get("url") or out.get("video_url")
+                if st == "FAILED":
+                    logger.warning(f"[i2v] kling FAILED: {stat.text[:200]}")
+                    return None
+            logger.warning(f"[i2v] kling polling timed out after {KLING_I2V_MAX_WAIT_S}s")
+            return None
+    except Exception as exc:
+        logger.warning(f"[i2v] kling exception: {type(exc).__name__}: {exc}")
+        return None
+
+
+async def _make_i2v_clip(
+    image_url: str,
+    prompt: str,
+    aspect: str,
+    duration_ms: int,
+    scene_idx: int,
+) -> Optional[str]:
+    """Cache-first Kling i2v generation + trim to exact per-scene duration.
+    Cache key = sha256(flux_url|aspect|duration_bucket). Duration bucket is
+    "5" or "10" so cache hits even when per-scene durations vary by ms.
+    Returns the final MP4 URL (trimmed to `duration_ms`) or None on failure."""
+    if not image_url:
+        return None
+    import hashlib  # noqa: PLC0415
+    duration_bucket = "10" if (duration_ms / 1000.0) > 5.5 else "5"
+    cache_key = "kling_i2v:" + hashlib.sha256(
+        f"{image_url}|{aspect}|{duration_bucket}".encode("utf-8")
+    ).hexdigest()[:32]
+    cached = await db.kling_i2v_cache.find_one({"_id": cache_key})
+    raw_url = cached.get("raw_url") if cached else None
+    if not raw_url:
+        raw_url = await _fal_kling_i2v_generate(image_url, prompt, aspect, duration_ms)
+        if raw_url:
+            await db.kling_i2v_cache.update_one(
+                {"_id": cache_key},
+                {"$set": {
+                    "raw_url": raw_url,
+                    "image_url": image_url,
+                    "aspect": aspect,
+                    "duration_bucket": duration_bucket,
+                    "cached_at": datetime.now(timezone.utc).isoformat(),
+                }},
+                upsert=True,
+            )
+    if not raw_url:
+        return None
+    # Trim the (possibly cached) raw Kling clip down to the exact ms slot
+    # WITHOUT touching the resolution — Kling already emits the requested
+    # aspect natively, so _trim_t2v_clip (which is `-c:v copy` style) is the
+    # right fit vs _trim_stock_video (which scales+crops).
+    return await _trim_t2v_clip(raw_url, duration_ms, scene_idx)
+
+
 # --- Sentence-aware script splitter ----------------------------------------
 # Each "beat" is one natural pause in the voiceover (sentence or em-dash/comma
 # split for runs longer than 25 words). Used by:
@@ -1438,7 +1578,14 @@ def estimate_render_cost_cents(payload: RenderRequest) -> int:
             stock_scenes = max(0, scene_count - ai_scenes)
             cents += stock_scenes * 1.0  # stock search is essentially free
         else:
-            cents += scene_count * 4.0                     # Flux images
+            # Default Flux (id="flux") upgrades to Kling i2v real motion at
+            # ~$0.29/scene. Flux Static (id="flux_static") is the cheap
+            # ken-burns-only path at ~$0.04/scene. Charity approved both
+            # paths in the 2026-02-22 bundle so cost-conscious renders can
+            # still ship with stills.
+            cents += scene_count * 4.0   # Flux images (both modes)
+            if engine != "flux_static":
+                cents += scene_count * KLING_I2V_COST_CENTS_5S   # Kling i2v motion
         cents += 2.0                                   # compose overhead
     elif payload.mode == "composite":
         # Avatar talking-head + B-roll cutaway every N seconds
@@ -1857,7 +2004,7 @@ async def _run_render_faceless(job: dict):
         ai_tasks: list = []          # (idx, prompt) — Flux text-to-image jobs (engine="flux" only)
         stock_search_tasks: list = []  # (idx, source, query, orientation) — auto-search jobs
         scene_kind: list = ["" for _ in scenes]  # "ai" | "ai_t2v" | "stock"
-        scene_prompts: list = ["" for _ in scenes]  # prompt text, used by ai_t2v scenes
+        scene_prompts: list = ["" for _ in scenes]  # prompt text, used by ai_t2v + Flux-i2v scenes
 
         orientation = "portrait" if job["aspect"] == "9_16" else "landscape"
         for i, s in enumerate(scenes):
@@ -1871,6 +2018,7 @@ async def _run_render_faceless(job: dict):
                     image_urls[i] = "__t2v_pending__"
                 else:
                     scene_kind[i] = "ai"
+                    scene_prompts[i] = s.get("prompt") or ""  # needed by Kling i2v in normalize step
                     ai_tasks.append((i, s.get("prompt", "")))
             else:
                 scene_kind[i] = "stock"
@@ -1908,6 +2056,11 @@ async def _run_render_faceless(job: dict):
         if parallel_jobs:
             await asyncio.gather(*parallel_jobs)
             actual_cost_cents += total_ai * 4
+            # Default Flux now upgrades to Kling i2v in the normalize step
+            # for real AI motion. `flux_static` opts out and keeps the cheap
+            # ken-burns path (no extra cost). 5s bucket dominates the spend.
+            if ai_engine != "flux_static":
+                actual_cost_cents += total_ai * KLING_I2V_COST_CENTS_5S
         # T2V scenes also accumulate cost — one premium clip per scene at the
         # engine's per-clip rate. Tracked separately so admin telemetry shows
         # the real spend per engine.
@@ -2013,7 +2166,18 @@ async def _run_render_faceless(job: dict):
         this_dur = per_dur_ms_list[slot]
         kind = scene_kind[idx]
         if kind == "ai":
-            mp4 = await _make_kenburns_mp4(url, job["aspect"], this_dur, idx)
+            # `flux_static` is the explicit opt-out: stills + cheap ken-burns
+            # (no Kling i2v cost). Default `flux` upgrades to real AI motion
+            # via Kling 2.1 standard. Falls back to ken-burns if Kling fails.
+            if ai_engine == "flux_static":
+                mp4 = await _make_kenburns_mp4(url, job["aspect"], this_dur, idx)
+            else:
+                mp4 = await _make_i2v_clip(
+                    url, scene_prompts[idx], job["aspect"], this_dur, idx,
+                )
+                if not mp4:
+                    logger.warning(f"[i2v] scene {idx} Kling failed — falling back to ken-burns")
+                    mp4 = await _make_kenburns_mp4(url, job["aspect"], this_dur, idx)
         elif kind == "ai_t2v":
             # url is the "__t2v_pending__" sentinel — generate the real video
             # via Kling/Veo/Pika using the stored prompt at this exact duration.

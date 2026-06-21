@@ -618,8 +618,15 @@ export function AIEnginePicker({ open, onClose, value, onPick, isAdmin = false }
   const options = [
     {
       id: "flux",
-      name: "Flux 1.1 Pro · Image + Motion",
-      hint: "Fast · low cost. AI-generated still images animated with cinematic camera moves.",
+      name: "Flux 1.1 Pro + Kling i2v · Image + Real Motion",
+      hint: "Recommended. Flux generates each still, Kling 2.1 brings it to life with real AI motion.",
+      adminCost: "~$0.29/scene",
+      Icon: Sparkles,
+    },
+    {
+      id: "flux_static",
+      name: "Flux 1.1 Pro · Static (cheapest)",
+      hint: "Budget option. Still images with simple ken-burns zoom — no AI motion.",
       adminCost: "~$0.04/scene",
       Icon: Sparkles,
     },

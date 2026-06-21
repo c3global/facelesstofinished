@@ -1,0 +1,52 @@
+{
+  "summary": "Iter-23 — verified the new Flux + Kling 2.1 standard image-to-video (i2v) integration plus the cheap `flux_static` opt-out path. Backend 10/10 pytest PASS covering: estimator costs for flux (~60c/2 scenes), flux_static (~10c/2 scenes), kling t2v (~102c/2 scenes), veo3 sanity; constant `KLING_I2V_COST_CENTS_5S = 25` and model id `fal-ai/kling-video/v2.1/standard/image-to-video` present; render queue submission for both flux and flux_static does NOT crash and ai_engine persists on the render doc; AND the db.kling_i2v_cache write path verified by stubbing `_fal_kling_i2v_generate` (with cleanup) + cache-hit short-circuit verified. Frontend 9/9 Playwright checks PASS: AIEnginePicker shows all 5 options including ai-engine-flux & ai-engine-flux_static; chip label flips between 'Engine · Flux + Kling i2v' and 'Engine · Flux Static'; storyboard subtitles render 'AI still + i2v motion' (flux), 'AI still' (flux_static), 'AI video · kling' (kling), 'AI video · veo3' (veo3). No real Kling spend incurred.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "verified_features": {
+    "POST /api/studio/render/estimate ai_engine=flux": "PASS — 2 AI scenes returned ~60c (Flux 8c + Kling i2v 50c + compose 2c).",
+    "POST /api/studio/render/estimate ai_engine=flux_static": "PASS — 2 AI scenes returned ~10c (Flux 8c + compose 2c, NO Kling).",
+    "POST /api/studio/render/estimate ai_engine=kling (T2V)": "PASS — 2 AI scenes returned ~102c (2 * 50c + 2c compose), confirming i2v changes did NOT touch the T2V branch.",
+    "POST /api/studio/render/estimate ai_engine=veo3": "PASS — returned >100c, T2V engines intact.",
+    "Server constants & model id": "PASS — KLING_I2V_COST_CENTS_5S = 25, KLING_I2V_MODEL = 'fal-ai/kling-video/v2.1/standard/image-to-video', db.kling_i2v_cache + _fal_kling_i2v_generate + _make_i2v_clip all present.",
+    "normalize_scene engine branching": "PASS — `if ai_engine == \"flux_static\"` -> _make_kenburns_mp4 else -> _make_i2v_clip with ken-burns fallback verified in source.",
+    "POST /api/studio/render ai_engine=flux queue insertion": "PASS — render created without crash, ai_engine='flux' persisted on doc.",
+    "POST /api/studio/render ai_engine=flux_static queue insertion": "PASS — render created without crash, ai_engine='flux_static' persisted on doc.",
+    "_make_i2v_clip cache WRITE path": "PASS — stubbed `_fal_kling_i2v_generate` returns fake URL, asserted db.kling_i2v_cache document landed at expected sha256 key with raw_url + aspect + duration_bucket=5; cleanup deleted the test entry.",
+    "_make_i2v_clip cache HIT path": "PASS — pre-seeded cache entry; asserted FAL generate was NOT called and trim returned the cached URL; cleanup deleted entry.",
+    "Frontend: AIEnginePicker shows both flux and flux_static": "PASS — [data-testid='ai-engine-flux'] label 'Flux 1.1 Pro + Kling i2v · Image + Real Motion'; [data-testid='ai-engine-flux_static'] label 'Flux 1.1 Pro · Static (cheapest)'. All 5 engines (flux, flux_static, kling, veo3, pika) present in modal grid.",
+    "Frontend: chip label after picking flux": "PASS — chip-ai-engine reads 'Engine · Flux + Kling i2v'.",
+    "Frontend: chip label after picking flux_static": "PASS — chip-ai-engine reads 'Engine · Flux Static'.",
+    "Frontend: storyboard subtitle (flux)": "PASS — .storyboard-thumb-engine renders 'AI still + i2v motion' on every AI scene card.",
+    "Frontend: storyboard subtitle (flux_static)": "PASS — renders 'AI still' (no i2v motion suffix).",
+    "Frontend: storyboard subtitle (kling)": "PASS — renders 'AI video · kling'.",
+    "Frontend: storyboard subtitle (veo3)": "PASS — renders 'AI video · veo3' (regression check)."
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_kling_i2v_v23.py",
+    "/app/test_reports/pytest/iteration_23_kling_i2v.xml"
+  ],
+  "action_items": [
+    "(Optional) Add a backend index on db.kling_i2v_cache._id is implicit; consider a TTL index (e.g. cached_at + 30 days) so stale Kling URLs (some FAL output URLs do expire) get re-generated rather than serving 404s indefinitely.",
+    "(Optional) The fallback chain when Kling fails (-> ken-burns) is logged at WARNING; consider bumping to a metric/counter (e.g. db.kling_i2v_failures) so admin telemetry catches systemic outages."
+  ],
+  "critical_code_review_comments": [
+    "server.py L1145-1148 — KLING_I2V_MODEL, COST_CENTS_5S/10S, and MAX_WAIT_S are all top-level constants. Clean separation from T2V cost dict. Good.",
+    "server.py L1221-1265 _make_i2v_clip — cache key uses sha256 truncated to 32 chars; collision risk negligible (~2^128). Cache writes raw_url + image_url + aspect + duration_bucket + cached_at. Trim is delegated to _trim_t2v_clip which means the cache is keyed on the un-trimmed Kling output and trimming is done per-call — correct since per-scene durations vary by ms but Kling only outputs 5s/10s buckets.",
+    "server.py L1166 — Kling duration rounding: `duration_s_str = '10' if (duration_ms / 1000.0) > 5.5 else '5'`. Same logic in _make_i2v_clip for duration_bucket. They must stay in sync or cache hits will be misaligned. Currently in sync but worth a comment or shared helper.",
+    "server.py L2169-2180 normalize_scene — clean fallback chain: flux_static -> ken-burns; flux -> i2v then if mp4 is None -> ken-burns. Single i2v failure won't kill the render. Good.",
+    "server.py L1586-1588 estimator — clean conditional on engine string; flux_static skips the i2v cost addition. Matches actual_cost accumulation at L2062-2063 (parity between estimate and actual).",
+    "Pickers.jsx L614-678 — Engine options array has correct testids `ai-engine-flux`, `ai-engine-flux_static`, `ai-engine-kling`, `ai-engine-veo3`, `ai-engine-pika`. Admin-only adminCost display preserved.",
+    "Studio.jsx L692-705 — chip label map covers all 5 engines with a sensible fallback to 'AI Engine'.",
+    "Studio.jsx L1019-1026 — storyboard subtitle correctly branches: flux_static -> 'AI still', flux -> 'AI still + i2v motion', else -> `AI video · ${aiEngine}`. CSS text-transform renders these uppercase but the underlying text matches the spec."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_kling_i2v_v23.py (new — 10 pytests)"
+  ],
+  "success_rate": {"backend": "100% (10/10)", "frontend": "100% (9/9 engine + chip + storyboard checks)"},
+  "test_credentials": "DEV_BYPASS_EMAIL=drcharitycampbell@gmail.com (passwordless via /api/auth/check). Admin + all 3 entitlements.",
+  "seed_data_creation": "Created 2 render docs in `renders` collection during queue-submission tests (status progressed past queued — will fail later when real TTS/FAL is exercised, but never crashed). Cache write tests created and CLEANED UP 1 db.kling_i2v_cache entry each. Net cache delta = 0.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Kling i2v integration ships clean: estimator + cache + render-queue + frontend chip/labels all verified. For future tests of an actual end-to-end Kling render (NOT recommended unless you want to spend $0.25/scene): set ai_engine='flux' on a /api/studio/render call with a tiny script and monitor db.kling_i2v_cache for the new entry — the cache key is `kling_i2v:` + sha256('<flux_url>|9_16|5').hexdigest()[:32]. The fallback chain (Kling fail -> ken-burns) is exercised by patching _fal_kling_i2v_generate to return None. To run all backend tests against the live preview: `python -m pytest /app/backend/tests/test_kling_i2v_v23.py -v --junitxml=/app/test_reports/pytest/iteration_23_kling_i2v.xml`.",
+  "rca of the issue": "No bug — this iteration verified a new feature. Two minor learnings: (1) the storyboard subtitle DOM class is `.storyboard-thumb-engine` (not `.scene-thumb`) so playwright tests should select on the real class; corrected mid-run. (2) Render `status` field has many intermediate values (queued/voiceover/visuals/normalize/...); tests should assert the field exists and `ai_engine` persists, not enumerate every status string."
+}
