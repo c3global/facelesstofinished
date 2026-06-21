@@ -52,6 +52,7 @@ from prompts import (
 load_dotenv()
 
 from admin_routes import register_admin_routes  # noqa: E402
+from uploads_routes import register_uploads_routes  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("f48")
@@ -177,7 +178,12 @@ class RenderRequest(BaseModel):
     voice_id: Optional[str] = None
     # Faceless mode
     tts_voice_id: Optional[str] = None
-    broll_source: Optional[str] = None  # "ai" | "pexels" | "pixabay" | "mix"
+    # If set, the user uploaded their own recorded voiceover via the
+    # /api/studio/uploads/voiceover endpoint. The render pipeline skips
+    # Kokoro entirely and uses this URL as the audio track. Scene durations
+    # are still computed from the actual audio length (via ffprobe).
+    user_voiceover_url: Optional[str] = None
+    broll_source: Optional[str] = None  # "ai" | "pexels" | "pixabay" | "mix" | "uploaded"
     scenes: list[dict] = Field(default_factory=list)
     # AI video engine for AI-sourced scenes (Faceless mode):
     #   - "flux" → Flux 1.1 Pro static image + ken-burns motion (fast, cheap)
@@ -1758,9 +1764,25 @@ async def _run_render_faceless(job: dict):
     # compute per-scene durations (~50 lines below), so blocking here was
     # pure waste: the visuals phase doesn't need the audio at all. This
     # single restructure saves ~10-15s off every Faceless render.
-    await _set_progress(20, "Generating voiceover + visuals…")
+    #
+    # If the user uploaded a recorded voiceover, skip Kokoro entirely and
+    # use the uploaded audio URL as the audio track. Render pipeline still
+    # uses the same downstream path; only the source changes.
+    user_voiceover_url = job.get("user_voiceover_url")
+    await _set_progress(20, "Generating voiceover + visuals…" if not user_voiceover_url else "Preparing your voiceover + visuals…")
     async with httpx.AsyncClient(timeout=120) as client:
         async def _run_tts():
+            if user_voiceover_url:
+                # No API call needed — the URL points to a file we already
+                # have stored. Return a synthetic response object whose
+                # JSON shape matches Kokoro's (so the downstream parser
+                # doesn't need to branch).
+                class _Resp:
+                    status_code = 200
+                    text = ""
+                    def json(self):
+                        return {"audio_url": user_voiceover_url}
+                return _Resp()
             r = await client.post(
                 f"https://fal.run/{_kokoro_endpoint(job.get('tts_voice_id') or 'af_heart')}",
                 headers=fal_headers,
@@ -2758,6 +2780,15 @@ register_admin_routes(
     ADMIN_EMAILS=ADMIN_EMAILS,
     KNOWN_ENTITLEMENTS=KNOWN_ENTITLEMENTS,
     log_activity=_log_activity,
+)
+
+# User uploads (B-roll media + recorded voiceovers). Mounted after admin
+# so the public /api/files/{id} stream endpoint sits on the same /api router.
+register_uploads_routes(
+    api=api,
+    db=db,
+    current_user_dep=current_user,
+    require_studio=require_studio,
 )
 
 
