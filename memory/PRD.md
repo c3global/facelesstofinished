@@ -15,6 +15,66 @@ paying customers + entitlements on the existing Netlify backend at
 `https://faceless48.c3global.co/api/auth-me` — the new Studio should call
 back to it for entitlement verification.
 
+## 2026-02-19 — Phase 3.5o: Render speed + B-roll relevance (Phase 1 of the larger bundle)
+**Status:** SHIPPED — 50/50 backend pytests PASS (11 new stock-query + 39 regression). Frontend untouched this round.
+
+The user asked for the full bundle: render speed + B-roll quality + user uploads + voice recording. This iteration ships the **two highest-leverage backend pieces** that need no new infrastructure. The upload + voice-recording work is staged for the next iteration (needs the object-storage integration playbook execution + new frontend UI).
+
+### B-roll quality fix (the big customer pain)
+
+Cinematic prompts like *"Wide overhead shot of hands chopping fresh vegetables on a wooden board, soft kitchen daylight, slow camera drift right"* work great for Flux/Kling/Veo/Pika but TANK Pexels'/Pixabay's keyword-tag search relevance. Words like "wide", "overhead", "drift", "soft" outweigh the actual subject nouns. Result: stock B-roll picked was often irrelevant to the script.
+
+**Fix**: New `_extract_stock_query()` strips cinematographic vocabulary (shot types, camera motion, lighting modifiers, filler) leaving 3-6 high-signal noun/action keywords. The full cinematic prompt is still used for Flux/T2V (which reward the detail); only Pexels/Pixabay get the leaner query.
+
+Plus `_score_pexels_hit()` re-ranks the 15 candidate hits (was 5) by keyword overlap with the video's tags/title/uploader. Pexels' own relevance order becomes the tiebreak, not the only signal.
+
+**Resolution bump**: stock floor 480p → 720p, ceiling 1080p (was 1280p). No more soft 480p clips on modern screens; no 4K wasting compose time. Pixabay no longer falls back to its 640p "small" tier.
+
+Example extractions (from new pytest suite):
+- `"Wide overhead shot of hands chopping fresh vegetables..."` → `"hands chopping fresh vegetables wooden board"` ✅
+- `"Medium handheld shot of a businesswoman typing on laptop..."` → `"businesswoman typing laptop modern home office"` ✅
+- `"Close-up of steam rising from a ceramic coffee cup, golden warm light..."` → `"steam rising from ceramic coffee cup"` ✅
+
+### Render speed fix #1: Parallelize Kokoro TTS with Flux/T2V/stock
+
+Today the Faceless render runs `await kokoro_tts(...)` first, THEN starts visual generation. Kokoro takes ~10-15s; nothing in the visuals phase needs the audio. Restructured:
+
+```python
+tts_task = asyncio.create_task(_run_tts())  # fire-and-forget
+# ... visuals phase runs in parallel (~30-90s) ...
+tts_r = await tts_task  # usually instant by now
+```
+
+The full TTS leg drops off the critical path. Estimated wall-clock win: **~10-15s off every Faceless render.**
+
+### Render speed fix #2: Poll interval 4s → 2s
+
+Both the t2v poll loop and the compose poll loop now sleep 2s between cycles (was 4s and 3s respectively). Snappier completion detection, well under fal.ai's rate limit window. Estimated win: **~2-4s off final-stage detection latency.**
+
+### Deferred to Phase 3.5p (next iteration)
+
+The user requested the full bundle. These remain to be implemented; design is settled, just need execution:
+
+**A. User-uploaded B-roll** — needs the object-storage `emergentintegrations` library wired (per the integration playbook), backend upload endpoint with MIME validation, frontend "Your media" chip + drag-drop modal, per-scene URL override binding. Pipeline integration is essentially free since `s.get("video_url")` already supports per-scene overrides.
+
+**B. User-recorded voiceover** — needs browser MediaRecorder UI in the Voice picker, audio upload through same object-storage path, render-pipeline branch that skips Kokoro when `job.user_voiceover_url` is present. Scene duration math reuses the existing `_probe_audio_duration_s` helper.
+
+**C. ken-burns / stock-trim moved into fal.ai's compose filter expressions** — biggest remaining speed win (~30-60s saved per render with heavy B-roll). Architecturally invasive: requires re-shaping the compose payload to pass per-input ffmpeg filter strings instead of pre-trimmed URLs. Wants a careful regression pass since the compose schema is fragile.
+
+**D. Content-hash cache for Flux outputs** — re-renders become near-instant. MongoDB cache keyed by `sha256(prompt|aspect|model)`.
+
+**E. Pre-fetch stock during script generation** — background-task the Pexels search the moment Claude finishes streaming so URLs are pre-resolved by render-click.
+
+**F. T2V duration short-circuit** — skip local ffmpeg trim when the T2V engine already returned exactly the requested duration.
+
+**G. 3-candidates-per-scene UI** — show 3 thumbnail picks per scene, let user accept first or click through alternatives before render fires.
+
+### Files touched
+
+- `/app/backend/server.py` — new `_extract_stock_query()` + `_score_pexels_hit()` helpers; rewritten `_auto_search_stock_url()` with keyword extraction + re-ranking + 720-1080p floor; Faceless pipeline now fires Kokoro TTS as `asyncio.create_task` and awaits it just before the audio-duration probe; poll intervals dropped to 2s.
+- `/app/backend/tests/test_stock_query_extraction.py` — new 11-case test suite covering all stopword categories + realistic samples + score function.
+
+
 ## 2026-02-19 — Phase 3.5n: Pre-deploy bundle (4 quality-of-life wins batched with the critical fixes)
 **Status:** SHIPPED — 39/39 backend pytests PASS (5 new + 34 regression).
 
