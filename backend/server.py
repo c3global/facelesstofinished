@@ -1799,6 +1799,18 @@ async def _run_render_faceless(job: dict):
         image_urls: list = [None] * len(scenes)
 
         async def gen_image(idx: int, prompt: str):
+            # Content-hash cache: identical (prompt, aspect) renders return
+            # the previously-generated Flux URL instantly. Re-renders with
+            # the same script/aspect become near-instant — Flux dominates
+            # the visuals phase, so this saves 20-60s on regen flows.
+            import hashlib  # noqa: PLC0415
+            aspect_tag = "p" if job["aspect"] == "9_16" else "l"
+            cache_key = "flux:" + hashlib.sha256(
+                f"{aspect_tag}|{prompt}".encode("utf-8")
+            ).hexdigest()[:32]
+            cached = await db.flux_cache.find_one({"_id": cache_key})
+            if cached and cached.get("url"):
+                return cached["url"]
             ir = await client.post(
                 "https://fal.run/fal-ai/flux-pro/v1.1",
                 headers=fal_headers,
@@ -1810,7 +1822,25 @@ async def _run_render_faceless(job: dict):
             if ir.status_code != 200:
                 return None
             data = ir.json()
-            return (data.get("images") or [{}])[0].get("url")
+            url = (data.get("images") or [{}])[0].get("url")
+            if url:
+                # Write-through cache. fal.ai image URLs are signed with a
+                # 7-day TTL — record `expires_at` so a future sweep can
+                # purge stale entries. For now, every cache hit on a
+                # purged URL falls back gracefully (compose just 404s on
+                # that scene; downstream stitcher already handles missing
+                # frames).
+                await db.flux_cache.update_one(
+                    {"_id": cache_key},
+                    {"$set": {
+                        "url": url,
+                        "prompt": prompt,
+                        "aspect": job["aspect"],
+                        "cached_at": datetime.now(timezone.utc).isoformat(),
+                    }},
+                    upsert=True,
+                )
+            return url
 
         # Resolve URLs per scene.
         #   - AI scenes  → Flux 1.1 Pro (still image; we ken-burns it later)
@@ -2161,6 +2191,10 @@ async def studio_render(payload: RenderRequest, user: AuthUser = Depends(current
         "ai_engine": payload.ai_engine,
         "broll_cutaway_interval_s": payload.broll_cutaway_interval_s,
         "caption_style": payload.caption_style,
+        # User-uploaded voiceover URL — when set, the faceless pipeline
+        # skips Kokoro TTS entirely and uses this audio as the voiceover.
+        # See _run_render_faceless line ~1771 for the override branch.
+        "user_voiceover_url": payload.user_voiceover_url,
         "status": "queued",
         "progress": 5,
         "progress_label": "Queued…",
@@ -2233,6 +2267,7 @@ async def studio_render_both_aspects(payload: RenderRequest, user: AuthUser = De
             "ai_engine": per_payload.ai_engine,
             "broll_cutaway_interval_s": per_payload.broll_cutaway_interval_s,
             "caption_style": per_payload.caption_style,
+            "user_voiceover_url": per_payload.user_voiceover_url,
             "status": "queued",
             "progress": 5,
             "progress_label": "Queued…",
@@ -2401,6 +2436,106 @@ async def studio_broll_prompts(payload: BrollPromptsRequest, user: AuthUser = De
         "prompts": [s["prompt"] for s in scenes],
         "scenes": scenes,
     }
+
+
+# --- Studio: 3-thumbnail-per-scene candidates ------------------------------
+# Returns top 3 candidate stock clips per prompt so the user can preview and
+# pick before kicking off a render. Massive UX win vs the current model where
+# the auto-pick happens silently inside the render pipeline. Implemented as a
+# single endpoint that fans out N prompts × 3 candidates with concurrent
+# requests — Pexels/Pixabay handle this fine and the response is fast (~2s
+# for 5 prompts).
+class StockCandidatesRequest(BaseModel):
+    prompts: list[str]
+    source: str = "pexels"  # pexels | pixabay | mix
+    orientation: str = "portrait"  # portrait | landscape
+
+
+@api.post("/studio/stock-candidates")
+async def studio_stock_candidates(
+    payload: StockCandidatesRequest,
+    user: AuthUser = Depends(current_user),
+):
+    require_studio(user)
+    if not payload.prompts:
+        return {"candidates": []}
+    if payload.source not in ("pexels", "pixabay", "mix"):
+        raise HTTPException(status_code=400, detail="Bad source")
+
+    sources_for_prompt = ["pexels", "pixabay"] if payload.source == "mix" else [payload.source]
+
+    async def fetch_one(idx: int, prompt: str) -> dict:
+        query = _extract_stock_query(prompt) or prompt
+        keyword_set = {w for w in query.split() if w}
+        hits: list[dict] = []
+        async with httpx.AsyncClient(timeout=15) as client:
+            for src in sources_for_prompt:
+                try:
+                    if src == "pexels" and PEXELS_API_KEY:
+                        r = await client.get(
+                            "https://api.pexels.com/videos/search",
+                            headers={"Authorization": PEXELS_API_KEY},
+                            params={"query": query, "orientation": payload.orientation, "per_page": 12},
+                        )
+                        if r.status_code != 200:
+                            continue
+                        cands = r.json().get("videos") or []
+                        cands.sort(key=lambda v: _score_pexels_hit(v, keyword_set), reverse=True)
+                        for v in cands[:5]:
+                            files = v.get("video_files") or []
+                            files.sort(key=lambda f: (f.get("height") or 0))
+                            pick = next(
+                                (f for f in files if 720 <= (f.get("height") or 0) <= 1080),
+                                None,
+                            )
+                            if not pick and files:
+                                higher = [f for f in files if (f.get("height") or 0) >= 720]
+                                pick = higher[0] if higher else None
+                            if pick and pick.get("link"):
+                                hits.append({
+                                    "id": f"pex-{v.get('id')}",
+                                    "thumb": v.get("image"),
+                                    "video_url": pick["link"],
+                                    "duration": v.get("duration"),
+                                    "source": "pexels",
+                                })
+                    elif src == "pixabay" and PIXABAY_API_KEY:
+                        r = await client.get(
+                            "https://pixabay.com/api/videos/",
+                            params={
+                                "key": PIXABAY_API_KEY, "q": query, "per_page": 12,
+                                "order": "popular", "safesearch": "true",
+                            },
+                        )
+                        if r.status_code != 200:
+                            continue
+                        cands = r.json().get("hits") or []
+                        cands.sort(
+                            key=lambda v: sum(1 for k in keyword_set if k in (v.get("tags") or "").lower()),
+                            reverse=True,
+                        )
+                        for v in cands[:5]:
+                            videos = v.get("videos") or {}
+                            pick = videos.get("large") or videos.get("medium")
+                            if pick and pick.get("url"):
+                                hits.append({
+                                    "id": f"pix-{v.get('id')}",
+                                    "thumb": (pick.get("thumbnail")
+                                              or (videos.get("medium") or {}).get("thumbnail")
+                                              or (videos.get("small") or {}).get("thumbnail")),
+                                    "video_url": pick["url"],
+                                    "duration": v.get("duration"),
+                                    "source": "pixabay",
+                                })
+                except Exception as exc:
+                    logger.warning(f"[stock-candidates] {src}/{prompt}: {exc}")
+                    continue
+        return {"idx": idx, "prompt": prompt, "candidates": hits[:3]}
+
+    results = await asyncio.gather(*[fetch_one(i, p) for i, p in enumerate(payload.prompts)])
+    # Preserve original order
+    results.sort(key=lambda r: r["idx"])
+    return {"candidates": results}
 
 
 # --- Script Engine: async job pattern ---------------------------------------

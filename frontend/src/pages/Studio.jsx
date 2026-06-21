@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { UserCircle2, Mic, Ratio, Film, ChevronDown, Play, Trash2, Sparkles, Wand2, Loader2, RotateCw, Cpu } from "lucide-react";
+import { UserCircle2, Mic, Ratio, Film, ChevronDown, Play, Trash2, Sparkles, Wand2, Loader2, RotateCw, Cpu, FolderOpen } from "lucide-react";
 import { apiClient, useAuth } from "../App";
 import {
   AvatarPicker,
@@ -10,16 +10,18 @@ import {
   AIEnginePicker,
 } from "../components/Pickers";
 import ModePicker, { COMPOSITE_TOAST } from "../components/ModePicker";
+import MediaLibrary from "../components/MediaLibrary";
 import Toast from "../components/Toast";
 
 const MODES = { AVATAR: "avatar", FACELESS: "faceless" };
 const MAX_SCENES = 12;
 const SOURCE_HINT = {
-  ai:      "An AI-generated visual will be created from your prompt.",
-  pexels:  "We'll search the Pexels stock library.",
-  pixabay: "We'll search the Pixabay stock library.",
+  ai:       "An AI-generated visual will be created from your prompt.",
+  pexels:   "We'll search the Pexels stock library.",
+  pixabay:  "We'll search the Pixabay stock library.",
+  uploaded: "We'll use the media file you uploaded for this scene.",
 };
-const SOURCE_SHORT = { ai: "AI", pexels: "Px", pixabay: "Pb" };
+const SOURCE_SHORT = { ai: "AI", pexels: "Px", pixabay: "Pb", uploaded: "You" };
 
 function fmtDate(iso) {
   if (!iso) return "";
@@ -48,6 +50,7 @@ const SOURCE_PILL_OPTS = [
   { id: "ai", label: "AI" },
   { id: "pexels", label: "Pexels" },
   { id: "pixabay", label: "Pixabay" },
+  { id: "uploaded", label: "Yours" },
 ];
 
 function SourcePills({ idx, current, onPick }) {
@@ -152,6 +155,10 @@ export default function Studio() {
 
   // Faceless mode picks
   const [ttsVoice, setTtsVoice] = useState(null);
+  // User-recorded/uploaded voiceover URL (set via the VoiceRecorder inside
+  // the TTS Voice picker). When set, backend skips Kokoro TTS entirely
+  // and uses this audio file as the voiceover track.
+  const [userVoiceoverUrl, setUserVoiceoverUrl] = useState(null);
   const [brollSource, setBrollSource] = useState("pexels"); // global default
   // AI text-to-video engine for AI-sourced scenes. Default "flux" keeps the
   // existing Ken-Burns slideshow behaviour; "kling" / "veo3" / "pika" generate
@@ -231,6 +238,10 @@ export default function Studio() {
   // Modal state
   const [modal, setModal] = useState(null);
   const [stockModal, setStockModal] = useState({ open: false, idx: -1 });
+  // Media library modal — opens scoped to a particular scene index when
+  // the user clicks "Open library" on an "uploaded" source scene. idx -1
+  // means just show the library without picking (no scene context).
+  const [libraryModal, setLibraryModal] = useState({ open: false, idx: -1 });
 
   const closeModal = () => setModal(null);
 
@@ -329,12 +340,15 @@ export default function Studio() {
   const canGenerate = useMemo(() => {
     if (!script.trim()) return false;
     if (mode === MODES.AVATAR) return !!avatar && !!voice;
-    if (!ttsVoice) return false;
+    // Faceless: need a voice (TTS or user-recorded) AND scenes with valid sources.
+    if (!ttsVoice && !userVoiceoverUrl) return false;
     if (scenes.length === 0) return false;
     // Every scene needs a resolved source (mix mode requires explicit pick per scene)
     if (scenes.some((s) => !s.source)) return false;
+    // Uploaded scenes need a pre-picked media file (no auto-search fallback).
+    if (scenes.some((s) => s.source === "uploaded" && !s.pick?.video_url)) return false;
     return true;
-  }, [script, mode, avatar, voice, ttsVoice, scenes]);
+  }, [script, mode, avatar, voice, ttsVoice, userVoiceoverUrl, scenes]);
 
   // Build a payload from the current form state. Reused by the live cost
   // estimate request and the actual /studio/render request below.
@@ -347,6 +361,7 @@ export default function Studio() {
     avatar_id: mode === MODES.AVATAR ? avatar?.id : null,
     voice_id: mode === MODES.AVATAR ? voice?.id : null,
     tts_voice_id: mode === MODES.FACELESS ? ttsVoice?.id : null,
+    user_voiceover_url: mode === MODES.FACELESS ? userVoiceoverUrl : null,
     broll_source: mode === MODES.FACELESS ? brollSource : null,
     ai_engine: mode === MODES.FACELESS ? aiEngine : "flux",
     scenes: mode === MODES.FACELESS ? scenes.map((s) => ({
@@ -572,9 +587,11 @@ export default function Studio() {
     </button>
   );
   const chipTtsVoice = (
-    <button className={`chip ${ttsVoice ? "is-set" : ""}`} data-testid="chip-tts-voice" onClick={() => setModal("tts-voice")}>
+    <button className={`chip ${(ttsVoice || userVoiceoverUrl) ? "is-set" : ""}`} data-testid="chip-tts-voice" onClick={() => setModal("tts-voice")}>
       <span className="chip-icon"><Mic size={14} /></span>
-      <span className="chip-label">{ttsVoice ? `Voice · ${ttsVoice.name}` : "Voice"}</span>
+      <span className="chip-label">
+        {userVoiceoverUrl ? "Voice · Your recording" : (ttsVoice ? `Voice · ${ttsVoice.name}` : "Voice")}
+      </span>
       <ChevronDown size={14} className="chip-caret" />
     </button>
   );
@@ -589,6 +606,7 @@ export default function Studio() {
     ai: "B-Roll · AI",
     pexels: "B-Roll · Pexels",
     pixabay: "B-Roll · Pixabay",
+    uploaded: "B-Roll · Yours",
     mix: "B-Roll · Mix",
   }[brollSource] || "B-Roll";
   const chipBroll = (
@@ -806,6 +824,7 @@ export default function Studio() {
                         {s.source === "ai" && <Sparkles size={12} />}
                         {s.source === "pexels" && <Film size={12} />}
                         {s.source === "pixabay" && <Film size={12} />}
+                        {s.source === "uploaded" && <FolderOpen size={12} />}
                         <span>{SOURCE_HINT[s.source]}</span>
                         {(s.source === "pexels" || s.source === "pixabay") && (
                           <button
@@ -820,6 +839,21 @@ export default function Studio() {
                                 Change clip
                               </>
                             ) : "Pre-pick a clip"}
+                          </button>
+                        )}
+                        {s.source === "uploaded" && (
+                          <button
+                            type="button"
+                            className="scene-hint-pick"
+                            data-testid={`scene-library-${i}`}
+                            onClick={() => setLibraryModal({ open: true, idx: i })}
+                          >
+                            {s.pick?.video_url ? (
+                              <>
+                                {s.pick.thumb && <img src={s.pick.thumb} alt="" className="scene-hint-thumb" style={{ verticalAlign: -6, marginRight: 6 }} />}
+                                Change file
+                              </>
+                            ) : "Pick from your library"}
                           </button>
                         )}
                       </>
@@ -848,6 +882,7 @@ export default function Studio() {
                 data-testid={`storyboard-card-${i}`}
                 onClick={() => {
                   if (s.source === "pexels" || s.source === "pixabay") setStockModal({ open: true, idx: i });
+                  else if (s.source === "uploaded") setLibraryModal({ open: true, idx: i });
                 }}
               >
                 <div className={`storyboard-thumb ${aspect === "16_9" ? "is-16-9" : ""}`}>
@@ -871,6 +906,11 @@ export default function Studio() {
                           <Film size={22} />
                           <span className="storyboard-thumb-engine">{s.source === "pexels" ? "Pexels search" : "Pixabay search"}</span>
                         </>
+                      ) : s.source === "uploaded" ? (
+                        <>
+                          <FolderOpen size={22} />
+                          <span className="storyboard-thumb-engine">Your media</span>
+                        </>
                       ) : (
                         <span className="storyboard-thumb-engine">No source</span>
                       )}
@@ -880,7 +920,10 @@ export default function Studio() {
                 <div className="storyboard-meta">
                   <div className="storyboard-prompt">{s.prompt}</div>
                   <div className={`storyboard-status ${s.pick || s.source === "ai" ? "is-ready" : ""}`}>
-                    {!s.source ? "Pick source" : s.source === "ai" ? "AI scene" : (s.pick ? "Clip ready" : "Auto search")}
+                    {!s.source ? "Pick source"
+                      : s.source === "ai" ? "AI scene"
+                      : s.source === "uploaded" ? (s.pick ? "Your file ready" : "Pick a file")
+                      : (s.pick ? "Clip ready" : "Auto search")}
                   </div>
                 </div>
               </button>
@@ -915,9 +958,10 @@ export default function Studio() {
               ? "Paste a script to begin."
               : mode === MODES.AVATAR
                 ? !avatar ? "Pick an avatar." : !voice ? "Pick a voice." : ""
-                : !ttsVoice ? "Pick a voice."
+                : (!ttsVoice && !userVoiceoverUrl) ? "Pick a voice or record your own."
                   : scenes.length === 0 ? "Add at least one B-roll prompt."
-                    : "Pick a source for every scene."}
+                    : scenes.some((s) => s.source === "uploaded" && !s.pick?.video_url) ? "Pick a media file for each 'Yours' scene."
+                      : "Pick a source for every scene."}
           </p>
         )}
         {render && render.status !== "complete" && render.status !== "failed" && canGenerate && (
@@ -1196,7 +1240,20 @@ export default function Studio() {
       {/* Modals */}
       <AvatarPicker open={modal === "avatar"} onClose={closeModal} value={avatar} onPick={setAvatar} currentAspect={aspect} />
       <VoicePicker open={modal === "voice"} onClose={closeModal} value={voice} onPick={setVoice} source="heygen" />
-      <VoicePicker open={modal === "tts-voice"} onClose={closeModal} value={ttsVoice} onPick={setTtsVoice} source="tts" />
+      <VoicePicker
+        open={modal === "tts-voice"}
+        onClose={closeModal}
+        value={ttsVoice}
+        onPick={setTtsVoice}
+        source="tts"
+        userVoiceoverUrl={userVoiceoverUrl}
+        onUserVoiceoverChange={(url) => {
+          setUserVoiceoverUrl(url);
+          // Clearing AI TTS pick when the user records their own voice keeps
+          // the chip UI honest. Backend prefers user_voiceover_url regardless.
+          if (url) setTtsVoice(null);
+        }}
+      />
       <BRollSourcePicker
         open={modal === "broll"}
         onClose={closeModal}
@@ -1226,6 +1283,16 @@ export default function Studio() {
         onClose={() => setStockModal({ open: false, idx: -1 })}
         onPick={(r) => {
           if (stockModal.idx >= 0) setScenePick(stockModal.idx, r);
+        }}
+      />
+
+      <MediaLibrary
+        open={libraryModal.open}
+        sceneIdx={libraryModal.idx}
+        aspect={aspect}
+        onClose={() => setLibraryModal({ open: false, idx: -1 })}
+        onPick={(item) => {
+          if (libraryModal.idx >= 0) setScenePick(libraryModal.idx, item);
         }}
       />
 

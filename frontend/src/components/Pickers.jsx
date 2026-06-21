@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Check, Play, Pause, Image as ImageIcon, Film, Sparkles, Layers, Captions, CaptionsOff, Star } from "lucide-react";
+import { Check, Play, Pause, Image as ImageIcon, Film, Sparkles, Layers, Captions, CaptionsOff, Star, FolderOpen } from "lucide-react";
 import Modal from "./Modal";
 import { apiClient } from "../App";
+import VoiceRecorder from "./VoiceRecorder";
 
 // =====================================================================
 // Avatar picker
@@ -237,7 +238,7 @@ export function AvatarPicker({ open, onClose, value, onPick, currentAspect = "9_
 // =====================================================================
 // Voice picker (HeyGen voices for avatar mode)
 // =====================================================================
-export function VoicePicker({ open, onClose, value, onPick, source = "heygen" }) {
+export function VoicePicker({ open, onClose, value, onPick, source = "heygen", userVoiceoverUrl, onUserVoiceoverChange }) {
   // source: "heygen" -> /studio/voices (paired with avatar)
   //         "tts"    -> /studio/tts-voices (Kokoro for faceless mode)
   const [voices, setVoices] = useState([]);
@@ -433,6 +434,25 @@ export function VoicePicker({ open, onClose, value, onPick, source = "heygen" })
         </div>
       ) : (
         <div className="voice-list" data-testid="voice-list">
+          {source === "tts" && onUserVoiceoverChange && (
+            <div className="voice-row voice-row-recorder" data-testid="voice-row-recorder">
+              <VoiceRecorder
+                currentUrl={userVoiceoverUrl}
+                onUploaded={(data) => {
+                  // Persist the public URL the render pipeline will stream
+                  // from. We also clear any AI voice selection so the
+                  // recorder is the unambiguous winner — backend prefers
+                  // user_voiceover_url anyway, but the UI should reflect it.
+                  const base = process.env.REACT_APP_BACKEND_URL || "";
+                  const abs = data.url.startsWith("http")
+                    ? data.url
+                    : base.replace(/\/$/, "") + data.url;
+                  onUserVoiceoverChange(abs, data);
+                }}
+                onClear={() => onUserVoiceoverChange(null, null)}
+              />
+            </div>
+          )}
           {filtered.map((v) => {
             const isFav = favorites.has(v.id);
             return (
@@ -496,10 +516,11 @@ export function VoicePicker({ open, onClose, value, onPick, source = "heygen" })
 // =====================================================================
 export function BRollSourcePicker({ open, onClose, value, onPick }) {
   const options = [
-    { id: "ai",      name: "Generate with AI",  icon: <Sparkles size={22} />, desc: "Every scene is generated with AI from your prompt. Best for abstract, stylized topics." },
-    { id: "pexels",  name: "Stock from Pexels", icon: <Film size={22} />,     desc: "Free, premium stock footage. Strong on lifestyle, business, and nature." },
-    { id: "pixabay", name: "Stock from Pixabay", icon: <Film size={22} />,    desc: "Alternate library — broader catalog, more niche topics." },
-    { id: "mix",     name: "Mix per scene",     icon: <Layers size={22} />,   desc: "No global default — pick AI / Pexels / Pixabay individually for each scene." },
+    { id: "ai",       name: "Generate with AI",  icon: <Sparkles size={22} />, desc: "Every scene is generated with AI from your prompt. Best for abstract, stylized topics." },
+    { id: "pexels",   name: "Stock from Pexels", icon: <Film size={22} />,     desc: "Free, premium stock footage. Strong on lifestyle, business, and nature." },
+    { id: "pixabay",  name: "Stock from Pixabay", icon: <Film size={22} />,    desc: "Alternate library — broader catalog, more niche topics." },
+    { id: "uploaded", name: "Your media",        icon: <FolderOpen size={22} />, desc: "Use clips and images YOU uploaded — bypass AI and stock entirely." },
+    { id: "mix",      name: "Mix per scene",     icon: <Layers size={22} />,   desc: "No global default — pick AI / Pexels / Pixabay / Your media per scene." },
   ];
   return (
     <Modal open={open} onClose={onClose} title="B-Roll source" testId="broll-modal">

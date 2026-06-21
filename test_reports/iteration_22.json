@@ -1,0 +1,72 @@
+{
+  "summary": "Iter-22 — verified the user-uploads bundle (B-roll + voiceover + media-library) + new /api/studio/stock-candidates endpoint + user_voiceover_url render persistence + Flux content-hash cache safety. Backend 8/8 pytest PASS after fixing 2 production bugs in /app/backend/uploads_routes.py (GridFS list_uploads + stream close). Frontend 12/13 Playwright checks PASS: 'Your media' B-Roll option, 'B-Roll · Yours' chip label, Pick from your library scene button → MediaLibrary modal with dropzone + Choose Files, VoiceRecorder inside the TTS voice modal with 'Record your voice' label, and render button correctly DISABLED when uploaded scenes lack picks. Only the cta-hint text test is PARTIAL (see below — not a bug, validation-chain ordering).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "bugs_found_and_fixed": [
+    {
+      "file": "/app/backend/uploads_routes.py",
+      "endpoint": "GET /api/studio/uploads",
+      "issue": "500 — 'GridOut object has no attribute get'. fs.find() yields GridOut objects (attribute-access) but the handler called doc.get('metadata') on them.",
+      "fix": "Query the raw db['uploads.files'] collection instead of fs.find() so docs are plain dicts.",
+      "verified": true
+    },
+    {
+      "file": "/app/backend/uploads_routes.py",
+      "endpoint": "GET /api/files/{file_id}",
+      "issue": "TypeError: object NoneType can't be used in 'await' expression. Motor's GridOut.close() returns None synchronously (not a coroutine).",
+      "fix": "Guard the close() — only await if it returns a coroutine.",
+      "verified": true
+    }
+  ],
+  "verified_features": {
+    "POST /api/studio/uploads/voiceover": "PASS — accepts WAV with audio/wav, returns 200 + id + url (/api/files/{id}) + kind='voiceover' + size.",
+    "POST /api/studio/uploads/broll": "PASS — accepts 1x1 PNG with image/png, returns 200 + id + url + kind='broll' + content_type='image/png'.",
+    "GET /api/studio/uploads": "PASS — lists owner's uploads sorted by uploadDate desc, both freshly-uploaded items appear (after fix).",
+    "GET /api/files/{id} (no auth)": "PASS — streams content; PNG signature \\x89PNG\\r\\n\\x1a\\n verified.",
+    "DELETE /api/studio/uploads/{id}": "PASS — returns {ok:true}, subsequent GET /api/files/{id} returns 404, listing no longer includes it.",
+    "POST /api/studio/stock-candidates": "PASS — body {prompts:['mountains at sunrise','laptop on desk'], source:'pexels', orientation:'portrait'} returns {candidates:[{idx,prompt,candidates:[…≤3]}, …]} preserving prompt order; Pexels live hits returned (PEXELS_API_KEY active in env).",
+    "POST /api/studio/render persists user_voiceover_url": "PASS — sent payload with user_voiceover_url='https://example.com/voice.mp3', GET /api/studio/render/{job_id} returns the same value. Mongo direct check confirms doc in `renders` collection has user_voiceover_url stored.",
+    "Flux content-hash cache queue safety": "PASS — POST /api/studio/render with ai-flux scene returns 200 queued and GET render returns 200 (no crash). flux_cache collection is 0 entries because the test render fails fast (status=failed) without hitting the cache write path — expected since we don't trigger a real Flux generation (cost-saving). Cache logic at server.py L1811/L1833 is wired but unexercised by this test.",
+    "Frontend login + /studio + Faceless mode": "PASS — DEV_BYPASS email lands at /scripts; navigated to /studio, mode-picker shows, clicking mode-picker-faceless activates Faceless mode (mode-opt is-active).",
+    "B-Roll source picker 'Your media' option": "PASS — [data-testid='broll-uploaded'] visible; clicking sets chip-broll label to 'B-Roll · Yours'.",
+    "Scene 'Pick from your library' button + MediaLibrary modal": "PASS — generate-prompts produced 3 scenes, [data-testid='scene-library-0'] visible, clicking opens [data-testid='media-library-modal'] with [data-testid='media-dropzone'] + [data-testid='media-dropzone-btn'] both visible.",
+    "VoiceRecorder inside TTS voice modal": "PASS — opening [data-testid='chip-tts-voice'] in Faceless mode shows [data-testid='voice-recorder-start'] with text ' Record your voice'.",
+    "Render button disabled when uploaded scene has no pick": "PASS — generate-btn.is_disabled()=True. Storyboard correctly shows 'Pick a file' placeholder on each 'YOU' card."
+  },
+  "partial_or_notes": {
+    "cta-hint exact text": "PARTIAL — the request asks for 'Pick a media file for each Yours scene.' but the visible hint reads 'Pick a voice or record your own.' This is because the validation chain in /app/frontend/src/pages/Studio.jsx fires the voice-missing check FIRST (before the uploaded-pick check at line 963). The exact string 'Pick a media file for each 'Yours' scene.' DOES exist in code at L963 and would appear if the user picks a voice first. Not a bug — validation ordering by design. Main agent may want to confirm this priority is intended."
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_uploads_and_studio_v22.py",
+    "/app/test_reports/pytest/iteration_22_uploads_studio.xml"
+  ],
+  "action_items": [
+    "(Optional) Decide if the cta-hint validation ordering should surface the 'Pick a media file for each Yours scene' message earlier than the voice-missing message when both are missing (currently voice wins). Code: /app/frontend/src/pages/Studio.jsx L956-970.",
+    "(Optional) Add a tiny cron sweep that purges soft-deleted GridFS docs older than N days — uploads.files docs remain in db with metadata.deleted=true (already noted in code comment)."
+  ],
+  "critical_code_review_comments": [
+    "uploads_routes.py — list_uploads was using fs.find() which yields GridOut objects, not dicts. Always use db['<bucket>.files'] for metadata queries; reserve the GridFS bucket only for upload/download streams.",
+    "uploads_routes.py — Motor 3.x's GridOut.close() is sync; awaiting it raises TypeError. Same pattern for stream.read(). Fixed to no-op on non-coroutine close.",
+    "server.py — POST /api/studio/render correctly persists user_voiceover_url (verified in `renders` collection). The Pydantic model RenderRequest exposes it as Optional[str] with proper default.",
+    "stock-candidates endpoint — sound design: parallel httpx fetches with per-prompt 3-cap and order preservation via idx. Source allowlist enforced (pexels|pixabay|mix). 422 on bad shapes and 400 on bad source.",
+    "Frontend — testids on every interactive element on the new flow are present and stable. ModePicker uses [data-testid='mode-picker-faceless'] (not 'mode-faceless'); the docs in the review_request implied users go straight to mode-faceless but the landing actually shows ModePicker first — minor doc/test note."
+  ],
+  "updated_files": [
+    "/app/backend/uploads_routes.py (fixed list_uploads + stream close)",
+    "/app/backend/tests/test_uploads_and_studio_v22.py (new — 8 pytests for uploads + stock-candidates + render persistence)"
+  ],
+  "success_rate": {"backend": "100% (8/8)", "frontend": "92% (12/13, 1 PARTIAL by validation-chain ordering)"},
+  "test_credentials": "DEV_BYPASS_EMAIL=drcharitycampbell@gmail.com (passwordless via /api/auth/check). Admin + all 3 entitlements.",
+  "seed_data_creation": "Created 2 GridFS uploads during test run (1 WAV voiceover — then soft-deleted, 1 PNG broll — left in place owned by drcharitycampbell). Created 2 render docs in `renders` collection (status=failed because no actual render workers ran for these tests).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "For Studio testing: Studio mounts ModePicker FIRST (testid='mode-picker'); click [data-testid='mode-picker-faceless'] (NOT 'mode-faceless') to enter Faceless mode. After that, the tabs [data-testid='mode-avatar' | 'mode-faceless'] are visible. To get scenes, fill [data-testid='script-textarea'] (40+ words) then click [data-testid='generate-prompts-btn'] and wait up to ~22s for the LLM. The B-Roll picker testids are [data-testid='broll-<id>'] where id ∈ {ai, pexels, pixabay, mix, uploaded}. When source='uploaded', each scene shows [data-testid='scene-library-<i>'] which opens [data-testid='media-library-modal'] with [data-testid='media-dropzone' & 'media-dropzone-btn']. VoiceRecorder lives INSIDE the voice modal at [data-testid='voice-recorder-start']. The render persists user_voiceover_url in the `renders` Mongo collection (not `render_jobs`). For uploads, content_type MUST be in the allowlist (audio/wav, image/png, etc). flux_cache collection lives in db.flux_cache keyed by content-hash; entries only appear after a real Flux generation succeeds — won't populate in DRY_RUN tests.",
+  "rca of the issue": "Two GridFS-handling bugs in uploads_routes.py shipped without integration test coverage: (1) fs.find() yields GridOut objects (attribute-access on dynamic motor adapter), not the dict form needed by .get(). The fix queries db['uploads.files'] directly. (2) Motor's AsyncIOMotorGridOut.close() in v3.x returns None synchronously, but the streaming response used `await stream.close()`. Both bugs were latent until exercised by the listing + GET path. Reproduction: any logged-in studio user calling GET /api/studio/uploads after uploading a file would 500. Mitigation: shipped fix + new pytest module covering all 5 upload routes + listing + delete cycle to prevent regression."
+}

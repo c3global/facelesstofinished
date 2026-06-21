@@ -3943,3 +3943,284 @@
 }
 .ent-pick.is-on { border-color: var(--accent); background: rgba(127, 119, 221, 0.08); }
 .ent-pick input { margin: 0; }
+
+/* =========================================================================
+ * Voice recorder — sits inside the TTS voice picker as the first row.
+ * Lets the user bypass AI TTS entirely and use a browser-recorded clip.
+ * ========================================================================= */
+.voice-row-recorder {
+  background: linear-gradient(135deg, rgba(127,119,221,0.10), rgba(224,164,88,0.08));
+  border: 1px solid rgba(127,119,221,0.30);
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+  display: block;
+}
+.voice-recorder {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  width: 100%;
+}
+.voice-recorder-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: rgba(29,158,117,0.16);
+  color: var(--success);
+  font-size: 12px;
+  font-weight: 600;
+}
+.voice-recorder-saved-label { font-weight: 600; }
+.voice-recorder-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: all 0.15s ease;
+}
+.voice-recorder-btn.is-primary {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+.voice-recorder-btn.is-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+.voice-recorder-btn.is-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+.voice-recorder-btn.is-danger {
+  background: var(--danger);
+  color: white;
+  border-color: var(--danger);
+}
+.voice-recorder-btn.is-ghost {
+  background: transparent;
+  color: var(--text-muted);
+  border-color: var(--border-soft);
+}
+.voice-recorder-btn.is-ghost:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--text-muted);
+}
+.voice-recorder-btn.is-ghost:disabled { opacity: 0.4; cursor: not-allowed; }
+.voice-recorder-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  flex: 1 1 auto;
+  min-width: 180px;
+}
+.voice-recorder-timer {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  min-width: 50px;
+}
+.voice-recorder-pulse {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--danger);
+  animation: voice-pulse 0.9s ease-in-out infinite;
+}
+@keyframes voice-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.7); }
+}
+.voice-recorder-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--danger);
+  font-size: 11px;
+  font-weight: 500;
+  width: 100%;
+  margin-top: 6px;
+  flex-basis: 100%;
+}
+
+/* =========================================================================
+ * Media Library — drag-and-drop upload modal + uploaded-clip grid.
+ * Opens from the "Your media" scene-source per scene.
+ * ========================================================================= */
+.media-dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 28px 20px;
+  margin-bottom: 14px;
+  border: 2px dashed var(--border-soft);
+  border-radius: 14px;
+  background: rgba(127,119,221,0.04);
+  color: var(--text-muted);
+  text-align: center;
+  transition: all 0.15s ease;
+}
+.media-dropzone.is-dragging {
+  border-color: var(--accent);
+  background: rgba(127,119,221,0.10);
+  color: var(--text);
+}
+.media-dropzone-title { font-weight: 600; color: var(--text); font-size: 14px; }
+.media-dropzone-hint { font-size: 11px; }
+.media-dropzone-btn {
+  margin-top: 6px;
+  padding: 7px 16px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--accent);
+  color: white;
+  border: none;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.media-dropzone-btn:hover { background: var(--accent-hover); }
+.media-uploading-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.media-uploading-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: rgba(127,119,221,0.06);
+  border-radius: 6px;
+  font-size: 12px;
+}
+.media-uploading-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.media-uploading-pct { font-family: ui-monospace, monospace; font-weight: 600; color: var(--accent); }
+.media-uploading-err { color: var(--danger); font-size: 11px; }
+.media-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: rgba(196,26,24,0.10);
+  color: var(--danger);
+  border-radius: 6px;
+  font-size: 12px;
+  margin-bottom: 10px;
+}
+.media-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+}
+.media-card {
+  position: relative;
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--card-bg);
+  border: 1px solid var(--border-soft);
+  transition: all 0.15s ease;
+}
+.media-card:hover { border-color: var(--accent); transform: translateY(-2px); }
+.media-card-pick {
+  display: block;
+  width: 100%;
+  padding: 0;
+  background: transparent;
+  border: none;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+}
+.media-card-thumb {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 9 / 16;
+  background: #0F0A1E;
+  overflow: hidden;
+}
+.media-card-thumb.is-landscape { aspect-ratio: 16 / 9; }
+.media-card-thumb img, .media-card-thumb video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.media-card-kind {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 7px;
+  font-size: 10px;
+  font-weight: 600;
+  background: rgba(0,0,0,0.72);
+  color: white;
+  border-radius: 4px;
+  backdrop-filter: blur(4px);
+}
+.media-card-pick-hint {
+  position: absolute;
+  inset: auto 6px 6px auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 7px;
+  font-size: 10px;
+  font-weight: 700;
+  background: var(--accent);
+  color: white;
+  border-radius: 4px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.media-card:hover .media-card-pick-hint { opacity: 1; }
+.media-card-meta { padding: 8px 10px; }
+.media-card-name {
+  font-size: 12px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+.media-card-size { font-size: 10px; color: var(--text-muted); margin-top: 2px; }
+.media-card-delete {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  border: none;
+  background: rgba(0,0,0,0.72);
+  color: white;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(4px);
+  transition: background 0.15s ease;
+}
+.media-card-delete:hover { background: var(--danger); }
+
+/* Source-pill / badge color for uploaded scenes — uses purple accent (vs
+   teal for AI, gold/blue for stock). */
+.source-pill[data-source="uploaded"].is-on {
+  background: rgba(127,119,221,0.16);
+  color: var(--accent);
+  border-color: rgba(127,119,221,0.40);
+}
+.storyboard-source-badge[data-source="uploaded"] {
+  background: var(--accent);
+  color: white;
+}

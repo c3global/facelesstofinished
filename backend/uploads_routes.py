@@ -76,7 +76,11 @@ def register_uploads_routes(api: APIRouter, db, current_user_dep, require_studio
     async def list_uploads(user=Depends(current_user_dep)):
         """Return the current user's uploaded media library."""
         require_studio(user)
-        cursor = fs.find({
+        # NOTE: fs.find() yields GridOut objects (attribute-access), but we
+        # need .get()-style dict access. Query the raw uploads.files
+        # collection so we always get plain dicts.
+        files = db["uploads.files"]
+        cursor = files.find({
             "metadata.owner": user.email,
             "metadata.deleted": {"$ne": True},
         }).sort("uploadDate", -1)
@@ -139,7 +143,14 @@ def register_uploads_routes(api: APIRouter, db, current_user_dep, require_studio
                         break
                     yield chunk
             finally:
-                await stream.close()
+                # Motor's GridOut.close() is sync in some versions and returns
+                # None — guard against awaiting a non-awaitable.
+                try:
+                    maybe_coro = stream.close()
+                    if maybe_coro is not None:
+                        await maybe_coro
+                except Exception:
+                    pass
 
         content_type = (doc.get("metadata") or {}).get("content_type") or "application/octet-stream"
         return StreamingResponse(
