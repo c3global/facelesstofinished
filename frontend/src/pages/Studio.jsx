@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { UserCircle2, Mic, Ratio, Film, ChevronDown, Play, Trash2, Sparkles, Wand2, Loader2, RotateCw, Cpu, FolderOpen, Image as ImageIcon, Check } from "lucide-react";
+import { UserCircle2, Mic, Ratio, Film, ChevronDown, Play, Trash2, Sparkles, Wand2, Loader2, RotateCw, Cpu, FolderOpen, Image as ImageIcon, Check, Captions, CaptionsOff } from "lucide-react";
 import { apiClient, useAuth } from "../App";
 import {
   AvatarPicker,
@@ -8,6 +8,7 @@ import {
   AspectPicker,
   StockPicker,
   AIEnginePicker,
+  CaptionsPicker,
 } from "../components/Pickers";
 import ModePicker, { COMPOSITE_TOAST } from "../components/ModePicker";
 import MediaLibrary from "../components/MediaLibrary";
@@ -142,12 +143,12 @@ export default function Studio() {
 
   // Settings
   const [aspect, setAspect] = useState("9_16");
-  // Captions intentionally hidden in this iteration — backend ignores both
-  // `captions` and `caption_style`, but we keep the state so the payload
-  // contract stays stable for older history docs. Captions UI is reinstated
-  // in a future pass once HeyGen + fal pipelines burn them in reliably.
-  const captions = false;
-  const captionStyle = "boxed";
+  // Captions burn-in — second-pass fal.ai/auto-subtitle. Off by default; users
+  // opt in via the Captions chip → CaptionsPicker. `captionStyle` is preserved
+  // in state when captions are toggled off so flipping back on remembers the
+  // last choice. Adds ~$0.10 / render when enabled.
+  const [captions, setCaptions] = useState(false);
+  const [captionStyle, setCaptionStyle] = useState("boxed");
 
   // Avatar mode picks
   const [avatar, setAvatar] = useState(null);
@@ -704,6 +705,22 @@ export default function Studio() {
     </button>
   );
 
+  const captionsChipLabel = captions
+    ? `Captions · ${ { boxed: "Boxed", tiktok: "TikTok", minimal: "Minimal" }[captionStyle] || "On" }`
+    : "Captions · Off";
+  const chipCaptions = (
+    <button
+      className={`chip ${captions ? "is-set" : ""}`}
+      data-testid="chip-captions"
+      onClick={() => setModal("captions")}
+      title="Burn word-level captions onto the video (second pass on fal.ai)"
+    >
+      <span className="chip-icon">{captions ? <Captions size={14} /> : <CaptionsOff size={14} />}</span>
+      <span className="chip-label">{captionsChipLabel}</span>
+      <ChevronDown size={14} className="chip-caret" />
+    </button>
+  );
+
   // ---- Source pills handled by hoisted SourcePills component ----
 
   return (
@@ -822,9 +839,9 @@ export default function Studio() {
       {/* Chip row */}
       <div className="chip-row" data-testid="chip-row">
         {mode === MODES.AVATAR ? (
-          <>{chipAvatar}{chipVoice}{chipAspect}</>
+          <>{chipAvatar}{chipVoice}{chipAspect}{chipCaptions}</>
         ) : (
-          <>{chipTtsVoice}{chipBroll}{chipAiEngine}{chipAspect}</>
+          <>{chipTtsVoice}{chipBroll}{chipAiEngine}{chipAspect}{chipCaptions}</>
         )}
       </div>
 
@@ -1417,6 +1434,17 @@ export default function Studio() {
         onClose={() => setLibraryModal({ open: false, idx: -1 })}
         onPick={(item) => {
           if (libraryModal.idx >= 0) setScenePick(libraryModal.idx, item);
+        }}
+      />
+
+      <CaptionsPicker
+        open={modal === "captions"}
+        onClose={closeModal}
+        enabled={captions}
+        style={captionStyle}
+        onPick={(on, styleId) => {
+          setCaptions(!!on);
+          if (styleId) setCaptionStyle(styleId);
         }}
       />
 

@@ -1261,6 +1261,129 @@ async def _make_i2v_clip(
     return await _trim_t2v_clip(raw_url, duration_ms, scene_idx)
 
 
+    return await _trim_t2v_clip(raw_url, duration_ms, scene_idx)
+
+
+# --- Caption burn-in (second-pass fal.ai auto-subtitle) ---------------------
+# After the main `fal-ai/ffmpeg-api/compose` finishes stitching the video +
+# voiceover, we feed the resulting MP4 to `fal-ai/workflow-utilities/auto-
+# subtitle` which:
+#   1. Re-extracts the audio from the composed video,
+#   2. Transcribes it with word-level timing (ElevenLabs STT under the hood),
+#   3. Burns styled subtitles onto the video and returns a new MP4 URL.
+#
+# We expose 3 caption styles in the UI that map to concrete preset objects
+# below. The render request stores `caption_style` (default "boxed") so
+# saved history docs replay the same look on regen.
+#
+# Cost: roughly $0.10 / video for short renders (TikTok-length). Charged
+# once per render when `captions=True`. Soft-fails on errors so a caption
+# outage never blocks shipping the underlying render.
+AUTO_SUBTITLE_MODEL = "fal-ai/workflow-utilities/auto-subtitle"
+CAPTION_BURN_COST_CENTS = 10  # ~$0.10/render
+CAPTION_BURN_MAX_WAIT_S = 600
+
+CAPTION_STYLE_PRESETS: dict[str, dict] = {
+    # Bold TikTok-ish bottom captions on a translucent box — the safe default.
+    "boxed": {
+        "font_name": "Montserrat",
+        "font_size": 92,
+        "font_weight": "bold",
+        "font_color": "white",
+        "highlight_color": "yellow",
+        "stroke_width": 2,
+        "stroke_color": "black",
+        "background_color": "black",
+        "background_opacity": 0.55,
+        "position": "bottom",
+        "y_offset": 90,
+        "words_per_subtitle": 4,
+        "enable_animation": True,
+    },
+    # One-word-at-a-time karaoke style à la TikTok creators.
+    "tiktok": {
+        "font_name": "Poppins",
+        "font_size": 120,
+        "font_weight": "black",
+        "font_color": "white",
+        "highlight_color": "purple",
+        "stroke_width": 4,
+        "stroke_color": "black",
+        "background_color": "none",
+        "background_opacity": 0.0,
+        "position": "center",
+        "y_offset": 0,
+        "words_per_subtitle": 1,
+        "enable_animation": True,
+    },
+    # Minimal documentary-style captions — small, clean, no animation.
+    "minimal": {
+        "font_name": "Inter",
+        "font_size": 64,
+        "font_weight": "normal",
+        "font_color": "white",
+        "highlight_color": "white",
+        "stroke_width": 1,
+        "stroke_color": "black",
+        "background_color": "none",
+        "background_opacity": 0.0,
+        "position": "bottom",
+        "y_offset": 60,
+        "words_per_subtitle": 6,
+        "enable_animation": False,
+    },
+}
+
+
+async def _burn_in_captions(video_url: str, style_key: str) -> Optional[str]:
+    """Second pass through fal.ai's auto-subtitle workflow. Returns the URL
+    of the captioned MP4, or None on any error (caller falls back to the
+    uncaptioned video). Style is one of `CAPTION_STYLE_PRESETS` — unknown
+    keys silently fall back to `"boxed"`."""
+    if not FAL_API_KEY or not video_url:
+        return None
+    style = CAPTION_STYLE_PRESETS.get(style_key) or CAPTION_STYLE_PRESETS["boxed"]
+    payload = {"video_url": video_url, "language": "en", **style}
+    fal_headers = {"Authorization": f"Key {FAL_API_KEY}"}
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            sub = await client.post(
+                f"https://queue.fal.run/{AUTO_SUBTITLE_MODEL}",
+                headers=fal_headers,
+                json=payload,
+            )
+            if sub.status_code not in (200, 202):
+                logger.warning(f"[captions] submit FAIL {sub.status_code}: {sub.text[:200]}")
+                return None
+            sub_body = sub.json()
+            status_url = sub_body.get("status_url")
+            result_url = sub_body.get("response_url")
+            if not status_url or not result_url:
+                logger.warning(f"[captions] submit malformed: {str(sub_body)[:200]}")
+                return None
+            deadline = asyncio.get_event_loop().time() + CAPTION_BURN_MAX_WAIT_S
+            while asyncio.get_event_loop().time() < deadline:
+                await asyncio.sleep(2)
+                stat = await client.get(status_url, headers=fal_headers)
+                if stat.status_code != 200:
+                    continue
+                st = stat.json().get("status", "")
+                if st == "COMPLETED":
+                    res = await client.get(result_url, headers=fal_headers)
+                    if res.status_code != 200:
+                        return None
+                    out = res.json()
+                    return (out.get("video") or {}).get("url") or out.get("video_url")
+                if st == "FAILED":
+                    logger.warning(f"[captions] FAILED: {stat.text[:200]}")
+                    return None
+            logger.warning(f"[captions] polling timed out after {CAPTION_BURN_MAX_WAIT_S}s")
+            return None
+    except Exception as exc:
+        logger.warning(f"[captions] exception: {type(exc).__name__}: {exc}")
+        return None
+
+
 # --- Sentence-aware script splitter ----------------------------------------
 # Each "beat" is one natural pause in the voiceover (sentence or em-dash/comma
 # split for runs longer than 25 words). Used by:
@@ -1595,6 +1718,11 @@ def estimate_render_cost_cents(payload: RenderRequest) -> int:
         cents += 3.0                                   # extra compose overhead
     else:
         return 0
+    # Caption burn-in second pass (~$0.10) — only when explicitly enabled.
+    # Charged identically for Avatar, Faceless, and Composite modes since
+    # all three terminate with a single composed MP4 fed to auto-subtitle.
+    if payload.captions:
+        cents += CAPTION_BURN_COST_CENTS
     return int(round(cents))
 
 
@@ -2268,6 +2396,28 @@ async def _run_render_faceless(job: dict):
     if not compose_res:
         return  # _fal_queue_run already finalized the job with an error
     composed_url = compose_res.get("video_url") or (compose_res.get("video") or {}).get("url")
+
+    # --- Caption burn-in (second compose pass) ---------------------------
+    # User-uploaded voiceovers + Kokoro TTS both produce clean audio that
+    # transcribes well, so we can run the auto-subtitle pass even when the
+    # voice source is the user's recording. Auto-subtitle transcribes the
+    # audio fresh and burns word-level highlighted captions onto the video.
+    # Style maps `caption_style` ("boxed" | "tiktok" | "minimal") to a
+    # concrete preset of font/colour/position/words-per-segment.
+    if composed_url and job.get("captions"):
+        try:
+            await _set_progress(92, "Burning in captions…")
+            captioned_url = await _burn_in_captions(composed_url, job.get("caption_style") or "boxed")
+            if captioned_url:
+                composed_url = captioned_url
+                # Auto-subtitle pricing on fal.ai is ~$0.10 per video.
+                actual_cost_cents += CAPTION_BURN_COST_CENTS
+            else:
+                # Soft-fail: ship the no-caption render rather than blocking.
+                logger.warning(f"[captions] burn-in returned no URL for job={job_id}; shipping uncaptioned")
+        except Exception as exc:
+            logger.warning(f"[captions] burn-in exception for job={job_id}: {type(exc).__name__}: {exc}")
+
     await _finalize(job_id, ok=True, url=composed_url, actual_cost_cents=actual_cost_cents)
 
 

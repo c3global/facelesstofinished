@@ -578,36 +578,6 @@ export function AspectPicker({ open, onClose, value, onPick }) {
 // =====================================================================
 // Captions picker
 // =====================================================================
-export function CaptionsPicker({ open, onClose, value, onPick }) {
-  const options = [
-    { id: true,  name: "Captions ON",  desc: "Recommended for vertical short-form (Reels / TikTok / Shorts).", Icon: Captions },
-    { id: false, name: "Captions OFF", desc: "Recommended for horizontal long-form (YouTube). Cleaner look.", Icon: CaptionsOff },
-  ];
-  return (
-    <Modal open={open} onClose={onClose} title="Captions" testId="captions-modal">
-      <div className="captions-list" data-testid="captions-list">
-        {options.map((o) => (
-          <button
-            key={String(o.id)}
-            className={`aspect-row ${value === o.id ? "is-selected" : ""}`}
-            data-testid={`captions-${o.id ? "on" : "off"}`}
-            onClick={() => { onPick(o.id); onClose(); }}
-          >
-            <div className="aspect-info">
-              <o.Icon size={28} color="var(--accent)" />
-              <div>
-                <div className="aspect-name">{o.name}</div>
-                <div className="aspect-sub">{o.desc}</div>
-              </div>
-            </div>
-            {value === o.id && <Check size={20} color="var(--accent)" />}
-          </button>
-        ))}
-      </div>
-    </Modal>
-  );
-}
-
 // =====================================================================
 // AI engine picker (Faceless mode only — picks the model for AI scenes)
 // =====================================================================
@@ -775,6 +745,75 @@ export function StockPicker({ open, onClose, sceneIdx, defaultSource, query: def
             </button>
           ))
         )}
+      </div>
+    </Modal>
+  );
+}
+
+/**
+ * Captions burn-in style picker. Three concrete looks that map to the
+ * `caption_style` field on the render request. Each style triggers a
+ * server-side fal.ai auto-subtitle second pass after the main compose.
+ *
+ *   - "boxed"   → Bold yellow karaoke highlights on a black 55%-opacity box.
+ *   - "tiktok"  → 1-word-at-a-time center karaoke with purple highlight.
+ *   - "minimal" → Small white text, no animation, no background.
+ *
+ * Pass enabled=null + onToggle to also let the user turn captions off
+ * entirely. When enabled=false the picked style is preserved in state so
+ * toggling back on remembers the last choice (no surprise resets).
+ */
+export function CaptionsPicker({ open, onClose, enabled, style, onPick }) {
+  const options = [
+    {
+      id: "boxed",
+      name: "Boxed · Bold",
+      hint: "Black box behind bold yellow-highlighted words. Reads great on busy footage.",
+      Icon: Captions,
+    },
+    {
+      id: "tiktok",
+      name: "TikTok · Karaoke",
+      hint: "One huge word at a time, center-screen, purple karaoke highlight.",
+      Icon: Captions,
+    },
+    {
+      id: "minimal",
+      name: "Minimal · Documentary",
+      hint: "Small clean white text. No animation, no background. For talk-heavy scripts.",
+      Icon: Captions,
+    },
+  ];
+  return (
+    <Modal open={open} onClose={onClose} title="Captions burn-in" testId="captions-modal">
+      <div className="source-grid" data-testid="captions-grid">
+        <button
+          type="button"
+          data-testid="captions-off"
+          className={`source-card ${!enabled ? "is-selected" : ""}`}
+          onClick={() => { onPick(false, style); onClose(); }}
+        >
+          <div className="source-icon"><CaptionsOff size={22} /></div>
+          <div className="source-name">Off</div>
+          <div className="source-desc">No captions burned in. Best for music-only edits or when you&rsquo;ll add captions in your own editor.</div>
+        </button>
+        {options.map((opt) => {
+          const isActive = enabled && style === opt.id;
+          return (
+            <button
+              type="button"
+              key={opt.id}
+              data-testid={`captions-${opt.id}`}
+              className={`source-card ${isActive ? "is-selected" : ""}`}
+              onClick={() => { onPick(true, opt.id); onClose(); }}
+            >
+              <div className="source-icon"><opt.Icon size={22} /></div>
+              <div className="source-name">{opt.name}</div>
+              <div className="source-desc">{opt.hint}</div>
+              <div className="source-desc" style={{ marginTop: 6, fontSize: 11, opacity: 0.7 }}>+$0.10 / render</div>
+            </button>
+          );
+        })}
       </div>
     </Modal>
   );

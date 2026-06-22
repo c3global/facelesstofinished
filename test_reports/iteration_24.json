@@ -1,0 +1,46 @@
+{
+  "summary": "Iter-24 — verified the new caption burn-in second-pass via fal.ai auto-subtitle. Backend 10/10 pytest PASS covering: estimator +10c surcharge in BOTH faceless (off=6c, on=16c) and avatar modes (delta exactly +10c); server constants CAPTION_BURN_COST_CENTS=10, AUTO_SUBTITLE_MODEL='fal-ai/workflow-utilities/auto-subtitle', CAPTION_STYLE_PRESETS has all 3 styles {boxed,tiktok,minimal} each with all 13 required keys (font_name, font_size, font_weight, font_color, highlight_color, position, words_per_subtitle, enable_animation, background_color, background_opacity, stroke_width, stroke_color, y_offset), _burn_in_captions defined; /api/studio/render persists captions:true + caption_style:'tiktok'; unknown style key falls back to 'boxed' preset (Montserrat / 4 words-per-subtitle verified by capturing the FAL payload); missing FAL_API_KEY returns None without HTTP call; mirror of the post-compose block confirms success path swaps composed_url→captioned_url + adds 10c, soft-fail path keeps uncaptioned URL with no cost added, captions=False path never calls _burn_in_captions. Frontend 15/15 Playwright checks PASS: chip-captions defaults to 'Captions · Off' in faceless mode, all 4 testids (captions-off / boxed / tiktok / minimal) visible in captions-modal, Off is is-selected initially, picking TikTok closes modal + chip flips to 'Captions · TikTok', reopening shows tiktok as is-selected, Off→Boxed correctly replaces TikTok (last-pick-wins semantics), chip remains visible in Avatar mode with state preserved across mode switch. NO real fal.ai auto-subtitle calls were made (zero spend).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "verified_features": {
+    "Estimator +10c (faceless)": "PASS — flux_static 1 scene off=6c, on=16c, delta=+10c exactly.",
+    "Estimator +10c (avatar)": "PASS — avatar mode off vs on delta=+10c exactly.",
+    "Server constants": "PASS — CAPTION_BURN_COST_CENTS=10, AUTO_SUBTITLE_MODEL='fal-ai/workflow-utilities/auto-subtitle', _burn_in_captions defined.",
+    "CAPTION_STYLE_PRESETS shape": "PASS — keys={boxed,tiktok,minimal}; each preset contains all 13 required keys; boxed.font_name=Montserrat, tiktok.words_per_subtitle=1, minimal.enable_animation=False.",
+    "Render doc persists captions+caption_style": "PASS — POST /api/studio/render with captions=true caption_style='tiktok' returns + persists captions=true and caption_style='tiktok' on the doc.",
+    "_burn_in_captions success path swaps URL": "PASS — mirror of post-compose block: captioned_url replaces composed_url + cost +=10c. _finalize would receive captioned URL.",
+    "_burn_in_captions soft-fail (returns None)": "PASS — composed_url unchanged, no caption cost added, no crash. Soft-fail intact.",
+    "captions=False skips _burn_in_captions": "PASS — AsyncMock.assert_not_called() verified.",
+    "Unknown style → boxed fallback": "PASS — patched httpx, captured POST payload, font_name='Montserrat' & words_per_subtitle=4 confirmed (boxed preset).",
+    "Frontend: chip default 'Captions · Off'": "PASS — faceless mode shows chip-captions with off label.",
+    "Frontend: modal 4 testids visible": "PASS — captions-off / captions-boxed / captions-tiktok / captions-minimal all visible. Off has is-selected class initially.",
+    "Frontend: pick tiktok → label updates": "PASS — modal closes, chip = 'Captions · TikTok'. Reopen shows tiktok as is-selected.",
+    "Frontend: last-pick-wins (Off→Boxed replaces TikTok)": "PASS — chip flips to 'Captions · Boxed' (no stale TikTok).",
+    "Frontend: chip in Avatar mode": "PASS — chip-captions visible after switching to avatar; state preserved (Boxed)."
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_captions_v24.py",
+    "/app/test_reports/pytest/iteration_24_captions.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py L1721-1725 estimator — clean conditional `if payload.captions: cents += CAPTION_BURN_COST_CENTS`. Applied AFTER mode-specific cost so it's mode-agnostic (avatar/faceless/composite all charged uniformly). Good.",
+    "server.py L2400-2421 _run_render_faceless caption block — exemplary defensive coding: (a) guards on `composed_url AND job.get('captions')`, (b) try/except wraps _burn_in_captions, (c) soft-fail logs a WARNING and continues with the uncaptioned URL, (d) only adds the 10c cost when the captioned URL actually came back. This means a fal.ai outage cannot block a paid user's render — exactly the right priority.",
+    "server.py L1342-1345 _burn_in_captions — unknown style silently maps to 'boxed'. Verified via payload capture. Could optionally log.info('unknown style fallback') for telemetry but not required.",
+    "server.py L2498 + 2507 — render doc stores both `captions: payload.captions` and `caption_style: payload.caption_style`, so history replays and re-renders preserve the exact look.",
+    "server.py L175 — RenderRequest default `captions: bool = True`. Frontend defaults to OFF and always explicitly sends `captions` in the payload (Studio.jsx L368), so the server-side True default is dormant for UI callers. API-only callers omitting the field would be charged unexpectedly — consider flipping the default to False to match the UI, or document this in API docs. Not a bug, but a UX-trap for downstream API consumers.",
+    "Pickers.jsx L786-820 CaptionsPicker — clean: 4 testids (captions-off + 3 style ids), is-selected logic correctly bound to `(enabled && style === opt.id)`. The Off card's onClick passes `style` (current) so the user's previously-chosen style is preserved across off-on cycles — verified by reopen behavior.",
+    "Studio.jsx L708-722 chipCaptions — label map covers all 3 styles + 'On' fallback for unknown styles. The chip appears in BOTH chip rows (L842 avatar, L844 faceless) — confirmed by playwright.",
+    "Studio.jsx L1445-1448 onPick handler — `setCaptions(!!on); if (styleId) setCaptionStyle(styleId);` is correct: Off click passes (false, style) so style state is preserved; clicking another style passes (true, newStyle) replacing the previous choice. Matches the 'last-pick-wins' UX spec."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_captions_v24.py (new — 10 pytests)"
+  ],
+  "success_rate": {"backend": "100% (10/10)", "frontend": "100% (15/15 chip + modal + mode-switch checks)"},
+  "test_credentials": "DEV_BYPASS_EMAIL=drcharitycampbell@gmail.com (passwordless via /api/auth/check). Admin + all 3 entitlements.",
+  "seed_data_creation": "Created 1 render doc in `renders` collection during the persistence test (captions=true, caption_style='tiktok'). It will move to a failed/incomplete state since no real Kokoro/FAL run was executed end-to-end — this is expected and matches prior iteration patterns.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Caption burn-in ships clean: estimator +10c (avatar+faceless+composite), constants/presets present with all 13 keys per style, soft-fail behavior verified by mirroring the post-compose block under controlled AsyncMock returns, frontend chip/modal/mode-switch all green. To test the actual fal.ai auto-subtitle pass end-to-end (NOT recommended — $0.10/call), submit a render with captions=true and watch logs for `[captions] submit ...` then `[captions] FAILED|COMPLETED`. The function uses `https://queue.fal.run/fal-ai/workflow-utilities/auto-subtitle` and polls status_url every 2s up to CAPTION_BURN_MAX_WAIT_S=600s. Run all backend tests: `python -m pytest /app/backend/tests/test_captions_v24.py -v --junitxml=/app/test_reports/pytest/iteration_24_captions.xml`. One non-bug observation: `RenderRequest.captions` defaults to True server-side but the UI always sends False unless toggled — flag for API doc clarity.",
+  "rca of the issue": "No bug — verified a new feature. Two learnings: (1) `/studio` landing shows a ModePicker (testid mode-picker) on first visit; tests must set localStorage `f48_studio_mode_chosen='1'` OR click `mode-picker-faceless` to reach the chip row. Initial Playwright run hit a 5s timeout on chip-captions because the page was still on the picker. Fixed by setting the localStorage flag + clicking mode-faceless explicitly. (2) The dev-bypass auth token is stored at localStorage key `f48_studio_token` (not `auth_token`) — issued by POST /api/auth/check with body {email}."
+}
