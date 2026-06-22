@@ -763,7 +763,7 @@ export function StockPicker({ open, onClose, sceneIdx, defaultSource, query: def
  * entirely. When enabled=false the picked style is preserved in state so
  * toggling back on remembers the last choice (no surprise resets).
  */
-export function CaptionsPicker({ open, onClose, enabled, style, onPick }) {
+export function CaptionsPicker({ open, onClose, enabled, style, onPick, isAdmin = false }) {
   const options = [
     {
       id: "boxed",
@@ -810,7 +810,11 @@ export function CaptionsPicker({ open, onClose, enabled, style, onPick }) {
               <div className="source-icon"><opt.Icon size={22} /></div>
               <div className="source-name">{opt.name}</div>
               <div className="source-desc">{opt.hint}</div>
-              <div className="source-desc" style={{ marginTop: 6, fontSize: 11, opacity: 0.7 }}>+$0.10 / render</div>
+              {isAdmin && (
+                <div className="source-desc" style={{ marginTop: 6, fontSize: 11, opacity: 0.7 }}>
+                  +$0.10 / render
+                </div>
+              )}
             </button>
           );
         })}

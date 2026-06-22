@@ -1442,6 +1442,7 @@ export default function Studio() {
         onClose={closeModal}
         enabled={captions}
         style={captionStyle}
+        isAdmin={isAdmin}
         onPick={(on, styleId) => {
           setCaptions(!!on);
           if (styleId) setCaptionStyle(styleId);
