@@ -172,7 +172,10 @@ class RenderRequest(BaseModel):
     mode: str  # "avatar" | "faceless" | "composite"
     script: str
     aspect: str = "9_16"  # "9_16" | "16_9"
-    captions: bool = True
+    # Captions are OFF by default to avoid surprise charges for API-only
+    # callers (the UI always sends an explicit value via the CaptionsPicker).
+    # Enabling triggers a second-pass fal.ai/auto-subtitle burn-in at +$0.10.
+    captions: bool = False
     # Avatar mode
     avatar_id: Optional[str] = None
     voice_id: Optional[str] = None

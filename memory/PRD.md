@@ -1220,3 +1220,34 @@ After researching the fal.ai compose schema (Keyframe ONLY accepts `{timestamp, 
 - **P2** Bump Kling fallback events to a metric counter (`db.kling_i2v_failures`) for admin telemetry on systemic fal outages.
 - **P2** Faceless caption burn-in via fal compose second pass.
 - **P3** Server.py modularization (still 3100+ lines).
+
+## 2026-02-22d — Phase 3.5t: Faceless caption burn-in (fal.ai second pass)
+
+**Status:** SHIPPED — 10/10 backend pytest PASS, 15/15 frontend Playwright PASS. Iteration 24.
+
+### What shipped
+- **Second-pass caption burn-in** via `fal-ai/workflow-utilities/auto-subtitle`. Triggered after the main compose finishes; transcribes the composed video's audio + burns word-level karaoke captions onto a new MP4.
+- **Three caption styles** in the UI (`CaptionsPicker`):
+  - `boxed` — bold Montserrat on a 55%-opacity black box, 4 words/segment, yellow highlight. The safe default.
+  - `tiktok` — one huge Poppins word at a time, center-screen, purple karaoke highlight.
+  - `minimal` — clean Inter at 64px, no animation, no background — for talk-heavy scripts.
+- **Off** option preserves the last-chosen style in state (toggling back on remembers the pick).
+- **Cost surcharge** — +10¢/render when enabled. Surfaced in both `estimate_cost_cents` AND the actual cost accumulator. Applies uniformly across Avatar / Faceless / Composite modes.
+- **Soft-fail** — if auto-subtitle fails/times out, the render finalizes with the uncaptioned URL + zero caption charge. A fal outage can't block a paid render.
+- **API default flipped to False** — protects API-only callers from surprise $0.10 charges. UI always sends an explicit value.
+
+### Files touched
+- `/app/backend/server.py` — `_burn_in_captions` + `CAPTION_STYLE_PRESETS` + estimator surcharge + post-compose hook + `RenderRequest.captions = False` default.
+- `/app/frontend/src/components/Pickers.jsx` — replaced the old ON/OFF `CaptionsPicker` with a 4-card (Off + 3 styles) variant. Exports renamed for clarity.
+- `/app/frontend/src/pages/Studio.jsx` — `captions`+`captionStyle` state, `chipCaptions` rendered in BOTH Avatar + Faceless chip rows, modal mount.
+- `/app/backend/tests/test_captions_v24.py` — 10 pytests (estimator delta, presets shape, persistence, success path, soft-fail, off-skip, fallback, key guard).
+
+### Testid additions
+`chip-captions`, `captions-modal`, `captions-off`, `captions-boxed`, `captions-tiktok`, `captions-minimal`.
+
+### Backlog
+- **P2** Composite mode — intertwine HeyGen avatar with B-roll cutaways (still deferred per Charity).
+- **P2** Cron sweep for soft-deleted GridFS uploads.
+- **P2** `db.kling_i2v_cache` TTL index (fal CDN URLs expire ~7 days).
+- **P2** History badge: which engine produced this render? (Flux+i2v vs Flux Static vs Stock vs Kling/Veo/Pika t2v).
+- **P3** `server.py` (3250+ lines) modularization.
