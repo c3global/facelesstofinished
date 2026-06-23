@@ -1932,7 +1932,31 @@ async def _run_render_avatar(job: dict):
                 d = (s.json() or {}).get("data") or {}
                 if d.get("status") == "completed":
                     actual_cost_cents += int(round(_estimate_duration_seconds(job["script"]) / 60.0 * 30.0))
-                    await _finalize(job_id, ok=True, url=d.get("video_url"), actual_cost_cents=actual_cost_cents)
+                    final_url = d.get("video_url")
+                    # Caption burn-in second pass — same fal.ai/auto-subtitle
+                    # path the Faceless pipeline uses. We do it here (not in
+                    # the HeyGen v3 payload) because HeyGen-side burn-in was
+                    # inconsistent across avatars. Soft-fails: a caption
+                    # outage never blocks the avatar render from shipping.
+                    if final_url and job.get("captions"):
+                        await db.renders.update_one(
+                            {"id": job_id},
+                            {"$set": {"progress": 92, "progress_label": "Burning in captions…"}},
+                        )
+                        try:
+                            captioned = await _burn_in_captions(
+                                final_url,
+                                job.get("caption_style") or "boxed",
+                                job.get("caption_position") or "bottom",
+                            )
+                            if captioned:
+                                final_url = captioned
+                                actual_cost_cents += CAPTION_BURN_COST_CENTS
+                            else:
+                                logger.warning(f"[captions] avatar job={job_id} burn-in returned no URL; shipping uncaptioned")
+                        except Exception as exc:
+                            logger.warning(f"[captions] avatar job={job_id} exception: {type(exc).__name__}: {exc}")
+                    await _finalize(job_id, ok=True, url=final_url, actual_cost_cents=actual_cost_cents)
                     return
                 if d.get("status") == "failed":
                     await db.renders.update_one(
