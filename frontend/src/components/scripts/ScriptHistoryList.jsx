@@ -13,16 +13,26 @@ function fmtDate(iso) {
   }
 }
 
-export default function ScriptHistoryList({ history, onOpen, onDelete }) {
+export default function ScriptHistoryList({ history, currentMode, onOpen, onDelete }) {
+  // In Shorts mode, only surface short-form scripts (shorts + sprint variants).
+  // In Long mode, show everything — long-form scripts plus any "(repurposed)"
+  // shorts that were derived from a long script via the Cut-into-a-Short flow.
+  const filtered = React.useMemo(() => {
+    const rows = history.filter((s) => s.status !== "running");
+    if (currentMode === "shorts") {
+      return rows.filter((s) => s.mode === "shorts" || s.mode === "sprint");
+    }
+    return rows;
+  }, [history, currentMode]);
+
   return (
     <div className="history-block" data-testid="scripts-history">
       <div className="history-head">Recent scripts</div>
-      {history.length === 0 ? (
+      {filtered.length === 0 ? (
         <div className="history-empty">No scripts yet. Generate one above.</div>
       ) : (
         <div className="history-list">
-          {history
-            .filter((s) => s.status !== "running")
+          {filtered
             .map((s) => (
               <div
                 className="history-row"

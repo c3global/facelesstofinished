@@ -15,6 +15,18 @@ paying customers + entitlements on the existing Netlify backend at
 `https://faceless48.c3global.co/api/auth-me` — the new Studio should call
 back to it for entitlement verification.
 
+## 2026-02-23 — Recent-scripts history filtered by current mode
+**Status:** SHIPPED — verified live on preview (15 rows in Long mode, 5 Short-only rows in Shorts mode).
+
+User feedback: "in the shorts section, I don't want it to show the long. I only want to see recent shorts. Long-form can keep showing both long + repurposed."
+
+**Change** — `ScriptHistoryList` now takes a `currentMode` prop. When the user is on the Shorts tab, the "Recent scripts" list filters to rows where `mode === 'shorts' || mode === 'sprint'`. Long-form tab keeps the existing behavior (all rows — long natives + repurposed shorts). No backend change; pure client-side filtering of the same `/scripts/history` payload.
+
+**Files touched**
+- `/app/frontend/src/pages/Scripts.jsx` — passes `currentMode={mode}` to `<ScriptHistoryList />`.
+- `/app/frontend/src/components/scripts/ScriptHistoryList.jsx` — accepts `currentMode`, uses `useMemo` to filter rows in Shorts mode.
+
+
 ## 2026-02-19 — Phase 3.5o: Render speed + B-roll relevance (Phase 1 of the larger bundle)
 **Status:** SHIPPED — 50/50 backend pytests PASS (11 new stock-query + 39 regression). Frontend untouched this round.
 

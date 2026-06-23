@@ -1402,6 +1402,7 @@ export default function Scripts() {
 
       <ScriptHistoryList
         history={history}
+        currentMode={mode}
         onOpen={loadFromHistory}
         onDelete={deleteFromHistory}
       />
