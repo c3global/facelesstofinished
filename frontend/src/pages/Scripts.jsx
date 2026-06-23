@@ -355,7 +355,25 @@ export default function Scripts() {
       setAngles(r.data.angles || []);
       setStep(STEPS.ANGLES);
     } catch (e) {
-      setErr(e?.response?.data?.detail || "Could not get angles. Try again.");
+      // Surface the actual server detail so production-env issues (LLM key
+      // missing, balance exhausted, upstream rate limit, etc.) are
+      // diagnosable from the UI rather than swallowed into a generic
+      // "Try again" — which left Charity stuck on 2026-02-23.
+      const status = e?.response?.status;
+      const detail = e?.response?.data?.detail;
+      let msg = "Could not get angles. Try again.";
+      if (detail) {
+        msg = String(detail);
+      } else if (status === 504 || status === 502 || e?.code === "ECONNABORTED") {
+        msg = "The script engine timed out. Try a shorter topic or retry in a moment.";
+      } else if (status === 401 || status === 403) {
+        msg = "Your session expired. Refresh the page and sign in again.";
+      } else if (status >= 500) {
+        msg = `Script engine error (HTTP ${status}). Try again in a minute — if it keeps happening, top up your Universal Key balance or contact support.`;
+      } else if (!status) {
+        msg = "No response from the server. Check your connection or refresh the page.";
+      }
+      setErr(msg);
     } finally {
       setBusy(false);
     }
