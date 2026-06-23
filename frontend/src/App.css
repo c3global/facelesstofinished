@@ -1112,6 +1112,40 @@
   border-top: 1px solid var(--border-soft);
   display: flex; flex-direction: column; gap: 12px;
 }
+.history-head-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.history-filter {
+  display: inline-flex;
+  gap: 4px;
+  padding: 3px;
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+}
+.history-filter-pill {
+  padding: 5px 12px;
+  border-radius: 7px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: color .12s, background .12s;
+}
+.history-filter-pill:hover { color: var(--text); }
+.history-filter-pill.is-active {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
+}
 .history-empty {
   padding: 28px 20px;
   text-align: center;
@@ -2098,18 +2132,25 @@
 .shorts-bento-grid {
   display: grid;
   gap: 16px;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  /* Base grid uses 6 columns. Most cards span 2 (so 3 cards per row); the
+     last two reference cards (Cover Image Prompts + Production Notes) span
+     3 each so they share a final row at EQUAL width — fixing the previous
+     look where Production Notes alone stretched wide. */
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   grid-auto-flow: dense;
   align-items: start;
 }
-/* Only Production Notes spans 2 cols by default (it's the densest card).
-   Hook Variations + Caption + B-Roll all stay 1-col so they land together
-   on row 1 as the pinned row. */
+.shorts-bento-grid > * { grid-column: span 2; }
+.shorts-bento-grid [data-section="coverPrompts"],
 .shorts-bento-grid [data-section="notes"] {
-  grid-column: span 2;
+  grid-column: span 3;
 }
 @media (max-width: 1100px) {
-  .shorts-bento-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .shorts-bento-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+  .shorts-bento-grid > * { grid-column: span 2; }
+  .shorts-bento-grid [data-section="coverPrompts"],
   .shorts-bento-grid [data-section="notes"] { grid-column: span 2; }
 }
 @media (max-width: 720px) {
@@ -2118,6 +2159,8 @@
     grid-template-columns: 1fr;
     gap: 12px;
   }
+  .shorts-bento-grid > * { grid-column: span 1; }
+  .shorts-bento-grid [data-section="coverPrompts"],
   .shorts-bento-grid [data-section="notes"] { grid-column: span 1; }
 }
 
@@ -2238,14 +2281,14 @@
   --sec-outline:       #5BA0F2;   /* sky blue (Outline) */
   --sec-script:        #1D9E75;   /* teal (Full Script) */
   --sec-transitions:   #9C6DD1;   /* purple (Transitions) */
-  --sec-broll:         #378ADD;   /* blue (B-Roll Shot List) */
+  --sec-broll:         #1D9E75;   /* green/teal — same hue as the B-ROLL chip used on the phone screen so the section card and inline cue read as one motif */
   --sec-notes:         #C9956C;   /* warm rose (Production Notes) */
   --sec-shortScript:   #1D9E75;   /* teal (Short-Form Script) */
-  --sec-onScreen:      #7F77DD;   /* primary purple (On-Screen Text) */
+  --sec-onScreen:      #38BDF8;   /* bright cyan (On-Screen Text) — distinct from purple Hashtags */
   --sec-caption:       #5BA0F2;   /* sky blue (Caption) */
   --sec-hashtags:      #9C6DD1;   /* purple (Hashtags) */
   --sec-titleVariants: #E0A458;   /* warm amber (Title / Thumbnail Variants) */
-  --sec-coverPrompts:  #E7B23C;   /* golden amber (Cover Image Prompts) */
+  --sec-coverPrompts:  #FF7A29;   /* bright orange (Cover Image Prompts) — clearer separation from the warm amber Title/Thumbnail card next to it */
 }
 
 [data-section="angles"]        { --sec-color: var(--sec-angles); }
@@ -2436,7 +2479,41 @@
   background: var(--surface);
   border: 1px solid var(--border-soft);
   border-radius: 12px;
+}
+/* Row that holds the platform tabs plus the optional Compare-all toggle on
+   the right. Margin moved up from the tabs themselves so both controls
+   share consistent spacing below. */
+.platform-tabs-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
   margin-bottom: 18px;
+}
+.compare-all-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  transition: color .15s, background .15s, border-color .15s;
+}
+.compare-all-btn:hover {
+  color: var(--text);
+  border-color: var(--border);
+}
+.compare-all-btn.is-active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 .platform-tab {
   padding: 8px 16px;
@@ -2473,6 +2550,50 @@
   0%, 100% { opacity: 1; transform: scale(1); }
   50%      { opacity: .5; transform: scale(1.3); }
 }
+
+/* =====================================================================
+   Multi-platform compare-all view — three mini phones side-by-side
+   ===================================================================== */
+.compare-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 20px;
+  align-items: start;
+  margin-top: 8px;
+}
+.compare-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  /* Each cell scopes its own --platform-accent so all three rims paint
+     simultaneously in their correct colors (YT red / Reels fuchsia /
+     TikTok teal) without fighting the root-level variable. */
+}
+.compare-cell-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+.compare-cell-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.compare-cell-label { color: var(--text); }
+/* Shrink the phone shell inside compare mode so three fit comfortably on a
+   typical 1440-1920px workspace. The PhoneFrame's inner content still
+   reflows naturally because the .phone-shell width is the only constraint. */
+.compare-cell .phone-shell {
+  width: 260px;
+  border-radius: 30px;
+}
+.compare-cell .phone-screen { padding: 14px 16px; }
 
 /* =====================================================================
    Sprint result — 5 vertical phone variants

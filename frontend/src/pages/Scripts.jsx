@@ -126,17 +126,6 @@ export default function Scripts() {
   const [includeBroll, setIncludeBroll] = useState(true);
   const [includeProductionNotes, setIncludeProductionNotes] = useState(true);
 
-  // Apply platform accent CSS variable
-  useEffect(() => {
-    const root = document.documentElement;
-    if (mode === MODES.SHORTS) {
-      const p = PLATFORMS.find((x) => x.id === platform);
-      if (p) root.style.setProperty("--platform-accent", p.accent);
-    } else {
-      root.style.removeProperty("--platform-accent");
-    }
-  }, [mode, platform]);
-
   // Two-step flow state
   const [step, setStep] = useState(STEPS.TOPIC);
   const [angles, setAngles] = useState([]);
@@ -148,6 +137,27 @@ export default function Scripts() {
   // Multi-platform results: array of { platform, id, status, output? }
   const [multiJobs, setMultiJobs] = useState([]);
   const [activeTab, setActiveTab] = useState("youtube");
+  // Compare mode: when multi-platform finishes, the user can switch to a
+  // side-by-side phone-trio view to A/B all three platforms at once.
+  const [compareAll, setCompareAll] = useState(false);
+
+  // Apply platform accent CSS variable. When a Shorts result is loaded from
+  // history (or a different platform tab is active), `output?.platform` wins
+  // over the user's currently-selected platform pill so the phone rim, status
+  // badge, and CTA all switch to that platform's color. Without this, every
+  // history-loaded short rendered with whatever rim the user last picked
+  // (which is why YouTube history was showing up red regardless of the
+  // platform the script was actually written for).
+  useEffect(() => {
+    const root = document.documentElement;
+    if (mode === MODES.SHORTS) {
+      const activePlatformId = output?.platform || platform;
+      const p = PLATFORMS.find((x) => x.id === activePlatformId);
+      if (p) root.style.setProperty("--platform-accent", p.accent);
+    } else {
+      root.style.removeProperty("--platform-accent");
+    }
+  }, [mode, platform, output?.platform]);
 
   const [history, setHistory] = useState([]);
   const [savedAngles, setSavedAngles] = useState([]);
@@ -737,6 +747,7 @@ export default function Scripts() {
       const r = await apiClient.get(`/scripts/job/${id}`);
       setOutput(r.data);
       setMultiJobs([]);
+      setCompareAll(false);
       setStep(STEPS.RESULT);
       setTimeout(
         () =>
@@ -766,6 +777,7 @@ export default function Scripts() {
     setPickedAngle(null);
     setOutput(null);
     setMultiJobs([]);
+    setCompareAll(false);
     setErr("");
   };
 
@@ -1256,30 +1268,84 @@ export default function Scripts() {
             </div>
           )}
 
-          {/* Multi-platform tabs */}
+          {/* Multi-platform tabs + compare-all toggle. When ≥2 platform jobs
+              are complete, the user can switch from the single-phone tab view
+              to a side-by-side trio comparing all three platforms at once. */}
           {multiJobs.length > 0 && (
-            <div className="platform-tabs" data-testid="platform-tabs">
-              {multiJobs.map((j) => {
-                const p = PLATFORMS.find((x) => x.id === j.platform);
-                return (
-                  <button
-                    key={j.platform}
-                    type="button"
-                    className={`platform-tab ${activeTab === j.platform ? "is-active" : ""}`}
-                    data-testid={`platform-tab-${j.platform}`}
-                    style={{ "--tab-accent": p?.accent }}
-                    onClick={() => switchTab(j.platform)}
-                  >
-                    <span className={`platform-tab-status is-${j.status}`} />
-                    {p?.label || j.platform}
-                  </button>
-                );
-              })}
+            <div className="platform-tabs-row">
+              <div className="platform-tabs" data-testid="platform-tabs">
+                {multiJobs.map((j) => {
+                  const p = PLATFORMS.find((x) => x.id === j.platform);
+                  return (
+                    <button
+                      key={j.platform}
+                      type="button"
+                      className={`platform-tab ${!compareAll && activeTab === j.platform ? "is-active" : ""}`}
+                      data-testid={`platform-tab-${j.platform}`}
+                      style={{ "--tab-accent": p?.accent }}
+                      onClick={() => {
+                        setCompareAll(false);
+                        switchTab(j.platform);
+                      }}
+                    >
+                      <span className={`platform-tab-status is-${j.status}`} />
+                      {p?.label || j.platform}
+                    </button>
+                  );
+                })}
+              </div>
+              {multiJobs.filter((j) => j.status === "complete").length >= 2 && (
+                <button
+                  type="button"
+                  className={`compare-all-btn ${compareAll ? "is-active" : ""}`}
+                  data-testid="compare-all-btn"
+                  onClick={() => setCompareAll((v) => !v)}
+                  title="View all platforms side-by-side"
+                >
+                  <Layers size={13} />
+                  {compareAll ? "Single view" : "Compare all"}
+                </button>
+              )}
             </div>
           )}
 
-          {/* Sprint result */}
-          {output.mode === "sprint" ? (
+          {/* Compare-all view: render every completed platform's phone +
+              short-form script side-by-side. Each phone scopes its own
+              --platform-accent locally so all three rims render in their
+              correct color simultaneously. */}
+          {compareAll && multiJobs.length > 0 ? (
+            <div className="compare-grid" data-testid="compare-grid">
+              {multiJobs
+                .filter((j) => j.status === "complete" && j.output?.text)
+                .map((j) => {
+                  const p = PLATFORMS.find((x) => x.id === j.platform);
+                  const jobSections = parseSections(j.output.text);
+                  return (
+                    <div
+                      key={j.platform}
+                      className="compare-cell"
+                      data-testid={`compare-cell-${j.platform}`}
+                      style={{ "--platform-accent": p?.accent }}
+                    >
+                      <div className="compare-cell-head">
+                        <span
+                          className="compare-cell-dot"
+                          style={{ background: p?.accent }}
+                        />
+                        <span className="compare-cell-label">
+                          {p?.label || j.platform}
+                        </span>
+                      </div>
+                      <PhoneFrame platform={j.platform}>
+                        <ShortPhoneBody
+                          shortBody={jobSections.shortScript?.body || ""}
+                        />
+                      </PhoneFrame>
+                    </div>
+                  );
+                })}
+            </div>
+          ) : output.mode === "sprint" ? (
             <SprintResult
               variants={sprintVariants}
               platform={output.platform || platform}

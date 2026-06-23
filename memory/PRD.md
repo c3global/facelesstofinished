@@ -15,6 +15,31 @@ paying customers + entitlements on the existing Netlify backend at
 `https://faceless48.c3global.co/api/auth-me` — the new Studio should call
 back to it for entitlement verification.
 
+## 2026-02-23 — Shorts result polish: filter pills, platform rim from history, compare-all multi-platform, bento alignment, section-color spread
+**Status:** SHIPPED — verified live (Reels rim = #E1306C, TikTok rim = #25F4EE, compare-all renders 3 phones with correct rims; cover + notes side-by-side at 408px each).
+
+User feedback bundle from a single screenshot pass: (1) phone rim was always red even when viewing a Reels/TikTok history script, (2) multi-platform mode only shows one platform at a time — wanted side-by-side comparison, (3) Production Notes was unbalanced against Cover Image Prompts in the bento grid, (4) too many similar yellow/amber section colors with no green/orange spread, (5) wanted a filter pill row on Recent scripts as proposed.
+
+**Changes**
+1. **`ScriptHistoryList` filter pills** — `CURRENT / ALL / LONG / SHORTS / SPRINT` above the recent-scripts list. `CURRENT` is the default and mirrors the page's active mode (so Shorts still hides longs by default). User can pop to any explicit bucket without leaving the page. Sprint history rows also get their own "Sprint" chip label.
+2. **Phone rim now follows `output?.platform`** — the `--platform-accent` CSS variable's `useEffect` now depends on the loaded output's platform field, not just the user's selected pill. Reels history reopens with the fuchsia rim; TikTok with teal. Previously, every history-loaded short rendered with whatever rim was last picked.
+3. **Compare-all multi-platform view** — when ≥2 platform jobs complete in multi-platform mode, a new "Compare all" toggle appears next to the platform tabs. Clicking it swaps the single big phone for a 3-column grid of mini phones (260px each), one per platform, each locally scoping its own `--platform-accent` via `style={{"--platform-accent": p.accent}}` so all three rims paint their correct color simultaneously. A "Single view" pill on the same row reverts to the tab UX.
+4. **Bento grid balance** — base grid switched to 6 columns. Most cards span 2 (3 per row); the bottom row Cover Image Prompts + Production Notes each span 3 so they sit side-by-side at EQUAL width (was 549px/267px imbalance before; now 408px each). Tablet breakpoint collapses to 4 cols × span-2, mobile to single column.
+5. **Section color spread** — rebalanced the `--sec-*` tokens so adjacent shorts cards never share a hue: `broll` 378ADD→1D9E75 green (matches the inline B-ROLL chip), `onScreen` 7F77DD→38BDF8 cyan (was duplicate purple with hashtags), `coverPrompts` E7B23C→FF7A29 bright orange (was near-clone of titleVariants amber).
+
+**Files touched**
+- `/app/frontend/src/components/scripts/ScriptHistoryList.jsx` — rewrote with `FILTERS` array, `applyFilter()` helper, filter pill row.
+- `/app/frontend/src/pages/Scripts.jsx` — moved `output` state above the platform-accent `useEffect` (was a temporal-dead-zone reference); added `compareAll` state + reset on `startOver`/`loadFromHistory`; replaced bare `.platform-tabs` block with `.platform-tabs-row` wrapper containing the tabs + Compare-all toggle; added compare-grid render branch (uses `parseSections(j.output.text)` per cell so each phone renders its own platform's `shortScript`).
+- `/app/frontend/src/App.css` — `.shorts-bento-grid` rewritten to 6-col base; `.compare-grid` + `.compare-cell` (auto-fit minmax 260px) + `.compare-cell .phone-shell` width override; `.platform-tabs-row` flex + `.compare-all-btn`; `.history-head-row` + `.history-filter` + `.history-filter-pill` pill styles; `--sec-broll` / `--sec-onScreen` / `--sec-coverPrompts` tokens re-coloured.
+
+**Verified live (preview URL)**
+- Filter pills: `['CURRENT','ALL','LONG','SHORTS','SPRINT']` rendered, default is `current`.
+- Loaded Reels short — `--platform-accent` = `#E1306C` (fuchsia rim confirmed).
+- Loaded TikTok short — `--platform-accent` = `#25F4EE` (teal rim confirmed).
+- Multi-platform run for "quick morning routine" — Compare-all button surfaced at ~36s; 3 cells rendered with rims `srgb(0.7,0,0.14)` YT red / `srgb(0.62,0.13,0.30)` Reels fuchsia / `srgb(0.10,0.67,0.65)` TikTok teal.
+- Cover prompts / Production notes: same row, both 408px wide.
+
+
 ## 2026-02-23 — Recent-scripts history filtered by current mode
 **Status:** SHIPPED — verified live on preview (15 rows in Long mode, 5 Short-only rows in Shorts mode).
 
