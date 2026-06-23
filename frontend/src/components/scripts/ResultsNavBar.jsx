@@ -1,5 +1,5 @@
 import React from "react";
-import { ArrowDown, ClipboardCopy, ChevronsDownUp, ChevronsUpDown } from "lucide-react";
+import { ArrowDown, ClipboardCopy, ChevronsDownUp, ChevronsUpDown, Plus } from "lucide-react";
 
 /**
  * ResultsNavBar — sticky toolbar that appears at the top of the viewport
@@ -16,6 +16,11 @@ import { ArrowDown, ClipboardCopy, ChevronsDownUp, ChevronsUpDown } from "lucide
  *  - onCopyScript: copies the full long-form / short package
  *  - onCopyAllShorts: copies every sprint variant concatenated
  *  - onToggleCollapseAll: flips global collapse state
+ *  - onStartNew: clears the result and returns to the topic/length picker so
+ *    the user can kick off a fresh generation without leaving the current
+ *    mode (fixes the "Shorts result + recent history hides the new-short CTA"
+ *    trap where you previously had to flip to Long then back to Shorts).
+ *  - newCtaLabel: copy for the start-new button ("New short" / "New script").
  */
 export default function ResultsNavBar({
   status,
@@ -28,6 +33,8 @@ export default function ResultsNavBar({
   onCopyScript,
   onCopyAllShorts,
   onToggleCollapseAll,
+  onStartNew,
+  newCtaLabel = "New script",
 }) {
   return (
     <div className="results-nav" data-testid="results-nav">
@@ -35,6 +42,16 @@ export default function ResultsNavBar({
         {status}
       </span>
       <div className="results-nav-actions">
+        {onStartNew && (
+          <button
+            type="button"
+            className="results-nav-btn is-primary"
+            data-testid="results-nav-start-new"
+            onClick={onStartNew}
+          >
+            <Plus size={13} /> {newCtaLabel}
+          </button>
+        )}
         {hasScript && (
           <button
             type="button"

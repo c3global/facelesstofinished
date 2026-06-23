@@ -15,6 +15,30 @@ paying customers + entitlements on the existing Netlify backend at
 `https://faceless48.c3global.co/api/auth-me` — the new Studio should call
 back to it for entitlement verification.
 
+## 2026-02-23 — Post-compare follow-ups: YT backticks → chips, TikTok chip readability, per-platform Send-to-Studio, persistent "New short" CTA
+**Status:** SHIPPED — verified live (6 ON-SCREEN + 6 B-ROLL chips on YT cell, TikTok chip text=rgb(11,26,26), 3 per-platform CTAs, New-short CTA returns to topic step while staying in Shorts mode).
+
+User feedback after seeing compare-all live: (1) YouTube's column rendered backtick-wrapped `` `[ON-SCREEN: …]` `` / `` `[B-ROLL: …]` `` as raw code text while Reels/TikTok rendered them as chips, (2) TikTok TEXT chip and pill had white text on bright teal — barely legible, (3) wanted per-platform Send-to-Studio buttons in compare view, (4) once a Shorts result was open you had to flip to Long-form and back to Shorts to start a new one — no in-mode "new" CTA.
+
+**Changes**
+1. **`ShortPhoneBody` cue parser hardened** — `stripWrappers()` now also strips leading/trailing backticks (and the per-line cue check re-strips them before the `[ON-SCREEN:`/`[B-ROLL:` regex). `cleanLine()` also drops any inline backticks from the rendered body. Claude wraps these markers in inline-code spans for some platforms when it's emphasising them; the parser now treats backticks as pure formatting noise so all three platforms render chips uniformly.
+2. **TikTok chip + pill dark text** — `[data-platform="tiktok"] .phone-platform-badge` and `.phone-cue-onscreen .phone-cue-tag` now get `color: #0B1A1A`; the surrounding TEXT cue body gets a pale teal `#BDF8F2` so the chip is legible without losing the TikTok-flavoured tint. Reels/YT pills keep their white text (their accents are dark enough to support it).
+3. **Per-platform Send-to-Studio in compare-all view** — new `sendToStudio(jobOutput)` helper replaces the body of `useInStudio()` and is called from a tinted pill button under each compare cell. The handoff now also carries `platform` so Studio could platform-route in the future. Each CTA inherits its cell's `--platform-accent` so the YT/Reels/TikTok buttons are visually paired with their phone.
+4. **"New short / New script / New sprint" sticky CTA** — `ResultsNavBar` learned an `onStartNew` prop + `newCtaLabel` for the copy. Scripts.jsx passes `startOver` and a mode-aware label. Now whenever a result is open, the sticky toolbar has a primary amber CTA on the left that clears the result and returns to the topic step **while preserving the current mode** — no more "flip to Long and back to Shorts" trap. Fully reset state: `step`, `angles`, `pickedAngle`, `output`, `multiJobs`, `compareAll`.
+
+**Files touched**
+- `/app/frontend/src/components/scripts/ShortPhoneBody.jsx` — renamed `stripEmphasis` → `stripWrappers` with backtick stripping; per-line cue check re-runs strip before regex; `cleanLine` also removes inline backticks.
+- `/app/frontend/src/App.css` — `[data-platform="tiktok"]` overrides for `.phone-platform-badge` and `.phone-cue-onscreen` colors; `.compare-cell-cta` pill button styled with platform accent; `.results-nav-btn.is-primary` amber-fill primary variant.
+- `/app/frontend/src/pages/Scripts.jsx` — extracted `sendToStudio(jobOutput)` from `useInStudio`; added per-cell `<button class="compare-cell-cta">` in the compare-grid; passed `onStartNew={startOver}` + mode-aware `newCtaLabel` to `ResultsNavBar`.
+- `/app/frontend/src/components/scripts/ResultsNavBar.jsx` — `Plus` icon import; new `onStartNew` + `newCtaLabel` props; primary-styled button at the leading edge of the action row.
+
+**Verified live (preview URL)**
+- YT compare cell: 6 ON-SCREEN chips + 6 B-ROLL chips (was raw code text before); no backtick markers in inner HTML.
+- TikTok TEXT chip text color: `rgb(11, 26, 26)`. TikTok pill text color: `rgb(11, 26, 26)`.
+- 3 per-platform Send-to-Studio CTAs rendered: `compare-send-to-studio-youtube`, `…-reels`, `…-tiktok`.
+- "New short" CTA visible on result page; click returns to topic step with Shorts pill still active.
+
+
 ## 2026-02-23 — Shorts result polish: filter pills, platform rim from history, compare-all multi-platform, bento alignment, section-color spread
 **Status:** SHIPPED — verified live (Reels rim = #E1306C, TikTok rim = #25F4EE, compare-all renders 3 phones with correct rims; cover + notes side-by-side at 408px each).
 

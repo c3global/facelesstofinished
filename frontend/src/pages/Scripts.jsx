@@ -878,6 +878,14 @@ export default function Scripts() {
             onCopyScript={copyAll}
             onCopyAllShorts={copyAllShorts}
             onToggleCollapseAll={toggleCollapseAll}
+            onStartNew={startOver}
+            newCtaLabel={
+              isSprint
+                ? "New sprint"
+                : isShorts
+                ? "New short"
+                : "New script"
+            }
           />
         );
       })()}

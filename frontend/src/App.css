@@ -3133,6 +3133,19 @@
   background: rgba(224, 164, 88, 0.18);
   border-color: rgba(224, 164, 88, 0.85);
 }
+/* "New short / New script" primary action — flipped foreground/background so
+   it reads as the strongest CTA in the row, since starting a fresh
+   generation is the most common next-step after viewing a result. */
+.results-nav-btn.is-primary {
+  background: #E0A458;
+  color: #1A0F2E;
+  border-color: #E0A458;
+}
+.results-nav-btn.is-primary:hover {
+  background: #F0BC78;
+  border-color: #F0BC78;
+  color: #1A0F2E;
+}
 @media (max-width: 640px) {
   .results-nav { padding: 8px 16px; margin: 0 -16px 14px; }
   .results-nav-status { display: none; }      /* hide label on mobile per spec */
