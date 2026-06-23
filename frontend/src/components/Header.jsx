@@ -32,15 +32,28 @@ export default function Header() {
             >
               <FileText size={13} /> Script Engine
             </NavLink>
-            {user?.entitlements?.includes("studio") && (
-              <NavLink
-                to="/studio"
-                className={({ isActive }) => `nav-link ${isActive ? "is-active" : ""}`}
-                data-testid="nav-studio"
-              >
-                <Wand2 size={13} /> Studio
-              </NavLink>
-            )}
+            {/*
+              Studio nav is ALWAYS visible — even to users without the
+              `studio` entitlement. Clicking it lands them on the existing
+              paywall (`RequireStudio` → `<EntitlementPaywall>`) which is
+              the conversion prompt. Hiding the link entirely (the pre-
+              2026-02-23 behavior) meant Base-only users never even knew
+              Studio existed → zero in-app conversion path. The small
+              "Upgrade" pill makes it clear the feature is gated without
+              feeling like a tease.
+            */}
+            <NavLink
+              to="/studio"
+              className={({ isActive }) => `nav-link ${isActive ? "is-active" : ""}`}
+              data-testid="nav-studio"
+            >
+              <Wand2 size={13} /> Studio
+              {!user?.entitlements?.includes("studio") && (
+                <span className="nav-upgrade-pill" data-testid="nav-studio-upgrade-pill">
+                  Upgrade
+                </span>
+              )}
+            </NavLink>
             {user?.isAdmin && (
               <NavLink
                 to="/admin"

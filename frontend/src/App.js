@@ -137,7 +137,10 @@ export function EntitlementPaywall({ feature }) {
       desc:
         "Short-form scripts (TikTok, Reels, YouTube Shorts) require the Faceless to Finished bundle. Grab it once and unlock unlimited shorts script generation.",
       cta: "Get Faceless to Finished",
-      href: "https://sprint.c3global.co/faceless",
+      // Direct checkout link — bypasses the sales page so buyers who
+      // already know what they want can complete in one step. Updated
+      // 2026-02-23 per Charity's request.
+      href: "https://hub.c3global.co/payment-link/6a151b0d3f4eb69bef72feae",
     },
   }[feature] || {
     title: "Access required.",

@@ -4385,3 +4385,28 @@
   object-fit: cover;
   display: block;
 }
+
+/* =========================================================================
+ * "Upgrade" pill on gated nav links — shown next to "Studio" when the user
+ * is signed in but doesn't have the entitlement yet. Clicking the link
+ * lands them on the existing EntitlementPaywall for that feature.
+ * Subtle, conversion-oriented — readable without screaming.
+ * ========================================================================= */
+.nav-upgrade-pill {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: linear-gradient(135deg, var(--accent), var(--accent-hover));
+  color: white;
+  vertical-align: middle;
+  line-height: 14px;
+  box-shadow: 0 1px 3px rgba(127,119,221,0.35);
+}
+.nav-link:hover .nav-upgrade-pill {
+  filter: brightness(1.08);
+}

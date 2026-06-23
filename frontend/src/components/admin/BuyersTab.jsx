@@ -147,6 +147,37 @@ export default function BuyersTab() {
     load();
   }, [load]);
 
+  // Silent auto-refresh so newly-arrived webhook buyers appear on the
+  // Admin Buyers tab without the admin having to click Refresh manually.
+  // Polls every 20s while the tab is visible — pauses when the browser
+  // tab is hidden (Page Visibility API) so we don't burn the DB on tabs
+  // left open overnight. Per Charity's 2026-02-23 feedback: "if they
+  // purchase and it's not showing in admin, that's an issue."
+  useEffect(() => {
+    let stop = false;
+    const tick = () => {
+      if (stop) return;
+      if (typeof document !== "undefined" && document.hidden) return;
+      load();
+    };
+    const id = setInterval(tick, 20_000);
+    // Also refresh the moment the tab regains focus — covers the "tab
+    // was hidden when webhook fired" case immediately.
+    const onVis = () => {
+      if (!document.hidden) load();
+    };
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", onVis);
+    }
+    return () => {
+      stop = true;
+      clearInterval(id);
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", onVis);
+      }
+    };
+  }, [load]);
+
   const allSelected = useMemo(
     () => items.length > 0 && items.every((b) => selected.has(b.email)),
     [items, selected],
