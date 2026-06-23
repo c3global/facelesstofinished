@@ -146,9 +146,11 @@ export default function Studio() {
   // Captions burn-in — second-pass fal.ai/auto-subtitle. Off by default; users
   // opt in via the Captions chip → CaptionsPicker. `captionStyle` is preserved
   // in state when captions are toggled off so flipping back on remembers the
-  // last choice. Adds ~$0.10 / render when enabled.
+  // last choice. `captionPosition` chooses top/bottom/center placement.
+  // Adds ~$0.10 / render when enabled.
   const [captions, setCaptions] = useState(false);
   const [captionStyle, setCaptionStyle] = useState("boxed");
+  const [captionPosition, setCaptionPosition] = useState("bottom");
 
   // Avatar mode picks
   const [avatar, setAvatar] = useState(null);
@@ -366,6 +368,7 @@ export default function Studio() {
     aspect,
     captions,
     caption_style: captionStyle,
+    caption_position: captionPosition,
     avatar_id: mode === MODES.AVATAR ? avatar?.id : null,
     voice_id: mode === MODES.AVATAR ? voice?.id : null,
     tts_voice_id: mode === MODES.FACELESS ? ttsVoice?.id : null,
@@ -565,58 +568,91 @@ export default function Studio() {
     }
   };
 
-  // Fetch 3 candidate clips per scene from Pexels/Pixabay. We split the
-  // scene list into one bundle per source (Pexels-batch + Pixabay-batch)
-  // so the backend's fan-out hits each provider once with all queries in
-  // parallel — that's ~2s end-to-end for the typical 5-7 scene case vs
-  // 12+ seconds if we called once per scene.
+  // Fetch 3 candidate clips per scene from Pexels/Pixabay + ONE Flux preview
+  // per AI scene. Splits scenes by source so each external API gets called
+  // once with all queries in parallel — ~2-4s wall-clock for the typical
+  // mixed-source render vs 12s+ if we did one-at-a-time.
+  // AI previews use the same `db.flux_cache` as the renderer so they're
+  // free (same image gets used at render time). Costs $0.04/scene per
+  // uncached AI prompt — same as what the renderer would have spent.
   const fetchCandidates = async () => {
-    // Only scenes whose source is pexels/pixabay AND have a prompt.
-    const eligible = scenes
+    // Stock-eligible: pexels/pixabay scenes with prompts.
+    const stockEligible = scenes
       .map((s, i) => ({ s, i }))
       .filter(({ s }) => (s.source === "pexels" || s.source === "pixabay") && s.prompt);
-    if (eligible.length === 0) {
-      setCandidatesErr("No Pexels/Pixabay scenes to preview. Set a stock source on at least one scene first.");
+    // AI-eligible: ai-source scenes with prompts.
+    const aiEligible = scenes
+      .map((s, i) => ({ s, i }))
+      .filter(({ s }) => s.source === "ai" && s.prompt);
+    if (stockEligible.length === 0 && aiEligible.length === 0) {
+      setCandidatesErr("No scenes to preview. Set a source on at least one scene first.");
       return;
     }
     setCandidatesErr("");
     setLoadingCandidates(true);
     try {
       const orientation = aspect === "9_16" ? "portrait" : "landscape";
-      const groups = {
-        pexels: eligible.filter(({ s }) => s.source === "pexels"),
-        pixabay: eligible.filter(({ s }) => s.source === "pixabay"),
+      const stockGroups = {
+        pexels: stockEligible.filter(({ s }) => s.source === "pexels"),
+        pixabay: stockEligible.filter(({ s }) => s.source === "pixabay"),
       };
       const reqs = [];
+      // Stock candidate requests (one per source)
       for (const src of ["pexels", "pixabay"]) {
-        if (groups[src].length === 0) continue;
+        if (stockGroups[src].length === 0) continue;
         reqs.push(
           apiClient.post("/studio/stock-candidates", {
-            prompts: groups[src].map(({ s }) => s.prompt),
+            prompts: stockGroups[src].map(({ s }) => s.prompt),
             source: src,
             orientation,
-          }).then((r) => ({ src, payload: r.data.candidates || [], group: groups[src] }))
+          }).then((r) => ({ kind: "stock", payload: r.data.candidates || [], group: stockGroups[src] }))
+        );
+      }
+      // AI preview request (one call for all AI scenes)
+      if (aiEligible.length > 0) {
+        reqs.push(
+          apiClient.post("/studio/ai-previews", {
+            prompts: aiEligible.map(({ s }) => s.prompt),
+            aspect,
+          }).then((r) => ({ kind: "ai", payload: r.data.previews || [], group: aiEligible }))
         );
       }
       const results = await Promise.all(reqs);
-      const merged = {};
-      for (const { payload, group } of results) {
-        // Backend returns candidates in the same order we sent prompts, with
-        // {idx, prompt, candidates}. Remap each row back to the original
-        // scene index using the group order we preserved.
-        payload.forEach((row) => {
-          const sceneIdx = group[row.idx]?.i;
-          if (sceneIdx !== undefined && row.candidates) {
-            merged[sceneIdx] = row.candidates;
-          }
-        });
+      // Merge stock candidates into sceneCandidates map.
+      const mergedCandidates = {};
+      const aiAutopicks = []; // [{idx, pick}] — applied after Promise.all to avoid race
+      for (const { kind, payload, group } of results) {
+        if (kind === "stock") {
+          payload.forEach((row) => {
+            const sceneIdx = group[row.idx]?.i;
+            if (sceneIdx !== undefined && row.candidates) {
+              mergedCandidates[sceneIdx] = row.candidates;
+            }
+          });
+        } else if (kind === "ai") {
+          // For AI scenes, store the single preview as the scene's pick.thumb
+          // AND auto-apply it so the storyboard shows the real frame. The
+          // user can click Re-generate (via the existing scene-pick flow)
+          // to regenerate if they don't like it.
+          payload.forEach((row) => {
+            const sceneIdx = group[row.idx]?.i;
+            if (sceneIdx !== undefined && row.image_url) {
+              aiAutopicks.push({
+                idx: sceneIdx,
+                pick: { thumb: row.image_url, source: "ai", kind: "image" },
+              });
+            }
+          });
+        }
       }
-      setSceneCandidates(merged);
-      if (Object.keys(merged).length === 0) {
-        setCandidatesErr("No candidates returned. Try simpler prompts or a different stock source.");
+      setSceneCandidates(mergedCandidates);
+      // Apply AI autopicks
+      aiAutopicks.forEach(({ idx, pick }) => setScenePick(idx, pick));
+      if (Object.keys(mergedCandidates).length === 0 && aiAutopicks.length === 0) {
+        setCandidatesErr("No previews returned. Try simpler prompts or a different source.");
       }
     } catch (e) {
-      setCandidatesErr(e?.response?.data?.detail || "Could not load candidates. Try again.");
+      setCandidatesErr(e?.response?.data?.detail || "Could not load previews. Try again.");
     } finally {
       setLoadingCandidates(false);
     }
@@ -706,7 +742,7 @@ export default function Studio() {
   );
 
   const captionsChipLabel = captions
-    ? `Captions · ${ { boxed: "Boxed", tiktok: "TikTok", minimal: "Minimal" }[captionStyle] || "On" }`
+    ? `Captions · ${ { boxed: "Boxed", tiktok: "TikTok", minimal: "Minimal" }[captionStyle] || "On" } · ${ { top: "Top", bottom: "Bottom", center: "Center" }[captionPosition] || "Bottom" }`
     : "Captions · Off";
   const chipCaptions = (
     <button
@@ -868,10 +904,10 @@ export default function Studio() {
                 data-testid="fetch-candidates-btn"
                 disabled={loadingCandidates || scenes.length === 0}
                 onClick={fetchCandidates}
-                title={scenes.length === 0 ? "Generate prompts first" : "Preview 3 thumbnail candidates per stock scene"}
+                title={scenes.length === 0 ? "Generate prompts first" : "Preview Pexels/Pixabay candidates + AI scene stills"}
               >
                 {loadingCandidates ? <Loader2 size={12} className="spin" /> : <ImageIcon size={12} />}
-                {loadingCandidates ? "Loading…" : "Preview clips"}
+                {loadingCandidates ? "Loading…" : "Preview scenes"}
               </button>
               <span className="scene-section-count" data-testid="scene-count">
                 <strong>{sceneLines.length}</strong> {sceneLines.length === 1 ? "scene" : "scenes"}
@@ -1031,6 +1067,13 @@ export default function Studio() {
                   )}
                   {s.pick?.thumb ? (
                     <img src={s.pick.thumb} alt="" />
+                  ) : s.pick?.video_url && s.source === "uploaded" ? (
+                    // Uploaded video clip with no thumb — use the MP4 itself
+                    // as a poster. Browsers render the first frame on load
+                    // even without explicit preload="metadata", and the
+                    // `<video>` tag is muted+pause-on-load so it doesn't
+                    // try to auto-play 9 clips at once.
+                    <video src={s.pick.video_url} preload="metadata" muted playsInline />
                   ) : (
                     <div className="storyboard-thumb-placeholder" data-source={s.source || "none"} aria-hidden="true">
                       {s.source === "ai" ? (
@@ -1442,11 +1485,13 @@ export default function Studio() {
         onClose={closeModal}
         enabled={captions}
         style={captionStyle}
+        position={captionPosition}
         isAdmin={isAdmin}
         onPick={(on, styleId) => {
           setCaptions(!!on);
           if (styleId) setCaptionStyle(styleId);
         }}
+        onPositionChange={(pos) => setCaptionPosition(pos)}
       />
 
       {/* Inline player modal — replaces the broken "open URL in new tab" path. */}

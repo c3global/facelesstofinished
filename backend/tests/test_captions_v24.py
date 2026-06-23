@@ -132,7 +132,7 @@ class TestServerConstants:
             assert not missing, f"style '{style_name}' missing keys: {missing}"
         # Spot-check specific values
         assert srv.CAPTION_STYLE_PRESETS["boxed"]["font_name"] == "Montserrat"
-        assert srv.CAPTION_STYLE_PRESETS["tiktok"]["words_per_subtitle"] == 1
+        assert srv.CAPTION_STYLE_PRESETS["tiktok"]["words_per_subtitle"] == 3  # iter-25: 1→3 (Charity feedback)
         assert srv.CAPTION_STYLE_PRESETS["minimal"]["enable_animation"] is False
         assert srv.CAPTION_BURN_COST_CENTS == 10
         assert srv.AUTO_SUBTITLE_MODEL == "fal-ai/workflow-utilities/auto-subtitle"

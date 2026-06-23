@@ -176,6 +176,10 @@ class RenderRequest(BaseModel):
     # callers (the UI always sends an explicit value via the CaptionsPicker).
     # Enabling triggers a second-pass fal.ai/auto-subtitle burn-in at +$0.10.
     captions: bool = False
+    caption_style: str = "boxed"           # boxed | tiktok | minimal
+    # Vertical placement override — applies to all three styles. UI default
+    # is "bottom" which matches every style preset's default.
+    caption_position: str = "bottom"       # top | bottom | center
     # Avatar mode
     avatar_id: Optional[str] = None
     voice_id: Optional[str] = None
@@ -205,6 +209,7 @@ class RenderRequest(BaseModel):
     # outline). Stored on the doc; consumed by the optional caption-burn-in
     # step at the end of the faceless pipeline.
     caption_style: str = "boxed"
+    caption_position: str = "bottom"
 
 
 # ---------------------------------------------------------------------------
@@ -1303,10 +1308,12 @@ CAPTION_STYLE_PRESETS: dict[str, dict] = {
         "words_per_subtitle": 4,
         "enable_animation": True,
     },
-    # One-word-at-a-time karaoke style à la TikTok creators.
+    # Bold-ish karaoke style but smaller and at the user-chosen vertical slot.
+    # Three words at a time — fewer than "boxed" so it stays readable in
+    # the center where it overlaps the subject.
     "tiktok": {
         "font_name": "Poppins",
-        "font_size": 120,
+        "font_size": 96,
         "font_weight": "black",
         "font_color": "white",
         "highlight_color": "purple",
@@ -1314,9 +1321,9 @@ CAPTION_STYLE_PRESETS: dict[str, dict] = {
         "stroke_color": "black",
         "background_color": "none",
         "background_opacity": 0.0,
-        "position": "center",
-        "y_offset": 0,
-        "words_per_subtitle": 1,
+        "position": "bottom",   # overridden by caption_position request field
+        "y_offset": 90,
+        "words_per_subtitle": 3,
         "enable_animation": True,
     },
     # Minimal documentary-style captions — small, clean, no animation.
@@ -1337,15 +1344,30 @@ CAPTION_STYLE_PRESETS: dict[str, dict] = {
     },
 }
 
+# UI lets the user override the vertical placement of the captions regardless
+# of style. "top" places them near the top edge, "bottom" near the bottom
+# edge (the style default), "center" overlays them on the subject. Maps to
+# the auto-subtitle endpoint's `position` field. y_offset is also reset so
+# the captions sit at a sensible margin from the edge.
+CAPTION_POSITION_OVERRIDES: dict[str, dict] = {
+    "top":    {"position": "top",    "y_offset": 90},
+    "bottom": {"position": "bottom", "y_offset": 90},
+    "center": {"position": "center", "y_offset": 0},
+}
 
-async def _burn_in_captions(video_url: str, style_key: str) -> Optional[str]:
+
+async def _burn_in_captions(video_url: str, style_key: str, position_key: str = "bottom") -> Optional[str]:
     """Second pass through fal.ai's auto-subtitle workflow. Returns the URL
     of the captioned MP4, or None on any error (caller falls back to the
     uncaptioned video). Style is one of `CAPTION_STYLE_PRESETS` — unknown
-    keys silently fall back to `"boxed"`."""
+    keys silently fall back to `"boxed"`. Position overrides the preset's
+    vertical placement (top/bottom/center)."""
     if not FAL_API_KEY or not video_url:
         return None
-    style = CAPTION_STYLE_PRESETS.get(style_key) or CAPTION_STYLE_PRESETS["boxed"]
+    style = dict(CAPTION_STYLE_PRESETS.get(style_key) or CAPTION_STYLE_PRESETS["boxed"])
+    pos_override = CAPTION_POSITION_OVERRIDES.get(position_key)
+    if pos_override:
+        style.update(pos_override)
     payload = {"video_url": video_url, "language": "en", **style}
     fal_headers = {"Authorization": f"Key {FAL_API_KEY}"}
     try:
@@ -1862,13 +1884,19 @@ async def _run_render_avatar(job: dict):
                 return
 
         # ---- Stage 3/3: poll ----
-        for tick in range(60):
+        # Per Charity's "no limits" rule, the poll window is generous: 300
+        # ticks × 5s = 25 minutes. HeyGen v3 renders for premium avatars +
+        # long scripts can take 10-18min; the old 5min cap was killing real
+        # renders mid-stream. Progress label animates so the UI never feels
+        # stuck during the long wait.
+        max_ticks = 300
+        for tick in range(max_ticks):
             await asyncio.sleep(5)
             # Animate the in-flight progress so it doesn't feel stuck during
-            # the long HeyGen render wait. Walks 50→85% across the poll window.
-            progress_now = min(85, 50 + tick)
-            label_now = ("Polishing avatar…" if tick > 6
-                         else "Rendering avatar frames…" if tick > 2
+            # the long HeyGen render wait. Walks 50→90% across the poll window.
+            progress_now = min(90, 50 + int(tick * 40 / max_ticks))
+            label_now = ("Polishing avatar…" if tick > 30
+                         else "Rendering avatar frames…" if tick > 10
                          else "Finalizing voiceover…")
             await db.renders.update_one(
                 {"id": job_id},
@@ -1921,7 +1949,7 @@ async def _run_render_avatar(job: dict):
         {"id": job_id},
         {"$set": {
             "status": "failed",
-            "error": "HeyGen polling timed out after 5 minutes",
+            "error": "HeyGen polling timed out after 25 minutes",
             "actual_cost_cents": actual_cost_cents,
             "completed_at": datetime.now(timezone.utc).isoformat(),
         }},
@@ -2048,7 +2076,11 @@ async def _run_render_faceless(job: dict):
     # uses the same downstream path; only the source changes.
     user_voiceover_url = job.get("user_voiceover_url")
     await _set_progress(20, "Generating voiceover + visuals…" if not user_voiceover_url else "Preparing your voiceover + visuals…")
-    async with httpx.AsyncClient(timeout=120) as client:
+    # Bumped to 360s read timeout: long scripts (1000+ words) take Kokoro
+    # 90-180s. The previous 120s cap was the root cause of "Voiceover error:
+    # ReadError:" on multi-paragraph scripts. We also retry up to 2 times on
+    # network reads inside `_run_tts` below.
+    async with httpx.AsyncClient(timeout=httpx.Timeout(connect=15.0, read=360.0, write=60.0, pool=15.0)) as client:
         async def _run_tts():
             if user_voiceover_url:
                 # No API call needed — the URL points to a file we already
@@ -2061,12 +2093,27 @@ async def _run_render_faceless(job: dict):
                     def json(self):
                         return {"audio_url": user_voiceover_url}
                 return _Resp()
-            r = await client.post(
-                f"https://fal.run/{_kokoro_endpoint(job.get('tts_voice_id') or 'af_heart')}",
-                headers=fal_headers,
-                json={"prompt": job["script"], "voice": job.get("tts_voice_id") or "af_heart"},
-            )
-            return r
+            # 2 retries with backoff for transient ReadErrors. fal.run can
+            # randomly close long reads when their upstream pod recycles;
+            # the request is idempotent so retry is safe.
+            last_exc: Optional[Exception] = None
+            for attempt in range(3):
+                try:
+                    return await client.post(
+                        f"https://fal.run/{_kokoro_endpoint(job.get('tts_voice_id') or 'af_heart')}",
+                        headers=fal_headers,
+                        json={"prompt": job["script"], "voice": job.get("tts_voice_id") or "af_heart"},
+                    )
+                except (httpx.ReadError, httpx.ReadTimeout, httpx.RemoteProtocolError) as exc:
+                    last_exc = exc
+                    if attempt < 2:
+                        logger.warning(f"[tts] kokoro {type(exc).__name__} attempt {attempt+1}/3 — retrying")
+                        await asyncio.sleep(2 + attempt * 2)
+                        continue
+                    raise
+            if last_exc:
+                raise last_exc
+            return None  # unreachable but keeps the type checker happy
 
         tts_task = asyncio.create_task(_run_tts())
 
@@ -2093,8 +2140,21 @@ async def _run_render_faceless(job: dict):
                 "https://fal.run/fal-ai/flux-pro/v1.1",
                 headers=fal_headers,
                 json={
-                    "prompt": prompt,
+                    # Hardened prompt: anchors the cinematic style + forbids
+                    # the failure modes Charity flagged on 2026-02-23 — non-
+                    # English garbled signage, blurry/AI-generated giveaways.
+                    # `enable_safety_checker` stays default. `output_format`
+                    # PNG ensures we get crisp downstream feed-into-Kling.
+                    "prompt": (
+                        f"{prompt}. Cinematic photograph, 8k, sharp focus, "
+                        f"professional lighting, photorealistic, ultra detailed. "
+                        f"No visible text or signage — if any text appears it "
+                        f"must be clear, legible, perfectly spelled English only."
+                    ),
                     "image_size": "portrait_16_9" if job["aspect"] == "9_16" else "landscape_16_9",
+                    "num_inference_steps": 32,         # vs default 28 — sharper outputs
+                    "guidance_scale": 4.0,             # tighter prompt adherence
+                    "output_format": "png",
                 },
             )
             if ir.status_code != 200:
@@ -2410,7 +2470,11 @@ async def _run_render_faceless(job: dict):
     if composed_url and job.get("captions"):
         try:
             await _set_progress(92, "Burning in captions…")
-            captioned_url = await _burn_in_captions(composed_url, job.get("caption_style") or "boxed")
+            captioned_url = await _burn_in_captions(
+                composed_url,
+                job.get("caption_style") or "boxed",
+                job.get("caption_position") or "bottom",
+            )
             if captioned_url:
                 composed_url = captioned_url
                 # Auto-subtitle pricing on fal.ai is ~$0.10 per video.
@@ -2508,6 +2572,7 @@ async def studio_render(payload: RenderRequest, user: AuthUser = Depends(current
         "ai_engine": payload.ai_engine,
         "broll_cutaway_interval_s": payload.broll_cutaway_interval_s,
         "caption_style": payload.caption_style,
+        "caption_position": payload.caption_position,
         # User-uploaded voiceover URL — when set, the faceless pipeline
         # skips Kokoro TTS entirely and uses this audio as the voiceover.
         # See _run_render_faceless line ~1771 for the override branch.
@@ -2584,6 +2649,7 @@ async def studio_render_both_aspects(payload: RenderRequest, user: AuthUser = De
             "ai_engine": per_payload.ai_engine,
             "broll_cutaway_interval_s": per_payload.broll_cutaway_interval_s,
             "caption_style": per_payload.caption_style,
+            "caption_position": per_payload.caption_position,
             "user_voiceover_url": per_payload.user_voiceover_url,
             "status": "queued",
             "progress": 5,
@@ -2853,6 +2919,84 @@ async def studio_stock_candidates(
     # Preserve original order
     results.sort(key=lambda r: r["idx"])
     return {"candidates": results}
+
+
+# --- Studio: AI Flux previews per scene -----------------------------------
+# Generates ONE Flux still per (prompt, aspect) so the user can see what each
+# AI scene will look like BEFORE kicking off the render. Critical UX win —
+# Charity flagged the "AI drawings are sometimes really bad" failure mode on
+# 2026-02-23 and wanted to preview them inline.
+#
+# Implementation reuses the existing `db.flux_cache` so previews are FREE for
+# the actual render — the cached URL is exactly what the renderer would have
+# fetched anyway. Cost is $0.04/scene per uncached prompt, which is the same
+# cost the user would pay at render time. No double-charge.
+class AIPreviewsRequest(BaseModel):
+    prompts: list[str]
+    aspect: str = "9_16"
+
+
+@api.post("/studio/ai-previews")
+async def studio_ai_previews(payload: AIPreviewsRequest, user: AuthUser = Depends(current_user)):
+    require_studio(user)
+    if not payload.prompts:
+        return {"previews": []}
+    if payload.aspect not in ("9_16", "16_9"):
+        raise HTTPException(status_code=400, detail="Bad aspect")
+    if not FAL_API_KEY:
+        raise HTTPException(status_code=503, detail="Image generation unavailable")
+    fal_headers = {"Authorization": f"Key {FAL_API_KEY}"}
+    aspect_tag = "p" if payload.aspect == "9_16" else "l"
+
+    async def gen_one(idx: int, prompt: str) -> dict:
+        # Same cache key shape as the render pipeline so previews = real frames.
+        import hashlib  # noqa: PLC0415
+        cache_key = "flux:" + hashlib.sha256(
+            f"{aspect_tag}|{prompt}".encode("utf-8")
+        ).hexdigest()[:32]
+        cached = await db.flux_cache.find_one({"_id": cache_key})
+        if cached and cached.get("url"):
+            return {"idx": idx, "prompt": prompt, "image_url": cached["url"], "cached": True}
+        try:
+            async with httpx.AsyncClient(timeout=120) as client:
+                ir = await client.post(
+                    "https://fal.run/fal-ai/flux-pro/v1.1",
+                    headers=fal_headers,
+                    json={
+                        "prompt": (
+                            f"{prompt}. Cinematic photograph, 8k, sharp focus, "
+                            f"professional lighting, photorealistic, ultra detailed. "
+                            f"No visible text or signage — if any text appears it "
+                            f"must be clear, legible, perfectly spelled English only."
+                        ),
+                        "image_size": "portrait_16_9" if payload.aspect == "9_16" else "landscape_16_9",
+                        "num_inference_steps": 32,
+                        "guidance_scale": 4.0,
+                        "output_format": "png",
+                    },
+                )
+                if ir.status_code != 200:
+                    return {"idx": idx, "prompt": prompt, "image_url": None, "error": f"flux {ir.status_code}"}
+                url = (ir.json().get("images") or [{}])[0].get("url")
+                if url:
+                    await db.flux_cache.update_one(
+                        {"_id": cache_key},
+                        {"$set": {
+                            "url": url,
+                            "prompt": prompt,
+                            "aspect": payload.aspect,
+                            "cached_at": datetime.now(timezone.utc).isoformat(),
+                        }},
+                        upsert=True,
+                    )
+                return {"idx": idx, "prompt": prompt, "image_url": url, "cached": False}
+        except Exception as exc:
+            logger.warning(f"[ai-previews] {idx}/{prompt[:30]}: {type(exc).__name__}: {exc}")
+            return {"idx": idx, "prompt": prompt, "image_url": None, "error": str(exc)}
+
+    results = await asyncio.gather(*[gen_one(i, p) for i, p in enumerate(payload.prompts)])
+    results.sort(key=lambda r: r["idx"])
+    return {"previews": results}
 
 
 # --- Script Engine: async job pattern ---------------------------------------

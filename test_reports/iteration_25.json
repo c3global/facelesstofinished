@@ -1,0 +1,54 @@
+{
+  "summary": "Iter-25 — verified all 4 of Charity's production bugs + new caption-position + AI previews + Flux hardening. Backend 42/42 pytest PASS (14 new iter-25 tests + 28 regression). Frontend: avatar 9:16 picker now shows 622 avatars (vs 27 before fix), caption-position toggle (top/bottom/center) renders inside CaptionsPicker when style is enabled, default=bottom is-active, clicking Top correctly flips is-active and chip-captions label becomes 'Captions · TikTok · Top'. Non-admin user (directkynections@gmail.com) does NOT see '+$0.10 / render' on TikTok card; admin user (drcharitycampbell@gmail.com) DOES see it. TikTok card copy now reads '3-word groups so they stay readable' — 'one huge word' phrasing is gone. Backend confirmed: voices=2329, avatars=1281 (27/595/659 portrait/both/landscape), HeyGen max_ticks=300 with 'after 25 minutes' error string, httpx.Timeout(connect=15,read=360,write=60,pool=15) + ReadError 2-retry loop, RenderRequest.caption_position persists on doc, _burn_in_captions(top)→position=top+y_offset=90 / center→position=center+y_offset=0 / bottom→position=bottom+y_offset=90, /api/studio/ai-previews returns cached=true on db.flux_cache hit + validates aspect 9_16|16_9 + returns empty array for empty prompts, gen_image+ai-previews Flux payload includes num_inference_steps=32, guidance_scale=4.0, output_format=png, cinematic prompt anchor, 'No visible text or signage' negative phrasing. ZERO real fal.ai or HeyGen renders triggered.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "verified_features": {
+    "Voices count": "PASS — GET /api/studio/voices returns 2329.",
+    "Avatars count + breakdown": "PASS — 1281 total; portrait≈27, both≈595, landscape≈659.",
+    "HeyGen polling 25 min": "PASS — server.py has max_ticks=300 + 'HeyGen polling timed out after 25 minutes'; old '5 minutes' string gone.",
+    "Kokoro httpx timeout": "PASS — httpx.Timeout(connect=15.0, read=360.0, write=60.0, pool=15.0) + (ReadError|ReadTimeout|RemoteProtocolError) retry with range(3).",
+    "Kokoro 2-retry success path": "PASS — simulated 2 ReadErrors then a 200 response — function returns the success body (attempts=3).",
+    "caption_position persisted": "PASS — POST /api/studio/render {caption_position:'top'} → GET returns caption_position='top'.",
+    "_burn_in_captions position overrides": "PASS — top→position=top y_offset=90; center→position=center y_offset=0; bottom→position=bottom y_offset=90 (payload captured via httpx.AsyncClient.post patch).",
+    "ai-previews cache hit": "PASS — pre-seeded db.flux_cache (override=True load_dotenv) → endpoint returns cached=true with seeded url; no fal.ai call.",
+    "ai-previews aspect validation": "PASS — '1_1' returns 400.",
+    "ai-previews empty prompts": "PASS — returns {previews: []}.",
+    "Flux hardening (gen_image)": "PASS — num_inference_steps=32, guidance_scale=4.0, output_format='png', 'Cinematic photograph' + 'No visible text or signage' in prompt.",
+    "Flux hardening (ai-previews)": "PASS — same 3 params + hardened prompt phrasing.",
+    "CAPTION_POSITION_OVERRIDES constant": "PASS — {'top':{position:'top',y_offset:90}, 'bottom':{position:'bottom',y_offset:90}, 'center':{position:'center',y_offset:0}}.",
+    "_burn_in_captions signature": "PASS — accepts position_key:str='bottom' as 3rd arg.",
+    "Frontend: avatar 9:16 count": "PASS — picker shows 622 avatars (testid avatar-card-*) when filter set to '9:16 vertical'.",
+    "Frontend: position picker renders": "PASS — caption-position-row appears inside captions modal once a style is enabled; 3 buttons (top/bottom/center) with default bottom is-active.",
+    "Frontend: position click → is-active + chip update": "PASS — clicking Top adds is-active class; closing modal updates chip-captions to 'Captions · TikTok · Top'.",
+    "Frontend: TikTok copy update": "PASS — 'Big purple-highlighted karaoke words. 3-word groups so they stay readable.' — 'one huge word' phrase removed.",
+    "Frontend: admin sees +$0.10 cost": "PASS — drcharitycampbell@gmail.com sees '+$0.10 / render' on TikTok card.",
+    "Frontend: non-admin hides +$0.10 cost": "PASS — directkynections@gmail.com sees no cost line."
+  },
+  "regression_results": "Iter-22/23/24 pytests all green after a single stale assertion was corrected in test_captions_v24.py (tiktok.words_per_subtitle 1→3, the deliberate iter-25 spec change). Final combined run: 42 passed, 0 failed.",
+  "test_report_links": [
+    "/app/backend/tests/test_iter25_charity_bugs.py",
+    "/app/test_reports/pytest/iteration_25.xml",
+    "/app/test_reports/pytest/iteration_25_full.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py L2083 — httpx.Timeout(connect=15,read=360,write=60,pool=15) gives long-form Kokoro TTS calls plenty of headroom. Together with the 3-attempt retry on ReadError|ReadTimeout|RemoteProtocolError (2s/4s backoff) this is a textbook fix for the 'Voiceover error: ReadError:' complaint.",
+    "server.py L1892 — max_ticks=300 (25 min) for HeyGen polling is a 5x bump from the old 60. Combined with the dynamic progress smoothing (`min(90, 50 + tick*40/max_ticks)`) the UX still feels responsive on the long renders.",
+    "server.py L2939 — /studio/ai-previews shares db.flux_cache with the render pipeline so previews are FREE for the eventual render (the cached URL is exactly what gen_image would fetch). No double-charge.",
+    "server.py gen_image (L2126-2180) — Flux hardening is tight: num_inference_steps=32 + guidance_scale=4.0 push sharpness/adherence, output_format=png keeps lossless feed into Kling, and the prompt envelope ('Cinematic photograph, 8k, sharp focus' + 'No visible text or signage') is a sensible directive-style negative that Flux Pro 1.1 actually respects.",
+    "Pickers.jsx L98-108 — Avatar filter `aspect === 'portrait' || aspect === 'both'` for 9:16 unblocks 622 avatars (vs the strict-portrait-only 27). Comment block correctly notes HeyGen v3's smart cover-crop makes 'both' safe — the iter-15 strict-portrait fix was for v2 and is no longer needed.",
+    "Pickers.jsx L833-851 — caption-position-row only renders when `enabled` is true. Clean conditional, position state plumbed through props (position + onPositionChange).",
+    "Studio.jsx L745 — chipCaptions label correctly composes 'Captions · {Style} · {Position}'. Default fallback 'Bottom' is the same as the server default, so backend-generated URLs match the chip label even before user interaction."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter25_charity_bugs.py (new — 14 pytests)",
+    "/app/backend/tests/test_captions_v24.py (1-line spec sync: tiktok.words_per_subtitle 1→3)"
+  ],
+  "success_rate": {"backend": "100% (42/42)", "frontend": "100% (6/6 critical UI checks: position-picker render, position-click is-active, chip-label update, avatar 9:16 count, admin cost shows, non-admin cost hidden)"},
+  "test_credentials": "Admin DEV_BYPASS=drcharitycampbell@gmail.com; non-admin entitlement-only=directkynections@gmail.com. Tokens obtained via POST /api/auth/check {email} and stored at localStorage key 'f48_studio_token'. Also set localStorage.f48_studio_mode_chosen='1' to bypass the mode picker.",
+  "seed_data_creation": "(a) db.flux_cache: 2 docs seeded per ai-previews cache test, cleaned in finally{} block (unique-per-run TEST_iter25_cat_<nonce>/dog_<nonce> prompts). (b) db.renders: 1 doc created during caption_position persistence test (caption_position='top', caption_style='tiktok') — will move to incomplete since no real TTS/Flux runs.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "When running pytest, test_captions_v24.py and test_kling_i2v_v23.py both call os.environ.setdefault('DB_NAME','test_database'). If your test then does load_dotenv('/app/backend/.env') WITHOUT override=True, you'll read 'test_database' from os.environ and write seed data to a DIFFERENT db than the running FastAPI process (which uses f48_studio). Symptom: cache hits silently fail and the endpoint actually calls fal.ai for real (real money). Fix: load_dotenv('/app/backend/.env', override=True) and assert db_name=='f48_studio'. I added the override and the assert to iter-25 tests. Cleaned up 8 polluted TEST_iter25 entries from db.flux_cache that had been created by failed test runs before this fix was in place. Position picker is conditional on `enabled` so the playwright test MUST first click a style card (e.g. captions-tiktok) BEFORE the caption-position-row testid appears in the DOM — picking a style does NOT close the modal, only picking Off does.",
+  "rca of the issue": "Cross-test env-pollution caused the ai-previews cache assertion to flake. test_captions_v24.py uses os.environ.setdefault('DB_NAME','test_database') which sets DB_NAME for the rest of the process. My test then did load_dotenv() (no override) which leaves the polluted value in place. Seed wrote to test_database.flux_cache; the running server read from f48_studio.flux_cache → cache miss → real fal.ai call. Fixed by load_dotenv(..., override=True) + an explicit assert db_name=='f48_studio'. The bug ONLY surfaces when iter-25 tests run AFTER the v23/v24 suites, not in isolation."
+}

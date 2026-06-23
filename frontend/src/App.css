@@ -4328,3 +4328,60 @@
   color: var(--accent);
 }
 .generate-prompts-btn.is-secondary:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* =========================================================================
+ * Caption position toggle — appears at the bottom of CaptionsPicker when
+ * captions are enabled. Pill-segmented control: Top / Bottom / Center.
+ * Independent of style preset — applies to all three (boxed/tiktok/minimal).
+ * ========================================================================= */
+.caption-position-row {
+  margin-top: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  background: rgba(127,119,221,0.04);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.caption-position-label {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.caption-position-toggle {
+  display: inline-flex;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.04);
+  padding: 3px;
+  gap: 2px;
+}
+.caption-position-btn {
+  padding: 6px 16px;
+  border-radius: 999px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.caption-position-btn:hover { color: var(--text); }
+.caption-position-btn.is-active {
+  background: var(--accent);
+  color: white;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+
+/* Storyboard <video> previews for uploaded MP4s — match the <img> behavior
+   so the thumb container is uniform regardless of media type. */
+.storyboard-thumb video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}

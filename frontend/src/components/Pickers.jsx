@@ -96,8 +96,14 @@ export function AvatarPicker({ open, onClose, value, onPick, currentAspect = "9_
     // and caused HeyGen's cover-crop to chop the subject's body in half.
     // For 16:9 we keep the permissive behaviour — extra avatars are fine.
     if (aspectFilter === "9_16") {
-      list = list.filter((a) => a.aspect === "portrait");
+      // Include both strict portrait avatars AND "both"-tagged avatars.
+      // Only 27 HeyGen avatars are pure-portrait; "both" avatars (595)
+      // render fine in 9:16 with HeyGen v3's smart `fit:"cover"` crop.
+      // (Strict-portrait-only was the iter-15 fix for v2 body chop, but
+      // we now default to v3 which handles "both" gracefully.)
+      list = list.filter((a) => a.aspect === "portrait" || a.aspect === "both");
     } else if (aspectFilter === "16_9") {
+      // Landscape ratio: portrait-only avatars are letterboxed, exclude them.
       list = list.filter((a) => a.aspect !== "portrait");
     }
     if (search) {
@@ -763,7 +769,7 @@ export function StockPicker({ open, onClose, sceneIdx, defaultSource, query: def
  * entirely. When enabled=false the picked style is preserved in state so
  * toggling back on remembers the last choice (no surprise resets).
  */
-export function CaptionsPicker({ open, onClose, enabled, style, onPick, isAdmin = false }) {
+export function CaptionsPicker({ open, onClose, enabled, style, position = "bottom", onPick, onPositionChange, isAdmin = false }) {
   const options = [
     {
       id: "boxed",
@@ -774,7 +780,7 @@ export function CaptionsPicker({ open, onClose, enabled, style, onPick, isAdmin 
     {
       id: "tiktok",
       name: "TikTok · Karaoke",
-      hint: "One huge word at a time, center-screen, purple karaoke highlight.",
+      hint: "Big purple-highlighted karaoke words. 3-word groups so they stay readable.",
       Icon: Captions,
     },
     {
@@ -783,6 +789,11 @@ export function CaptionsPicker({ open, onClose, enabled, style, onPick, isAdmin 
       hint: "Small clean white text. No animation, no background. For talk-heavy scripts.",
       Icon: Captions,
     },
+  ];
+  const positions = [
+    { id: "top",    label: "Top",    hint: "Above the subject" },
+    { id: "bottom", label: "Bottom", hint: "Default — TikTok-safe" },
+    { id: "center", label: "Center", hint: "Across the subject" },
   ];
   return (
     <Modal open={open} onClose={onClose} title="Captions burn-in" testId="captions-modal">
@@ -805,7 +816,7 @@ export function CaptionsPicker({ open, onClose, enabled, style, onPick, isAdmin 
               key={opt.id}
               data-testid={`captions-${opt.id}`}
               className={`source-card ${isActive ? "is-selected" : ""}`}
-              onClick={() => { onPick(true, opt.id); onClose(); }}
+              onClick={() => { onPick(true, opt.id); }}
             >
               <div className="source-icon"><opt.Icon size={22} /></div>
               <div className="source-name">{opt.name}</div>
@@ -819,6 +830,25 @@ export function CaptionsPicker({ open, onClose, enabled, style, onPick, isAdmin 
           );
         })}
       </div>
+      {enabled && (
+        <div className="caption-position-row" data-testid="caption-position-row">
+          <div className="caption-position-label">Position</div>
+          <div className="caption-position-toggle">
+            {positions.map((p) => (
+              <button
+                type="button"
+                key={p.id}
+                data-testid={`caption-position-${p.id}`}
+                className={`caption-position-btn ${position === p.id ? "is-active" : ""}`}
+                onClick={() => onPositionChange && onPositionChange(p.id)}
+                title={p.hint}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </Modal>
   );
 }
