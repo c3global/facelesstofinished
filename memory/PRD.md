@@ -1251,3 +1251,38 @@ After researching the fal.ai compose schema (Keyframe ONLY accepts `{timestamp, 
 - **P2** `db.kling_i2v_cache` TTL index (fal CDN URLs expire ~7 days).
 - **P2** History badge: which engine produced this render? (Flux+i2v vs Flux Static vs Stock vs Kling/Veo/Pika t2v).
 - **P3** `server.py` (3250+ lines) modularization.
+
+## 2026-02-23 — Phase 3.5u: Charity's production bug sweep + caption position + AI previews
+
+**Status:** SHIPPED — 42/42 backend pytest PASS, 6/6 critical Playwright PASS. Iter-25.
+
+### Bugs fixed (Charity's 2026-02-23 feedback)
+1. **HeyGen 5-min polling timeout** — hardcoded `range(60)` × 5s. Bumped to `max_ticks=300` (25 min). Per Charity's "no limits" rule. Dynamic progress smoothing `min(90, 50 + tick*40/max_ticks)` keeps the UX responsive on long waits.
+2. **"Voiceover error: ReadError:" on Sky/long scripts** — Kokoro TTS httpx client had only a 120s timeout AND no retries. Bumped to `httpx.Timeout(connect=15, read=360, write=60, pool=15)` + 3-attempt retry loop on `ReadError|ReadTimeout|RemoteProtocolError` with 2s/4s backoff.
+3. **Avatar 9:16 picker showed "No avatars match"** — strict `aspect === "portrait"` filter excluded the 595 "both"-tagged avatars. Loosened to `portrait || both` since HeyGen v3's smart `fit:"cover"` crop handles "both" gracefully. Result: **27 → 622 avatars**.
+4. **Voices "only 20-25"** — false positive (backend correctly returns 2329 — Charity just hadn't scrolled). Confirmed.
+
+### New features in the same iteration
+- **Caption position toggle** — top / bottom / center pill control inside CaptionsPicker. Independent of style preset. Chip label now reads `Captions · {Style} · {Position}`. Persisted on the render doc via the new `caption_position` field.
+- **Flux prompt hardening** — every Flux image is now wrapped with: `Cinematic photograph, 8k, sharp focus, professional lighting, photorealistic, ultra detailed. No visible text or signage — if any text appears it must be clear, legible, perfectly spelled English only.` Plus `num_inference_steps=32` (sharper), `guidance_scale=4.0` (tighter prompt adherence), `output_format=png` (lossless feed into Kling). Targets the garbled-text + blurry-AI failure modes Charity flagged.
+- **TikTok caption style tweak** — was 1 huge word at a time, center-screen. Now 3-word groups at the bottom (still purple karaoke highlight) so it stays readable + leaves space for the subject. Style and position are now independent.
+- **AI scene previews** — new `POST /api/studio/ai-previews` endpoint generates one Flux still per AI scene + writes to the **shared** `db.flux_cache`. "Preview scenes" button on Studio now fetches stock candidates AND AI previews in one parallel pass. AI scenes get their storyboard thumbnail auto-filled with the real Flux frame. Free at render time (same cache).
+- **Uploaded-video storyboard thumbnails** — uploaded MP4 scenes now render as a `<video>` with `preload="metadata"` in the storyboard card (was an empty placeholder before).
+
+### Files touched
+- `/app/backend/server.py` — `max_ticks=300` + 25min error string; `httpx.Timeout(360)` + retry loop in `_run_tts`; `RenderRequest.caption_position`; `CAPTION_POSITION_OVERRIDES` dict; `_burn_in_captions(position_key=)`; `_run_render_faceless` passes `caption_position` to burn-in; `POST /api/studio/ai-previews` endpoint; Flux prompt hardening in `gen_image` + ai-previews.
+- `/app/frontend/src/components/Pickers.jsx` — AvatarPicker 9:16 includes `"both"`; CaptionsPicker accepts `position`+`onPositionChange`; new `caption-position-row` UI with 3 segmented buttons; TikTok card copy updated.
+- `/app/frontend/src/pages/Studio.jsx` — `captionPosition` state; chip label appends position; `caption_position` in render payload; `fetchCandidates` now ALSO calls `/studio/ai-previews` for AI scenes + auto-applies as `pick.thumb`; storyboard `<video>` for uploaded video clips.
+- `/app/frontend/src/App.css` — `.caption-position-row` + `.caption-position-btn` + `.storyboard-thumb video` styles.
+- `/app/backend/tests/test_iter25_charity_bugs.py` — 14 new pytests (timeout values, retry semantics, position payload, ai-previews cache, Flux payload, etc.).
+
+### Testid additions
+`caption-position-row`, `caption-position-top|bottom|center`.
+
+### Backlog
+- **P1** Render-duration estimate (per Charity's open question — only ship if accurate). Could derive from `(scene_count × 70s) + (75s base)` for Faceless+Kling renders, but actual variance is ±60% so probably not worth shipping without ML-based prediction.
+- **P2** "Re-generate" button per AI scene preview (so Charity can re-roll a bad Flux still without re-rendering the whole video). The endpoint already exists; just needs a wand-icon button on each AI storyboard card.
+- **P2** Composite mode — interleave HeyGen avatar with B-roll cutaways.
+- **P2** History badge per engine (Flux+i2v vs Stock vs Static).
+- **P2** TTL on `db.kling_i2v_cache` + `db.flux_cache` (FAL CDN URLs expire ~7 days).
+- **P3** `server.py` modularization (3450+ lines).
