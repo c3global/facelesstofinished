@@ -1,18 +1,28 @@
 import React from "react";
 
 // Parses [HOOK — 0:00–0:03], [BODY — ...], [CTA — ...] blocks from the
-// short-form script body. Claude often wraps these markers in markdown bold
-// ('**[HOOK — ...]**'), so we strip leading/trailing emphasis from each line
-// BEFORE the bracket regex test.
-const stripEmphasis = (s) =>
+// short-form script body. Claude often wraps these markers in markdown
+// emphasis (`**[HOOK — ...]**`) or inline-code backticks (`` `[ON-SCREEN: ...]` ``),
+// so we strip leading/trailing emphasis AND backticks from each line BEFORE
+// the bracket regex test. Without backtick stripping, lines like
+// `` `[ON-SCREEN: Doing it ALL WRONG]` `` (a real Claude output for the
+// YouTube engine) fell through to plain-narration rendering instead of
+// becoming a TEXT chip — that's what was making YouTube look "different"
+// vs. Reels/TikTok in the compare-all view.
+const stripWrappers = (s) =>
   s
+    .replace(/^\s*`+\s*/, "")
+    .replace(/\s*`+\s*$/, "")
     .replace(/^\s*\*\*\s*/, "")
     .replace(/\s*\*\*\s*$/, "")
     .replace(/^\s*\*\s*/, "")
     .replace(/\s*\*\s*$/, "");
 
 const cleanLine = (s) =>
-  s.replace(/\*\*(.+?)\*\*/g, "$1").replace(/\*(.+?)\*/g, "$1");
+  s
+    .replace(/`+/g, "")
+    .replace(/\*\*(.+?)\*\*/g, "$1")
+    .replace(/\*(.+?)\*/g, "$1");
 
 export default function ShortPhoneBody({ shortBody }) {
   if (!shortBody) return null;
@@ -21,7 +31,7 @@ export default function ShortPhoneBody({ shortBody }) {
   const lines = shortBody.split(/\r?\n/);
   let current = null;
   for (const rawLn of lines) {
-    const ln = stripEmphasis(rawLn);
+    const ln = stripWrappers(rawLn);
     const m = ln.match(/^\s*\[(HOOK|BODY|CTA)([^\]]*)\]\s*$/i);
     if (m) {
       if (current) blocks.push(current);
@@ -51,9 +61,13 @@ export default function ShortPhoneBody({ shortBody }) {
           </div>
           <div className="phone-beat-lines">
             {b.lines.map((ln, j) => {
-              const isOn = /^\[\s*ON-?SCREEN\s*:/i.test(ln);
-              const isBR = /^\[\s*B-?ROLL\s*:/i.test(ln);
-              const text = ln.replace(
+              // Strip inline-code backticks from individual cue lines too —
+              // Claude sometimes wraps just the bracket-marker in code spans
+              // even when the surrounding line isn't otherwise styled.
+              const stripped = stripWrappers(ln);
+              const isOn = /^\[\s*ON-?SCREEN\s*:/i.test(stripped);
+              const isBR = /^\[\s*B-?ROLL\s*:/i.test(stripped);
+              const text = stripped.replace(
                 /^\[\s*(ON-?SCREEN|B-?ROLL)\s*:\s*([\s\S]*)\]\s*$/i,
                 "$2"
               );

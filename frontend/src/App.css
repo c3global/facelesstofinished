@@ -2263,6 +2263,18 @@
   flex-shrink: 0;
 }
 .phone-cue-onscreen .phone-cue-tag { background: var(--platform-accent, var(--accent)); }
+/* TikTok's accent (#25F4EE) is a bright, low-contrast-against-white teal —
+   white text on it is barely legible. Switch the TEXT cue chip and the
+   status-bar TIKTOK pill to a near-black ink whenever the phone is in
+   TikTok mode so the chip text actually reads. Reels (#E1306C) and
+   YouTube (#FF0033) are dark enough to keep white text. */
+.phone-wrap[data-platform="tiktok"] .phone-platform-badge,
+.phone-wrap[data-platform="tiktok"] .phone-cue-onscreen .phone-cue-tag {
+  color: #0B1A1A;
+}
+.phone-wrap[data-platform="tiktok"] .phone-cue-onscreen {
+  color: #BDF8F2;
+}
 
 /* =====================================================================
    Script Engine 3.0 — per-section accents, progress bar, sprint UI, tabs
@@ -2594,6 +2606,30 @@
   border-radius: 30px;
 }
 .compare-cell .phone-screen { padding: 14px 16px; }
+/* Per-platform Send to Studio button — tinted with the platform's accent so
+   it visually pairs with the phone above it. Lets the user one-click pick a
+   winner after A/B-ing all three platforms side-by-side. */
+.compare-cell-cta {
+  margin-top: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--platform-accent, var(--accent)) 16%, transparent);
+  color: var(--platform-accent, var(--accent));
+  border: 1px solid color-mix(in srgb, var(--platform-accent, var(--accent)) 50%, transparent);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  transition: background .15s, border-color .15s, transform .15s;
+}
+.compare-cell-cta:hover {
+  background: color-mix(in srgb, var(--platform-accent, var(--accent)) 28%, transparent);
+  border-color: color-mix(in srgb, var(--platform-accent, var(--accent)) 75%, transparent);
+  transform: translateY(-1px);
+}
 
 /* =====================================================================
    Sprint result — 5 vertical phone variants

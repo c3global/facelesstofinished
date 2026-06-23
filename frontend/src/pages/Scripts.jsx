@@ -727,13 +727,22 @@ export default function Scripts() {
 
   const useInStudio = () => {
     if (!output?.text) return;
-    const narration = extractNarration(output.text);
-    const brollPrompts = extractBrollPrompts(output.text);
+    sendToStudio(output);
+  };
+
+  // Per-platform Send-to-Studio for the compare-all view. Lets the user pick
+  // their winner after A/B-ing all three platforms side-by-side without
+  // having to leave compare-mode and switch tabs first.
+  const sendToStudio = (jobOutput) => {
+    if (!jobOutput?.text) return;
+    const narration = extractNarration(jobOutput.text);
+    const brollPrompts = extractBrollPrompts(jobOutput.text);
     const handoff = {
       script: narration,
       brollPrompts,
-      sourceMode: output.mode,
-      topic: output.topic,
+      sourceMode: jobOutput.mode,
+      topic: jobOutput.topic,
+      platform: jobOutput.platform,
       ts: Date.now(),
     };
     try {
@@ -1341,6 +1350,15 @@ export default function Scripts() {
                           shortBody={jobSections.shortScript?.body || ""}
                         />
                       </PhoneFrame>
+                      <button
+                        type="button"
+                        className="compare-cell-cta"
+                        data-testid={`compare-send-to-studio-${j.platform}`}
+                        onClick={() => sendToStudio(j.output)}
+                        title={`Send the ${p?.label || j.platform} script to Studio`}
+                      >
+                        <Sparkles size={12} /> Send to Studio
+                      </button>
                     </div>
                   );
                 })}
