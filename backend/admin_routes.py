@@ -82,21 +82,66 @@ def _extract_email(p: dict) -> str:
 
 
 def _extract_items(p: dict) -> list:
-    for path in [
-        ("items",),
-        ("data", "items"),
-        ("order", "items"),
-        ("data", "order", "items"),
-    ]:
-        node = p
-        for key in path:
-            if not isinstance(node, dict):
-                node = None
-                break
-            node = node.get(key)
-        if isinstance(node, list) and node:
-            return node
+    """Locate the line-items array in a webhook payload. Pinball / GHL /
+    Kajabi / Stripe all use different naming conventions; we accept all of
+    them so existing funnels keep working without per-provider config.
+
+    Supported paths (snake_case AND camelCase):
+      items, lineItems, line_items, products
+      data.<same>, order.<same>, data.order.<same>, event.<same>
+    Plus: data.order.products on some Kajabi flows.
+    """
+    keys = ("items", "lineItems", "line_items", "products")
+    prefixes: list[tuple] = [
+        (),                       # top-level
+        ("data",),
+        ("order",),
+        ("data", "order"),
+        ("event",),
+        ("data", "event"),
+        ("payload",),
+        ("data", "payload"),
+    ]
+    for prefix in prefixes:
+        for key in keys:
+            path = (*prefix, key)
+            node = p
+            for k in path:
+                if not isinstance(node, dict):
+                    node = None
+                    break
+                node = node.get(k)
+            if isinstance(node, list) and node:
+                return node
     return []
+
+
+def _synthesize_single_item(p: dict) -> Optional[dict]:
+    """When the payload has NO items array but DOES have product info at
+    the top level (or under data/order), build a synthetic single-item dict
+    so the rest of the pipeline can treat it like a one-line order. This
+    is how most GHL "Order Submitted" workflow nodes ship — they flatten
+    the order into individual fields rather than nesting an items array."""
+    candidates = [p, p.get("data") if isinstance(p.get("data"), dict) else {},
+                  p.get("order") if isinstance(p.get("order"), dict) else {}]
+    for node in candidates:
+        if not isinstance(node, dict):
+            continue
+        product_id = (
+            node.get("product_id") or node.get("productId")
+            or node.get("product") or node.get("sku")
+        )
+        if not product_id:
+            continue
+        return {
+            "id": (node.get("line_item_id") or node.get("id") or node.get("order_id")
+                   or node.get("orderId") or ""),
+            "product_id": str(product_id),
+            "product_name": (node.get("product_name") or node.get("productName")
+                             or node.get("name") or ""),
+            "amount": node.get("amount") or node.get("price") or 0,
+        }
+    return None
 
 
 def _extract_order_id(p: dict) -> str:
@@ -117,6 +162,74 @@ def _extract_order_id(p: dict) -> str:
         if node:
             return str(node).strip()
     return ""
+
+
+def _extract_order_total_cents(p: dict) -> int:
+    """Locate the order total in cents. Like _extract_email/_extract_items,
+    accepts the multiple shapes Pinball/GHL/Kajabi ship. Returns 0 if
+    nothing parseable is found (better to grant without tracking spend than
+    to drop the entire webhook over a missing amount field).
+
+    Field-name heuristic:
+      - `total_amount` / `total_amount_cents` → Pinball convention = CENTS
+      - `amount` / `total` / `price` → Stripe/GHL/Kajabi convention = DOLLARS
+      - Floats are always DOLLARS (e.g. 27.0 → 2700)
+      - Large ints (>= 10000) on `amount`/`total`/`price` are still treated
+        as cents (defensive — Stripe sometimes ships cents under `amount`).
+    """
+    cents_paths = [
+        ("total_amount",),
+        ("data", "total_amount"),
+        ("order", "total_amount"),
+        ("data", "order", "total_amount"),
+        ("total_amount_cents",),
+        ("data", "total_amount_cents"),
+    ]
+    dollar_paths = [
+        ("amount",),
+        ("data", "amount"),
+        ("order", "amount"),
+        ("data", "order", "amount"),
+        ("total",),
+        ("data", "total"),
+        ("order", "total"),
+        ("data", "order", "total"),
+        ("price",),
+        ("data", "price"),
+    ]
+
+    def _read(path: tuple) -> object:
+        node = p
+        for key in path:
+            if not isinstance(node, dict):
+                return None
+            node = node.get(key)
+        return node
+
+    # 1) Cents-named fields take precedence + are NEVER multiplied.
+    for path in cents_paths:
+        v = _read(path)
+        if v is None:
+            continue
+        try:
+            return int(round(float(v)))
+        except (ValueError, TypeError):
+            continue
+
+    # 2) Dollar-named fields: float → cents via ×100; large int → cents.
+    for path in dollar_paths:
+        v = _read(path)
+        if v is None:
+            continue
+        try:
+            f = float(v)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(v, float) or (isinstance(v, str) and "." in v):
+            return int(round(f * 100))
+        # Integer-shaped: large = cents (Stripe), small = dollars (GHL).
+        return int(round(f)) if f >= 10000 else int(round(f * 100))
+    return 0
 
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -704,6 +817,12 @@ def register_admin_routes(
     async def pinball_order_completed(
         request: Request,
         token: str = Query(...),
+        # Optional fallback product — used when the payload ships NO items
+        # array AND we couldn't synthesize one from top-level fields. Lets
+        # legacy GHL/Kajabi/Pinball workflows that pointed at
+        # `?token=X&product=base` keep working without per-funnel reconfig.
+        # Matches the legacy Netlify handler's `?product=` parameter shape.
+        product: str = Query("", description="Fallback entitlement if no items array"),
     ):
         """Receive the full Pinball.dev `order.completed` webhook payload at
         a SINGLE URL — no per-product query params required, no GHL forwarder
@@ -711,7 +830,13 @@ def register_admin_routes(
         entitlement via PINBALL_PRODUCT_MAP, and grants each independently
         (line-item `id` is used as the dedupe key so partial refunds remain
         clean later). Unknown product_ids are logged as `webhook_failed` and
-        skipped — the rest of the items still process."""
+        skipped — the rest of the items still process.
+
+        Fallback chain when `items[]` is empty:
+          1. Try to synthesize a single item from top-level product_id/productId.
+          2. If still empty, use the ?product= query param (legacy mode).
+          3. If both miss, return 400 + log payload for triage.
+        """
         # 1) Token gate
         if not PINBALL_WEBHOOK_TOKEN or token != PINBALL_WEBHOOK_TOKEN:
             try:
@@ -746,20 +871,67 @@ def register_admin_routes(
         items = _extract_items(body)
 
         if not email:
+            # Log a fingerprint of the top-level keys to help debug new
+            # payload shapes without exposing PII in the activity stream.
             await log_activity(
                 "webhook_failed",
                 "",
-                {"reason": "missing customer.email", "payload": body, "source": "pinball-direct"},
+                {"reason": "missing customer.email",
+                 "top_keys": sorted(list(body.keys()))[:20] if isinstance(body, dict) else [],
+                 "payload": body, "source": "pinball-direct"},
             )
             raise HTTPException(status_code=400, detail="Missing customer email in payload")
+
+        # 3) Items fallback chain — keep this path forgiving so GHL/Pinball/
+        # Kajabi workflows don't have to ship a perfect items[] structure.
+        # `fallback_mode` is stamped onto the activity log entry below so
+        # admins can see WHICH path matched on the buyers screen.
+        fallback_mode: Optional[str] = None
+        if not items:
+            synthesized = _synthesize_single_item(body)
+            if synthesized:
+                items = [synthesized]
+                fallback_mode = "synthesized_single_item"
+            elif product:
+                # Legacy mode: grant the entitlement named in the ?product=
+                # query param, no per-product mapping required. Matches the
+                # Netlify handler's behavior so old funnels keep working.
+                if product in KNOWN_ENTITLEMENTS:
+                    items = [{
+                        "id": _extract_order_id(body) or "",
+                        "product_id": f"__fallback_query_param__:{product}",
+                        "product_name": f"Fallback ({product})",
+                        "amount": _extract_order_total_cents(body),
+                        "_fallback_entitlement": product,
+                    }]
+                    fallback_mode = "query_param_product"
+                else:
+                    await log_activity(
+                        "webhook_failed",
+                        email,
+                        {"reason": f"unknown query-param product '{product}'",
+                         "payload": body, "source": "pinball-direct"},
+                    )
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Unknown product in query param: {product}",
+                    )
 
         if not items:
             await log_activity(
                 "webhook_failed",
                 email,
-                {"reason": "no items in payload", "payload": body, "source": "pinball-direct"},
+                {"reason": "no items in payload (no items[] AND no top-level product_id AND no ?product= query)",
+                 "top_keys": sorted(list(body.keys()))[:20] if isinstance(body, dict) else [],
+                 "payload": body, "source": "pinball-direct"},
             )
-            raise HTTPException(status_code=400, detail="No items in payload")
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "No items in payload. Add an items[] array, a top-level "
+                    "product_id, or include ?product=base in the webhook URL."
+                ),
+            )
 
         # 3) Iterate items, grant per product_id
         results: list[dict] = []
@@ -767,7 +939,11 @@ def register_admin_routes(
             if not isinstance(item, dict):
                 continue
             product_id = (item.get("product_id") or "").strip()
-            entitlement = PINBALL_PRODUCT_MAP.get(product_id)
+            # Synthesized + query-param fallbacks ship `_fallback_entitlement`
+            # directly so we skip the PINBALL_PRODUCT_MAP lookup (the
+            # product_id is a synthetic sentinel like
+            # `__fallback_query_param__:base` that wouldn't be in the map).
+            entitlement = item.get("_fallback_entitlement") or PINBALL_PRODUCT_MAP.get(product_id)
             line_item_id = (item.get("id") or "").strip()
             amount = item.get("amount") or 0
 
@@ -819,6 +995,7 @@ def register_admin_routes(
             "granted": ok_count,
             "duplicates": dup_count,
             "unmapped": unmapped_count,
+            "fallback_mode": fallback_mode,  # null when normal items[] path
             "results": results,
         }
 
