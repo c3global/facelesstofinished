@@ -73,6 +73,34 @@ export default function ActivityTab() {
     load();
   }, [load]);
 
+  // Silent auto-refresh — same low-overhead pattern as BuyersTab so the
+  // Activity feed surfaces webhook events, render completions, and admin
+  // actions in real time while the tab is open. Pauses on hidden tabs;
+  // refreshes immediately on tab focus. Per Charity's 2026-02-23 follow-up:
+  // "that should've automatically been added [to Activity too]."
+  useEffect(() => {
+    let stop = false;
+    const tick = () => {
+      if (stop) return;
+      if (typeof document !== "undefined" && document.hidden) return;
+      load();
+    };
+    const id = setInterval(tick, 20_000);
+    const onVis = () => {
+      if (!document.hidden) load();
+    };
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", onVis);
+    }
+    return () => {
+      stop = true;
+      clearInterval(id);
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", onVis);
+      }
+    };
+  }, [load]);
+
   const allSelected = useMemo(
     () => items.length > 0 && items.every((a) => selected.has(a.id)),
     [items, selected],

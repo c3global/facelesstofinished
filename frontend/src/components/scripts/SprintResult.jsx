@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { ArrowUpRight, ClipboardCopy } from "lucide-react";
 import PhoneFrame from "../PhoneFrame";
 import ShortPhoneBody from "./ShortPhoneBody";
+import { markdownToHtml, copyRichText } from "./SectionCard";
 
 /**
  * SprintResult — renders 5 variant phone frames in a responsive grid.
@@ -26,10 +27,20 @@ function CopyShortButton({ variant }) {
       data-testid={`sprint-variant-${variant.index}-copy`}
       onClick={async () => {
         try {
-          await navigator.clipboard.writeText(variantToClipboardText(variant));
+          // Use the rich-HTML clipboard path so B-roll cues paste green
+          // into Google Docs / Notion / Word — same UX as Long-form copy.
+          // Plain text is preserved as the fallback for editors that
+          // strip HTML.
+          const text = variantToClipboardText(variant);
+          const html = markdownToHtml(text);
+          await copyRichText(text, html);
           setCopied(true);
           setTimeout(() => setCopied(false), 1500);
-        } catch {}
+        } catch {
+          // copyRichText handles its own fallback to writeText. If we
+          // reach here, both paths threw — nothing more we can do but
+          // skip the "copied" flash so the user re-tries.
+        }
       }}
     >
       <ClipboardCopy size={12} />

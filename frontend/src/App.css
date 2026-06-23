@@ -2194,9 +2194,21 @@
   background: color-mix(in srgb, var(--platform-accent, var(--accent)) 18%, transparent);
   color: #fff;
 }
+/* Brighter green for shorts B-roll cues — matches the .markdown .broll-cue
+   green used in Long-form so the visual language is consistent across both
+   engines. Per Charity's 2026-02-23 feedback: "in the shorts engine, the
+   b-roll displayed under the text should be in yellow or bright green…
+   something that stands out". Kept the red TEXT cue (.phone-cue-onscreen)
+   exactly as-is per her explicit "don't change this please". */
 .phone-cue-broll {
-  background: rgba(255,255,255,0.04);
-  color: rgba(255,255,255,0.78);
+  background: rgba(74, 222, 128, 0.10);
+  color: #4ADE80;
+  border-left: 2px solid #4ADE80;
+  font-weight: 600;
+}
+.phone-cue-broll .phone-cue-tag {
+  background: #4ADE80;
+  color: #0B1A12;
 }
 .phone-cue-tag {
   font-weight: 800; font-size: 8px;
