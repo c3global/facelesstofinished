@@ -2283,35 +2283,48 @@ async def _run_render_faceless(job: dict):
             n_t2v = sum(1 for k in scene_kind if k == "ai_t2v")
             actual_cost_cents += n_t2v * T2V_ENGINES[ai_engine]["cost_cents"]
 
-    # --- 3) Audio duration — probe the real WAV file so video length matches
-    # exactly. Falls back to the script-char estimate on probe failure. First
-    # we await the TTS task that was fired in step 1 (it ran in parallel with
-    # the visuals phase, so this await is usually instant). ---
-    try:
-        tts_r = await tts_task
-    except Exception as exc:  # noqa: BLE001
-        await db.renders.update_one(
-            {"id": job_id},
-            {"$set": {
-                "status": "failed",
-                "error": f"Voiceover error: {type(exc).__name__}: {exc}",
-                "actual_cost_cents": actual_cost_cents,
-                "completed_at": datetime.now(timezone.utc).isoformat(),
-            }},
-        )
-        return
-    if tts_r.status_code != 200:
-        await db.renders.update_one(
-            {"id": job_id},
-            {"$set": {
-                "status": "failed",
-                "error": f"Voiceover error {tts_r.status_code}: {tts_r.text[:300]}",
-                "actual_cost_cents": actual_cost_cents,
-                "completed_at": datetime.now(timezone.utc).isoformat(),
-            }},
-        )
-        return
-    tts_json = tts_r.json()
+        # --- 3a) Await TTS BEFORE the httpx.AsyncClient context exits. ---
+        # The `_run_tts` closure captures `client` from this `async with`
+        # block; if we await it after the block exits, an in-flight Kokoro
+        # POST (or a retry kicked off by ReadError) would call .post() on a
+        # closed client and surface as "RuntimeError: Cannot send a request,
+        # as the client has been closed." That was the exact failure Charity
+        # hit on long-script Faceless renders on 2026-02-23. We capture the
+        # parsed JSON here while the client is still alive, then continue
+        # with all downstream work outside the block (the rest of the
+        # pipeline doesn't touch `client`).
+        try:
+            tts_r = await tts_task
+        except Exception as exc:  # noqa: BLE001
+            await db.renders.update_one(
+                {"id": job_id},
+                {"$set": {
+                    "status": "failed",
+                    "error": f"Voiceover error: {type(exc).__name__}: {exc}",
+                    "actual_cost_cents": actual_cost_cents,
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                }},
+            )
+            return
+        if tts_r.status_code != 200:
+            await db.renders.update_one(
+                {"id": job_id},
+                {"$set": {
+                    "status": "failed",
+                    "error": f"Voiceover error {tts_r.status_code}: {tts_r.text[:300]}",
+                    "actual_cost_cents": actual_cost_cents,
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                }},
+            )
+            return
+        tts_json = tts_r.json()
+
+    # --- 3b) Audio duration — probe the real WAV file so video length matches
+    # exactly. Falls back to the script-char estimate on probe failure. The
+    # TTS response was already captured above while the httpx client was
+    # alive; this block runs outside the async-with by design (it only
+    # needs the parsed JSON + an independent _probe_audio_duration_s call
+    # which manages its own client). ---
     audio_url = tts_json.get("audio_url") or (tts_json.get("audio") or {}).get("url")
     actual_cost_cents += int((len(job["script"]) / 1000.0) * 5)
 

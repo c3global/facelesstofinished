@@ -1,0 +1,41 @@
+{
+  "summary": "Verified the TTS client-lifecycle regression fix in _run_render_faceless. The `await tts_task` + status_code check + .json() parse now happen INSIDE the `async with httpx.AsyncClient(...)` block (server.py lines 2107-2320). Ran 5 pytest cases against the live preview backend including 2 REAL fal.ai faceless renders (Kokoro TTS + Flux 1.1 Pro). Both renders completed end-to-end (status=complete, progress=100). The 'Cannot send a request, as the client has been closed.' RuntimeError did NOT surface on either short or long scripts. Fix is verified.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter30_tts_client_lifecycle.py",
+    "/app/test_reports/pytest/iter30_all.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is now 3437 lines — should be split into modules (renders, studio, auth, admin, scripts). Current size is well past the 700-line threshold and makes future fixes high-risk.",
+    "_run_render_faceless itself spans ~570 lines (1987-2555). The TTS sub-section, visuals fan-out, normalize step, and compose step would each be cleaner as their own functions. The just-fixed bug was a direct consequence of how tangled the async-with/closure/create_task code is in this single function.",
+    "Per-scene per-attempt cost on long-script Faceless renders is real money — each long test cost ~$0.30. The pipeline still has no per-user daily/weekly spend cap; only a per-render circuit breaker (RENDER_COST_CIRCUIT_BREAKER_CENTS). A repeated retry loop on a user with a flaky network could rack up dozens of dollars/day silently.",
+    "_run_tts retries up to 3x on ReadError/ReadTimeout/RemoteProtocolError but NOT on httpx.ConnectError. If Kokoro's fal.run endpoint has a brief DNS hiccup, the user gets a hard failure instead of a retry."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter30_tts_client_lifecycle.py (new)"
+  ],
+  "success_rate": {
+    "backend": "100% (5/5)",
+    "frontend": "not tested (per request)"
+  },
+  "test_credentials": "drcharitycampbell@gmail.com (DEV_BYPASS admin, full entitlements)",
+  "seed_data_creation": "Two real faceless render jobs created during testing — both completed successfully and are now in the user's history. No seed scripts needed.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "The TTS client-lifecycle fix (iteration 26) is verified end-to-end with real fal.ai calls. The regression test at /app/backend/tests/test_iter30_tts_client_lifecycle.py uses an explicit fingerprint check ('Cannot send a request, as the client has been closed') on the job.error field; if a future refactor reintroduces the bug, the long-script test will fail with a clear 'REGRESSION DETECTED' message. Each long-script run takes ~45s and costs ~$0.30 of fal.ai credits — keep regression-suite invocation low-frequency. The test uses ai_engine='flux_static' to skip Kling i2v ($0.05 vs $0.30+ per scene) while still exercising the identical TTS code path.",
+  "rca of the issue": {
+    "root_cause": "In server.py _run_render_faceless, the inner _run_tts() coroutine captured the outer `client: httpx.AsyncClient` via closure. The task was created via `asyncio.create_task(_run_tts())` INSIDE the `async with httpx.AsyncClient(...) as client:` block, but the `await tts_task` happened AFTER the block had already exited and closed `client`. Because _run_tts has a 3-retry loop on ReadError/ReadTimeout/RemoteProtocolError, any retry that fired after the with-block exit would call client.post() on a closed client and raise RuntimeError: Cannot send a request, as the client has been closed.",
+    "reproduction": "Long Faceless scripts (1000+ chars) cause Kokoro to take 90-180s, which raised the probability of a transient ReadError that triggered a retry on the already-closed client. Short scripts almost always finished TTS before the with-block exited, hence the bug only surfaced on long scripts.",
+    "mitigation": "Moved `await tts_task`, the status_code check, and the tts_r.json() parse INSIDE the async-with block (server.py lines 2296-2320). The downstream pipeline now only consumes the already-parsed tts_json dict, which doesn't need the client. Verified: a 1170-char 6-scene Faceless render completed cleanly (status=complete, progress=100) and a 130-char 2-scene render also completed.",
+    "preventive_action": "Consider extracting _run_render_faceless into smaller functions so the client lifetime is structurally enforced (e.g., a `_do_tts(client, job) -> dict` function that returns the parsed JSON, keeping the await + parse colocated with the client by construction)."
+  }
+}
