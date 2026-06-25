@@ -15,6 +15,30 @@ paying customers + entitlements on the existing Netlify backend at
 `https://faceless48.c3global.co/api/auth-me` — the new Studio should call
 back to it for entitlement verification.
 
+## 2026-02-23 — P0 Faceless render regression fixed: TTS client-lifecycle bug ("Cannot send a request, as the client has been closed")
+**Status:** SHIPPED + verified by testing agent (iter 30, 5/5 pytests, including 2 real fal.ai faceless renders that both completed).
+
+User report: 8+ consecutive Faceless renders failed with `Render failed: Voiceover error: RuntimeError: Cannot send a request, as the client has been closed.` Long-script renders (1000+ chars) failed at ~35% during the "Generating scene visuals (1 of 6)…" step.
+
+**Root cause** — `_run_render_faceless` in `server.py` opens `async with httpx.AsyncClient(...) as client` (line 2107). Inside that block, it creates `tts_task = asyncio.create_task(_run_tts())` where `_run_tts` is a closure over `client` with a 3-retry loop on ReadError/ReadTimeout/RemoteProtocolError. BUT the `await tts_task` + status check + `.json()` parse were happening *outside* the `async with` block (was at line 2291). On long scripts where Kokoro takes 90-180s, a transient ReadError would trigger a retry after the with-block had already closed `client`, raising `RuntimeError: Cannot send a request, as the client has been closed.`
+
+**Fix** — moved the `try: tts_r = await tts_task ... except`, the `tts_r.status_code != 200` check, and `tts_json = tts_r.json()` extraction INSIDE the `async with` block (now lines ~2294-2326). Everything downstream (audio probe, scene math, ffmpeg-compose) only needs the parsed `tts_json` dict, so it runs outside the block as before.
+
+**Files touched**
+- `/app/backend/server.py` — single block relocation inside `_run_render_faceless`.
+
+**Verified by testing agent (iter 30)**
+- New regression test: `/app/backend/tests/test_iter30_tts_client_lifecycle.py` — explicit string-match assertion on "Cannot send a request, as the client has been closed" against the failed-job's error field. Two REAL fal.ai renders kicked through the pipeline:
+  - 1170-char / 6-scene → status=complete, progress=100
+  - 130-char / 2-scene → status=complete, progress=100
+- Bug class is now structurally captured: any future regression will fail this test loudly.
+
+**Code-review backlog flagged by testing agent (non-blocking)**
+- `server.py` is now 3437 lines — refactor into `routes/`, `services/`, `pipelines/` is overdue.
+- `_run_render_faceless` is ~570 lines on its own. The TTS / visuals / normalize / compose stages each belong in their own function so client lifetime is structurally enforced.
+- `_run_tts` retries on ReadError/ReadTimeout/RemoteProtocolError but not on `httpx.ConnectError` — could be tightened to retry the brief DNS-hiccup case too.
+
+
 ## 2026-02-23 — Post-compare follow-ups: YT backticks → chips, TikTok chip readability, per-platform Send-to-Studio, persistent "New short" CTA
 **Status:** SHIPPED — verified live (6 ON-SCREEN + 6 B-ROLL chips on YT cell, TikTok chip text=rgb(11,26,26), 3 per-platform CTAs, New-short CTA returns to topic step while staying in Shorts mode).
 
