@@ -472,6 +472,85 @@
   line-height: 1.65;
 }
 
+/* =====================================================================
+   Resources page — ports the 5-PDF Production Toolkit from the legacy
+   Netlify build. The PDFs themselves still live on filesafe.space CDN
+   (URLs preserved in /pages/Resources.jsx); these styles re-skin the
+   page in the new Emergent design system so the Resource Library lands
+   inside the same visual language as Scripts and Studio.
+   ===================================================================== */
+.resources-grid {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  margin-top: 8px;
+}
+.resource-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 24px 22px 22px;
+  border-radius: 18px;
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-left: 4px solid var(--card-accent, var(--accent));
+  text-decoration: none;
+  color: var(--text);
+  transition: transform .18s, border-color .18s, background .18s, box-shadow .18s;
+  overflow: hidden;
+}
+.resource-card::before {
+  /* Tinted wash that intensifies on hover — gives every card a unique
+     identity tied to its accent color without losing legibility. */
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--card-accent, var(--accent)) 8%, transparent);
+  opacity: 0;
+  transition: opacity .18s;
+  pointer-events: none;
+}
+.resource-card:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--card-accent, var(--accent)) 60%, var(--border));
+  box-shadow: 0 12px 32px -16px color-mix(in srgb, var(--card-accent, var(--accent)) 50%, transparent);
+}
+.resource-card:hover::before { opacity: 1; }
+.resource-card > * { position: relative; z-index: 1; }
+.resource-number {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  color: var(--card-accent, var(--accent));
+}
+.resource-title {
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin: 0;
+  color: var(--text);
+}
+.resource-desc {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+.resource-open {
+  margin-top: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--card-accent, var(--accent));
+}
+
+
+
 [data-theme="light"] .studio-title {
   background: linear-gradient(180deg, #1A1530 0%, #4A2E1A 100%);
   -webkit-background-clip: text;

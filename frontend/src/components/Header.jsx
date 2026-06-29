@@ -1,6 +1,6 @@
 import React from "react";
 import { useNavigate, useLocation, NavLink } from "react-router-dom";
-import { LogOut, Sun, Moon, FileText, Wand2, Shield } from "lucide-react";
+import { LogOut, Sun, Moon, FileText, Wand2, Shield, BookOpen } from "lucide-react";
 import { useAuth, useTheme } from "../App";
 
 export default function Header() {
@@ -53,6 +53,19 @@ export default function Header() {
                   Upgrade
                 </span>
               )}
+            </NavLink>
+            {/* Resources — the 5-PDF Production Toolkit (Voiceover, B-Roll,
+                Thumbnail Kit, Production Map, Publishing Checklist). Visible
+                to every signed-in buyer regardless of tier because the
+                guides themselves are static reference material that benefits
+                everyone, and they were a promised deliverable on the
+                pre-migration Netlify site. */}
+            <NavLink
+              to="/resources"
+              className={({ isActive }) => `nav-link ${isActive ? "is-active" : ""}`}
+              data-testid="nav-resources"
+            >
+              <BookOpen size={13} /> Resources
             </NavLink>
             {user?.isAdmin && (
               <NavLink

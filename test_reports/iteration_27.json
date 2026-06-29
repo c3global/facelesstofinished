@@ -1,0 +1,38 @@
+{
+  "summary": "Frontend-only verification of newly ported /resources page (Resource Library — 5 production-toolkit PDFs). All requested checks pass: page renders, 5 cards present with correct testids/titles/numbers/hrefs (filesafe.space CDN, .pdf, target=_blank), nav-resources link visible from /scripts /studio /admin /resources, Back-to-Script-Engine navigates correctly, logged-out users are redirected to /login, mobile reflow to single column works. No console errors, no regression in /scripts /studio /admin.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {
+        "screen": "Site header @ 375px mobile width",
+        "issues": [
+          "Header nav does not collapse into a hamburger menu on small viewports. With the new Resources link added, the items (Script Engine, Studio, Resources, Admin) plus user email + theme toggle + Sign-out overflow horizontally — the 'Resources' label is partially clipped on mobile (visible as 'Re...' in the 375px screenshot). Pre-existing layout limitation magnified by the new link; not a blocker for this fix but worth noting for a future mobile-nav pass."
+        ]
+      }
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [
+    "(Optional, low priority) Consider a mobile-responsive header collapse (hamburger or icon-only mode <480px) so Resources + Admin + email don't overflow on small screens. Not introduced by this port; pre-existing header design."
+  ],
+  "critical_code_review_comments": [
+    "Resources.jsx (105 lines) is clean, focused, and uses external CDN URLs verbatim from the legacy file — verified against /app/legacy_netlify/src/pages/Resources.jsx semantics. All 5 hrefs use https://assets.cdn.filesafe.space/.../*.pdf with target=_blank rel=noopener noreferrer (safe external linking).",
+    "Route guard correctly uses RequireAuth (not RequireStudio) — matches the intent that all signed-in buyers regardless of tier can access the toolkit.",
+    "Logged-out redirect verified: /resources → /login via RequireAuth → Navigate.",
+    "data-testid coverage is comprehensive (resources-page, resources-hero, resources-grid, resource-card-{key}, resource-number-{key}, resource-title-{key}, resource-open-{key}, resources-back-to-scripts, nav-resources) — testing-friendly.",
+    "No business-logic, async, or MongoDB concerns in scope (frontend-only port)."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (skipped per request)", "frontend": "100%"},
+  "test_credentials": "Admin: drcharitycampbell@gmail.com (DEV_BYPASS, full entitlements + isAdmin). Non-admin tested: directkynections@gmail.com — NOTE: this account is configured in STUDIO_GRANT_EMAILS so it ALSO returns full entitlements [base, shorts, studio] (isAdmin=false). I could not isolate a true base-only buyer via /api/auth/check without seeding a fresh buyer; however, the access-control contract is independently verified — /resources is guarded by RequireAuth only, NOT by RequireStudio, so any signed-in user (with or without entitlements) can view it. Verified the non-admin user (isAdmin=false) sees the full page with all 5 cards and no admin nav link.",
+  "seed_data_creation": "None.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Resources page port is fully verified end-to-end. Desktop (1920x900), tablet (768x1024), and mobile (375x812) all render correctly. Mobile reflows to single-column grid (all 5 cards ~343px wide on 375px viewport, confirming the repeat(auto-fit, minmax(280px, 1fr)) CSS works). No regressions in /scripts, /studio, /admin nav. Only minor observation: site-header doesn't have a mobile breakpoint, so the nav row overflows at <500px viewports — pre-existing issue, not introduced by this fix.",
+  "rca of the issue": "n/a — feature port verification, no bug found. Original customer-reported regression (missing Resource Library page in the Netlify→Emergent migration) is resolved: all 5 legacy PDF URLs are preserved verbatim, page is mounted at /resources with proper auth guard, and the nav link is in place between Studio and Admin."
+}
