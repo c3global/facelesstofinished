@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, createContext, useContext } from "react";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import axios from "axios";
 import Studio from "./pages/Studio";
 import Scripts from "./pages/Scripts";
@@ -7,6 +7,7 @@ import Resources from "./pages/Resources";
 import Login from "./pages/Login";
 import Admin from "./pages/Admin";
 import Header from "./components/Header";
+import Footer from "./components/Footer";
 import "./App.css";
 
 // API base — absolute in dev/preview (REACT_APP_BACKEND_URL set), relative in
@@ -190,8 +191,19 @@ export default function App() {
             <Route path="/" element={<Navigate to="/scripts" replace />} />
             <Route path="*" element={<Navigate to="/scripts" replace />} />
           </Routes>
+          <FooterGate />
         </BrowserRouter>
       </AuthProvider>
     </ThemeProvider>
   );
+}
+
+// Footer is hidden on /login (the login page already shows the full landing
+// hero — a footer below it would just add clutter). On every other route,
+// the Footer mounts at the bottom of the viewport. Mirrors the Header's
+// `showNav` pattern in components/Header.jsx.
+function FooterGate() {
+  const loc = useLocation();
+  if (loc.pathname === "/login") return null;
+  return <Footer />;
 }

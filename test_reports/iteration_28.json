@@ -1,0 +1,40 @@
+{
+  "summary": "Frontend-only verification of the restored public Footer + inline Changelog popup (iteration 28). Tested footer rendering across /scripts, /studio, /resources, /admin (authenticated admin) and /login (logged out). Validated native <details>/<summary> open+close behavior, all 5 changelog entries, brand-mark sizing (favicon.png at 28px — NOT the giant lockup), copyright text, and mobile vertical-stack at 375x812. All 10 acceptance items pass; zero compile errors; console clean except for harmless React Router v7 future-flag warnings.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/.screenshots/footer_panel_open_desktop.png",
+    "/app/.screenshots/footer_mobile_375.png"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Footer.jsx + changelog.js + FooterGate in App.js are clean, minimal, and faithfully mirror the legacy Netlify pattern. No changes needed.",
+    "Minor (non-blocking, pre-existing): React Router v6 emits two future-flag warnings (v7_startTransition, v7_relativeSplatPath) on every navigation. Cosmetic console noise only — unrelated to this iteration's scope. Can be silenced later by adding the future={{...}} prop to BrowserRouter."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (skipped per request)", "frontend": "100%"},
+  "test_credentials": "DEV_BYPASS admin drcharitycampbell@gmail.com — JWT injected via POST /api/auth/check then written to localStorage as f48_studio_token (matched the project's known auth pattern).",
+  "seed_data_creation": "None.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Footer + Changelog migration is verified working. Test asserted: (1) site-footer testid count=0 on /login when logged out, (2) site-footer renders on /scripts /studio /resources /admin with version='v1.8.0', mark src='/favicon.png' at 28px height, copyright='© 2026 C3 Global', (3) <details> starts closed, click footer-version opens panel with all 5 entries (1.8.0/1.7.5/1.7.0/1.6.0/1.5.0) each containing <strong> + <ul><li>, (4) second click closes it, (5) at 375x812 footer flex-direction is column and mark stays at 28px (no giant lockup). React Router future-flag warnings remain — pre-existing and out of scope.",
+  "detailed_results": {
+    "footer_hidden_on_login_logged_out": true,
+    "footer_/scripts": {"count": 1, "version": "v1.8.0", "mark_src": "/favicon.png", "mark_height_px": 28, "copyright": "© 2026 C3 Global"},
+    "footer_/studio": {"count": 1, "version": "v1.8.0", "mark_src": "/favicon.png", "mark_height_px": 28, "copyright": "© 2026 C3 Global"},
+    "footer_/resources": {"count": 1, "version": "v1.8.0", "mark_src": "/favicon.png", "mark_height_px": 28, "copyright": "© 2026 C3 Global"},
+    "footer_/admin": {"count": 1, "version": "v1.8.0", "mark_src": "/favicon.png", "mark_height_px": 28, "copyright": "© 2026 C3 Global"},
+    "changelog_initially_closed": true,
+    "changelog_opens_on_pill_click": true,
+    "all_5_entries_rendered": {"1.8.0": 1, "1.7.5": 1, "1.7.0": 1, "1.6.0": 1, "1.5.0": 1},
+    "entry_structure_has_strong_ul_li": true,
+    "changelog_closes_on_second_click": true,
+    "mobile_375_flex_direction": "column",
+    "mobile_375_mark_height_px": 28,
+    "compile_errors_overlay_on_any_route": 0
+  }
+}
