@@ -15,6 +15,24 @@ paying customers + entitlements on the existing Netlify backend at
 `https://faceless48.c3global.co/api/auth-me` — the new Studio should call
 back to it for entitlement verification.
 
+
+---
+
+## 🔁 Workflow rule: Changelog moves with every change (set 2026-06-29 by user)
+
+**Hard rule for every agent working on this app:**
+
+1. **Every shipped change must add or extend an entry in `/app/frontend/src/changelog.js` AND `/app/memory/CHANGELOG.md`** — in the SAME action as the code edit. Not "later". Not "before deploy". Same atomic batch as the feature/fix.
+2. If the change is small enough to fold into the most recent entry, extend that entry's `changes: []` array. If it's a meaningful new release-worthy bundle, bump `APP_VERSION` and add a new top-level entry.
+3. **Voice = customer-facing.** No webhooks, admin tools, migration scaffolding, env vars, internal refactors, or backend plumbing in the public changelog. Those go here in PRD.md, NOT in changelog.js. The customer-facing rule of thumb: if a normal buyer wouldn't directly notice or benefit from it, don't put it in changelog.js.
+4. **Dates are real dates** — pull from `git log` if you don't know. Do not invent dates that pre-date the project's actual lifespan (project started 2026-05-21).
+5. **The footer popup in the app reads from `changelog.js`** — verifying the customer sees the right text means clicking the version pill in the footer and reading what shows up. There is no separate "publish step."
+6. Internal-only changes (admin panel, webhooks, refactors, env config, test infrastructure) still get documented — but here in `PRD.md`, NOT in the public changelog.
+
+**Why this exists**: the user explicitly asked for the changelog to update automatically every deploy because they want customers to see momentum. Failing to update the changelog on a deploy = an undocumented release = a customer who thinks the app is stale. Treat this rule as binding.
+
+
+
 ## 2026-02-23 — P0 Faceless render regression fixed: TTS client-lifecycle bug ("Cannot send a request, as the client has been closed")
 **Status:** SHIPPED + verified by testing agent (iter 30, 5/5 pytests, including 2 real fal.ai faceless renders that both completed).
 

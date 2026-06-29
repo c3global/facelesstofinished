@@ -1,0 +1,38 @@
+{
+  "summary": "Content-correctness verification of the rewritten footer changelog popup on /scripts. All 7 acceptance criteria from the review request PASS: 9 entries render with correct testids (v1.0.0–v1.8.0), all 9 dates fall between 2026-05-21 and 2026-06-29, ZERO forbidden internal terms leak, APP_VERSION renders as 'v1.8.0', CHANGELOG.md mirrors the JS source, and /scripts /studio /resources /login all load with no compile overlay.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "verification_results": {
+    "footer_pill_text": "v1.8.0 (matches APP_VERSION)",
+    "entries_found": 9,
+    "expected_testids_present": ["footer-changelog-entry-1.8.0","1.7.0","1.6.0","1.5.0","1.4.0","1.3.0","1.2.0","1.1.0","1.0.0"],
+    "iso_dates_found_in_popup": ["2026-06-29","2026-06-25","2026-06-19","2026-06-13","2026-06-11","2026-05-29","2026-05-26","2026-05-23","2026-05-21"],
+    "forbidden_term_leaks": [],
+    "forbidden_terms_scanned": ["webhook","Pinball","Netlify","Admin Panel","CSV Import","API key","GHL","GoHighLevel","AsyncClient","RuntimeError","fal.ai","HeyGen API"],
+    "bad_dates_found_2026_01_to_04": [],
+    "bad_month_name_refs_jan_feb_mar_apr_2026": [],
+    "compile_overlay_on_any_route": false,
+    "routes_smoke_tested": ["/scripts","/studio","/resources","/login"],
+    "changelog_md_matches_js": "Both files describe the same 9 entries with identical dates and content. CHANGELOG.md uses humanized month names ('June 29, 2026') while changelog.js uses ISO ('2026-06-29') — semantically equivalent."
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Content is well-scoped to customer voice — no leaks of internal infra (Pinball/Netlify/CSV/GHL/webhooks) detected.",
+    "Note: 'HeyGen' appears in 'HeyGen catalog' (v1.6.0) and 'HeyGen avatar' (v1.3.0) — this is explicitly allowed per the review request (HeyGen alone is a product name customers can know).",
+    "Minor: changelog.js displays raw ISO date strings (e.g. '2026-06-29') in the popup. Humanizing to 'Jun 29, 2026' (as CHANGELOG.md does) would feel more customer-facing, but this is a polish suggestion — not a defect against the acceptance criteria.",
+    "Editing rules comment block at top of changelog.js is clear and binding — good guardrail for future agents."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (skipped per request)", "frontend": "100%"},
+  "test_credentials": "DEV_BYPASS admin: drcharitycampbell@gmail.com via POST /api/auth/check — returned 200 with {token,user}; injected into localStorage as f48_studio_token + f48_studio_user.",
+  "seed_data_creation": "none",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Footer changelog content verified clean as of iteration_29. Popup expand/collapse infra was verified in iteration_28. If the changelog content changes again, re-run the forbidden-substring scan and the date-range scan against the popup text — see the playwright snippet in this iteration's run for the exact regex/term list. Source of truth: /app/frontend/src/changelog.js (in-app) and /app/memory/CHANGELOG.md (developer-facing); they must stay in sync per the PRD.md workflow rule.",
+  "rca of the issue": "n/a — this iteration verified a fix, not a bug. The previous changelog had fabricated Jan/Feb 2026 dates and leaked internal terms (webhooks, Pinball, Netlify, CSV import, admin panel). Main agent's rewrite pulled real dates from git log (first commit 2026-05-21) and stripped all admin/backend language. Verified: no fabricated dates remain, no internal terms leak."
+}
