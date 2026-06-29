@@ -281,10 +281,38 @@ async def auth_check(payload: LoginPayload):
     if not email:
         raise HTTPException(status_code=400, detail="Email required")
 
+    # Stamp a real "last seen" timestamp on the buyer record AFTER a successful
+    # sign-in. The pre-fix admin Stats tab was reading lastLoginAt from CSV
+    # imports + webhook payloads only — meaning users who actually signed in
+    # via this endpoint never got a real timestamp, and the "Active users
+    # (30d)" metric was effectively stale historical data. We update inside
+    # each successful resolution path below (not here at the top) so failed
+    # auth attempts don't pollute the timestamp, and we use `update_one` with
+    # `upsert=False` so DEV_BYPASS / STUDIO_GRANT users without a buyer
+    # record don't accidentally create one. Idempotent + cheap (one indexed
+    # email lookup + one $set per successful sign-in).
+    async def _stamp_last_login() -> None:
+        try:
+            now_iso = datetime.now(timezone.utc).isoformat()
+            await db.buyers.update_one(
+                {"email": email},
+                {
+                    "$set": {"lastLoginAt": now_iso, "updatedAt": now_iso},
+                    "$inc": {"loginCount": 1},
+                },
+                upsert=False,
+            )
+        except Exception:
+            # Never block sign-in on a telemetry write — log silently and
+            # let the auth flow continue. Worst case: the user signs in,
+            # stat doesn't tick. Better than a 500 on a successful login.
+            pass
+
     # 1) Dev bypass — preview env only.
     if DEV_BYPASS_EMAIL and email == DEV_BYPASS_EMAIL:
         is_admin = email in ADMIN_EMAILS
         token = issue_jwt(email, KNOWN_ENTITLEMENTS, is_admin=is_admin)
+        await _stamp_last_login()
         return {
             "token": token,
             "user": {"email": email, "entitlements": KNOWN_ENTITLEMENTS, "isAdmin": is_admin},
@@ -294,6 +322,7 @@ async def auth_check(payload: LoginPayload):
     if email in STUDIO_GRANT_EMAILS:
         is_admin = email in ADMIN_EMAILS
         token = issue_jwt(email, KNOWN_ENTITLEMENTS, is_admin=is_admin)
+        await _stamp_last_login()
         return {
             "token": token,
             "user": {"email": email, "entitlements": KNOWN_ENTITLEMENTS, "isAdmin": is_admin},
@@ -329,6 +358,7 @@ async def auth_check(payload: LoginPayload):
                     {"$unset": {"pending_welcome": "", "pending_welcome_ents": ""}},
                 )
             token = issue_jwt(email, ents, is_admin=is_admin)
+            await _stamp_last_login()
             response = {
                 "token": token,
                 "user": {"email": email, "entitlements": ents, "isAdmin": is_admin},

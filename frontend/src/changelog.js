@@ -14,9 +14,17 @@
 //    See PRD.md → "Workflow rule: changelog must move with every deploy."
 // 4. Most recent on top. Each entry has version + date + bullet list.
 
-export const APP_VERSION = "1.8.0";
+export const APP_VERSION = "1.8.1";
 
 export const CHANGELOG = [
+  {
+    version: "1.8.1",
+    date: "2026-06-29",
+    changes: [
+      "What's New popup now nudges you with a subtle amber dot when there's a release you haven't seen yet — opens the popup once to dismiss",
+      "Last-seen timestamps now update accurately on every sign-in (was only tracking imports and webhook events before)",
+    ],
+  },
   {
     version: "1.8.0",
     date: "2026-06-29",

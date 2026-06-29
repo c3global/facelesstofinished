@@ -1,0 +1,33 @@
+{
+  "summary": "Iter-30 Group A foundation (AppSumo launch) — full coverage pass: lastLoginAt stamping on every auth path, tier_config.py data integrity, /api/admin/usage shape/sort/filter/validation/aggregation, and the amber What's-New dot on the footer version pill. 23/23 backend pytest cases PASSED, 5/5 frontend Playwright cases PASSED, 3/3 regression routes load cleanly with no compile overlay.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter30_group_a_foundation.py",
+    "/app/test_reports/pytest/iter30.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "tier_config.py is clean, frozen dataclasses, no DB writes at import — matches the Group-A 'pure data' constraint.",
+    "_stamp_last_login() is correctly wrapped in try/except so a Mongo write failure cannot block sign-in. Verified by code review (DB-failure monkeypatch path skipped per request).",
+    "/api/admin/usage uses re.escape on the q substring (good — prevents regex injection via search box), and bounds limit to 2000 (good — prevents response blowup).",
+    "Minor: sort_by regex allows 'scripts_total'/'renders_total' as valid values but the sort_key_map handles them correctly; spec docstring on the endpoint could be expanded but functionality is sound.",
+    "Footer.jsx uses string compare on lastSeen !== APP_VERSION (not semver) — this is intentional and acceptable since any change in the stored value triggers re-show; verified with old-version test."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter30_group_a_foundation.py (new)"
+  ],
+  "success_rate": {"backend": "100% (23/23)", "frontend": "100% (5/5 + 3 regression routes)"},
+  "test_credentials": "DEV_BYPASS admin drcharitycampbell@gmail.com (passwordless). Non-admin test users seeded as test_iter30_*@example.com and auto-deleted via cleanup fixture.",
+  "seed_data_creation": "All seeded buyers/scripts/renders use email prefix 'test_iter30_' and are purged by a per-test cleanup fixture that runs db.buyers/db.scripts/db.renders delete_many on that prefix. No real-buyer pollution. Verified prod DB untouched.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Group A foundation is fully verified — Group B (render-endpoint quota gating + cost kill-switch breaker + cycle-reset cron) and Group C (Usage admin UI tab) are NOT in this iteration. When Group B/C ship, extend /app/backend/tests/test_iter30_group_a_foundation.py or create a new iter file; the cleanup fixture pattern (TEST_PREFIX='test_iter30_') is reusable. The admin auth flow is DEV_BYPASS in preview — production uses the same paths via STUDIO_GRANT_EMAILS + db.buyers, and all three paths are now telemetry-stamped (verified)."
+}

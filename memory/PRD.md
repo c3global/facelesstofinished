@@ -29,6 +29,39 @@ back to it for entitlement verification.
 5. **The footer popup in the app reads from `changelog.js`** — verifying the customer sees the right text means clicking the version pill in the footer and reading what shows up. There is no separate "publish step."
 6. Internal-only changes (admin panel, webhooks, refactors, env config, test infrastructure) still get documented — but here in `PRD.md`, NOT in the public changelog.
 
+
+## 2026-06-29 — Group A foundation shipped + What's New amber dot
+**Status:** SHIPPED on preview, ready for testing-agent verification + deploy.
+
+### What's in
+1. **What's New amber dot** — `Footer.jsx` reads `APP_VERSION` against `localStorage.f48_changelog_seen_v1`; pulses an amber dot beside the version pill until the user opens the popup once. Dismisses immediately on `<details>` open. Pure CSS animation (`@keyframes footerDotPulse`), no JS interval.
+2. **Group A1 — `lastLoginAt` fix on `/auth/check`**: new `_stamp_last_login()` helper writes `lastLoginAt`, `updatedAt`, and `$inc loginCount` on EVERY successful sign-in path (dev bypass, manual grant, buyer lookup). `upsert=False` so dev/grant emails without a buyer record don't create one. Try/except wraps the write so telemetry failure can NEVER block sign-in.
+3. **Group A2 — `tier_config.py`** new module: 5 frozen `Tier` dataclasses (T1 $49 / T2 $99 / T3 $179 / T4 $349 / FOUNDER). Encodes sticker prices, monthly render quotas (5 / 10 / 15 / 40), Avatar sub-caps (0 / 0 / 5 / 10), thumbnail quotas (20 / 50 / 9999 / 9999), monthly cost kill-switch caps in cents (500 / 1000 / 2000 / 5000), and BYOK eligibility (T4 + Founder only). Helpers: `get_tier(id)` + `tier_for_entitlements(ents)` for pre-migration buyers.
+4. **Group A3 — `GET /api/admin/usage`**: per-customer leaderboard endpoint. MongoDB aggregation joins `db.scripts` + `db.renders` keyed by `user_email`, stitches results with `db.buyers` rows, derives `tier` via `tier_for_entitlements` when not yet migrated, computes `last_seen` as `max(lastLoginAt, last_script_at, last_render_at, addedAt)`. Sort columns: `email`, `scripts_total`, `renders_total`, `spend_cents`, `last_seen`, `added_at`. Manual smoke-test with 3 seeded buyers + 11 scripts + 12 renders verified all aggregations (founder→t4, studio→t3, base→t1) and sort.
+
+### Files touched
+- `/app/frontend/src/components/Footer.jsx` — added `lastSeen` state, `handleToggle` to write localStorage on expand, amber-dot JSX
+- `/app/frontend/src/changelog.js` — bumped `APP_VERSION` to `1.8.1`, added entry
+- `/app/frontend/src/App.css` — `.footer-version.has-unseen` styling + `.footer-version-dot` + `@keyframes footerDotPulse`
+- `/app/memory/CHANGELOG.md` — mirrored entry
+- `/app/backend/server.py` — `_stamp_last_login()` helper inside `auth_check`, called from all 3 successful resolution paths
+- `/app/backend/tier_config.py` — NEW file, 165 lines, pure data + helpers
+- `/app/backend/admin_routes.py` — new `GET /admin/usage` endpoint with `$facet`-style aggregation
+
+### Smoke results
+- `usage-test-founder@example.com` (5 scripts, 8 renders, 320 spend) → tier=t4, founder=true ✓
+- `usage-test-t3@example.com` (6 scripts: 3 long / 2 shorts / 1 sprint, 4 renders: 3 faceless 1 avatar / 3 complete 1 failed, 203 spend) → tier=t3 ✓
+- `lastLoginAt` write: signing in as `usage-test-t3` bumped loginCount 7 → 8 + stamped timestamp ✓
+
+### Not yet in this batch
+- Quota gating on render endpoints (Group B5)
+- Cycle-reset cron (Group B6)
+- Cost kill-switch breaker on render endpoints (Group B7)
+- Buyer doc migration to stamp `tier` + `founders=true` on existing 39 buyers
+- Usage admin tab UI (Group C8)
+- All these depend on Group A landing solidly. Will pick up after testing-agent green-light + user OK.
+
+
 **Why this exists**: the user explicitly asked for the changelog to update automatically every deploy because they want customers to see momentum. Failing to update the changelog on a deploy = an undocumented release = a customer who thinks the app is stale. Treat this rule as binding.
 
 

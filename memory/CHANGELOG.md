@@ -12,6 +12,15 @@ first. Plain English — if you're a customer reading this, this is for you.
 
 ---
 
+## v1.8.1 — June 29, 2026
+
+- **What's New popup** now nudges you with a subtle amber dot when there's a
+  release you haven't seen yet — opens the popup once to dismiss.
+- Last-seen timestamps now update accurately on every sign-in (was only
+  tracking imports and webhook events before).
+
+---
+
 ## v1.8.0 — June 29, 2026
 
 - Resource Library is back — five production guides (Voiceover, B-Roll,

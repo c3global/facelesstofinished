@@ -692,6 +692,161 @@ def register_admin_routes(
             "signups_series": signups_series,
         }
 
+    # ---- Per-customer Usage (Group A3 of the AppSumo launch plan) ----
+    # Joins buyers + scripts + renders + activity into a single per-customer
+    # leaderboard row so the upcoming Usage admin tab can show:
+    #   email · tier · scripts (Long/Short/Sprint) · renders (Faceless/Avatar
+    #   · complete/failed) · $ infra spent · last_seen · founder flag
+    #
+    # Uses MongoDB $facet to compute all aggregations in ONE round trip
+    # rather than N+1 queries per buyer. Limits to 500 rows by default since
+    # AppSumo deal sizes typically stay in the low-thousands range; cursor-
+    # less pagination is fine for now.
+    @api.get("/admin/usage")
+    async def admin_usage(
+        q: Optional[str] = Query(None, description="Case-insensitive email substring"),
+        sort_by: str = Query(
+            "last_seen",
+            regex="^(last_seen|email|scripts_total|renders_total|spend_cents|added_at)$",
+            description="Column to sort by",
+        ),
+        sort_dir: str = Query("desc", regex="^(asc|desc)$"),
+        limit: int = Query(500, ge=1, le=2000),
+        skip: int = Query(0, ge=0),
+        _admin=Depends(require_admin),
+    ):
+        from tier_config import tier_for_entitlements  # local import — avoids top-level cycle risk
+
+        # Build the buyer filter once — used both as the buyers cursor AND as
+        # the email-set that scoping the script/render aggregations.
+        bq: dict[str, Any] = {}
+        if q:
+            bq["email"] = {"$regex": re.escape(q.strip().lower()), "$options": "i"}
+
+        # Pull buyer base rows first. We page on the buyer list, then enrich
+        # in bulk — this keeps the response bounded even if a user has tens
+        # of thousands of scripts. Total is the count for pagination UI.
+        total = await db.buyers.count_documents(bq)
+        buyers_cursor = db.buyers.find(
+            bq,
+            {
+                "email": 1,
+                "entitlements": 1,
+                "tier": 1,
+                "founders": 1,
+                "lastLoginAt": 1,
+                "loginCount": 1,
+                "addedAt": 1,
+                "totalSpendCents": 1,
+            },
+        ).sort([("email", 1)])
+        buyer_docs = [b async for b in buyers_cursor]
+        emails = [b["email"] for b in buyer_docs if b.get("email")]
+
+        if not emails:
+            return {"total": total, "items": []}
+
+        # One aggregate per source collection, all keyed by user_email so we
+        # can stitch back to buyers in O(1). Mongo handles the heavy lifting.
+        async def _agg(coll, group: dict) -> dict[str, dict]:
+            out: dict[str, dict] = {}
+            pipeline = [
+                {"$match": {"user_email": {"$in": emails}}},
+                {"$group": group},
+            ]
+            async for row in coll.aggregate(pipeline):
+                key = row.pop("_id", None)
+                if isinstance(key, str):
+                    out[key] = row
+            return out
+
+        scripts_by_email = await _agg(
+            db.scripts,
+            {
+                "_id": "$user_email",
+                "total": {"$sum": 1},
+                "long":   {"$sum": {"$cond": [{"$eq": ["$mode", "long"]},   1, 0]}},
+                "shorts": {"$sum": {"$cond": [{"$eq": ["$mode", "shorts"]}, 1, 0]}},
+                "sprint": {"$sum": {"$cond": [{"$eq": ["$mode", "sprint"]}, 1, 0]}},
+                "last_script_at": {"$max": "$created_at"},
+            },
+        )
+        renders_by_email = await _agg(
+            db.renders,
+            {
+                "_id": "$user_email",
+                "total":    {"$sum": 1},
+                "faceless": {"$sum": {"$cond": [{"$eq": ["$mode", "faceless"]}, 1, 0]}},
+                "avatar":   {"$sum": {"$cond": [{"$eq": ["$mode", "avatar"]},   1, 0]}},
+                "complete": {"$sum": {"$cond": [{"$eq": ["$status", "complete"]}, 1, 0]}},
+                "failed":   {"$sum": {"$cond": [{"$eq": ["$status", "failed"]},   1, 0]}},
+                "spend_cents": {"$sum": {"$ifNull": ["$actual_cost_cents", 0]}},
+                "last_render_at": {"$max": "$created_at"},
+            },
+        )
+
+        # Stitch buyers + aggregations. Tier resolution: prefer the explicit
+        # `tier` field if migrated; otherwise derive from entitlements via
+        # the tier_config helper (so pre-migration buyers still get labeled).
+        items = []
+        for b in buyer_docs:
+            email = b.get("email") or ""
+            ents = list(b.get("entitlements") or [])
+            tier_id = (b.get("tier") or "").strip().lower()
+            if not tier_id:
+                tier_id = tier_for_entitlements(ents).id
+            scripts_row = scripts_by_email.get(email, {})
+            renders_row = renders_by_email.get(email, {})
+            # last_seen = the latest of (lastLoginAt, last_script_at, last_render_at).
+            # Buyers with no activity at all fall back to addedAt so the row
+            # still sorts sanely.
+            last_seen = _iso_max(b.get("lastLoginAt"), scripts_row.get("last_script_at"))
+            last_seen = _iso_max(last_seen, renders_row.get("last_render_at"))
+            if not last_seen:
+                last_seen = b.get("addedAt")
+            items.append({
+                "email": email,
+                "tier": tier_id,
+                "entitlements": ents,
+                "founder": bool(b.get("founders")),
+                "last_seen": last_seen,
+                "added_at": b.get("addedAt"),
+                "login_count": int(b.get("loginCount") or 0),
+                "scripts": {
+                    "total":  int(scripts_row.get("total")  or 0),
+                    "long":   int(scripts_row.get("long")   or 0),
+                    "shorts": int(scripts_row.get("shorts") or 0),
+                    "sprint": int(scripts_row.get("sprint") or 0),
+                    "last_at": scripts_row.get("last_script_at"),
+                },
+                "renders": {
+                    "total":    int(renders_row.get("total")    or 0),
+                    "faceless": int(renders_row.get("faceless") or 0),
+                    "avatar":   int(renders_row.get("avatar")   or 0),
+                    "complete": int(renders_row.get("complete") or 0),
+                    "failed":   int(renders_row.get("failed")   or 0),
+                    "last_at":  renders_row.get("last_render_at"),
+                },
+                "spend_cents": int(renders_row.get("spend_cents") or 0),
+                "buyer_total_spend_cents": int(b.get("totalSpendCents") or 0),
+            })
+
+        # Server-side sort + pagination AFTER stitching so we can sort on
+        # derived columns (scripts_total, renders_total, spend_cents,
+        # last_seen) that don't exist on any single source collection.
+        sort_key_map = {
+            "email":          lambda r: (r.get("email") or "").lower(),
+            "scripts_total":  lambda r: r["scripts"]["total"],
+            "renders_total":  lambda r: r["renders"]["total"],
+            "spend_cents":    lambda r: r["spend_cents"],
+            "last_seen":      lambda r: r.get("last_seen") or "",
+            "added_at":       lambda r: r.get("added_at") or "",
+        }
+        items.sort(key=sort_key_map[sort_by], reverse=(sort_dir == "desc"))
+        paged = items[skip : skip + limit]
+
+        return {"total": total, "items": paged, "sort_by": sort_by, "sort_dir": sort_dir}
+
     # ---- Pinball webhook (Phase C) ----
     async def _process_pinball_event(*, product: str, body: dict, source: str) -> dict:
         """Pure handler shared by the public webhook endpoint and the admin

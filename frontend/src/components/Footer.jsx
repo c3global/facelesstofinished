@@ -26,7 +26,44 @@ function humanDate(iso) {
   return `${SHORT_MONTHS[monthIdx] || mm} ${parseInt(dd, 10)}, ${yyyy}`;
 }
 
+// localStorage key — bumped to v2 if we ever change the shape. Stores the
+// last APP_VERSION the user has expanded the changelog for; any value below
+// the current APP_VERSION lights up the amber "What's New" dot on the pill.
+const LAST_SEEN_KEY = "f48_changelog_seen_v1";
+
+function readLastSeen() {
+  try {
+    return localStorage.getItem(LAST_SEEN_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+function writeLastSeen(v) {
+  try {
+    localStorage.setItem(LAST_SEEN_KEY, v);
+  } catch {
+    /* localStorage disabled / private mode — silently skip */
+  }
+}
+
 export default function Footer() {
+  // Track "has the user seen this release" so we can show the amber dot.
+  // Initial state reads from localStorage; on first-ever visit it's empty
+  // string, which evaluates as < APP_VERSION → dot shows. The dot dismisses
+  // as soon as the user clicks the pill (handled in onToggle).
+  const [lastSeen, setLastSeen] = React.useState(() => readLastSeen());
+  const hasUnseenRelease = lastSeen !== APP_VERSION;
+
+  const handleToggle = (e) => {
+    // <details> fires onToggle for both expand AND collapse. We only want
+    // to mark "seen" when the user EXPANDS it (open=true) — that's when
+    // they actually saw the new entries.
+    if (e.currentTarget.open && lastSeen !== APP_VERSION) {
+      setLastSeen(APP_VERSION);
+      writeLastSeen(APP_VERSION);
+    }
+  };
+
   return (
     <footer className="site-footer" data-testid="site-footer">
       <img
@@ -38,12 +75,24 @@ export default function Footer() {
       <div className="footer-text">
         <div className="footer-line">
           <span data-testid="footer-copyright">© 2026 C3 Global</span>
-          <details className="footer-changelog" data-testid="footer-changelog">
+          <details
+            className="footer-changelog"
+            data-testid="footer-changelog"
+            onToggle={handleToggle}
+          >
             <summary
-              className="footer-version"
+              className={`footer-version ${hasUnseenRelease ? "has-unseen" : ""}`}
               data-testid="footer-version"
+              data-unseen={hasUnseenRelease ? "1" : "0"}
             >
               v{APP_VERSION}
+              {hasUnseenRelease && (
+                <span
+                  className="footer-version-dot"
+                  data-testid="footer-version-dot"
+                  aria-label="New release available"
+                />
+              )}
             </summary>
             <div
               className="footer-changelog-panel"

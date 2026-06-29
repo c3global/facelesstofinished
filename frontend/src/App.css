@@ -617,6 +617,33 @@
   background: color-mix(in srgb, var(--accent) 14%, var(--surface));
 }
 
+/* "What's New" amber dot — shown when this browser's last-seen changelog
+   version (read from localStorage) is older than the current APP_VERSION.
+   The pill becomes a soft animated nudge after a deploy so returning
+   customers notice there's something new to read. The dot dismisses
+   immediately when the user clicks the pill (state managed in Footer.jsx). */
+.footer-version.has-unseen {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 65%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+}
+.footer-version-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-left: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 60%, transparent);
+  animation: footerDotPulse 1.6s ease-out infinite;
+  vertical-align: middle;
+}
+@keyframes footerDotPulse {
+  0%   { box-shadow: 0 0 0 0   color-mix(in srgb, var(--accent) 60%, transparent); }
+  70%  { box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 0%,  transparent); }
+  100% { box-shadow: 0 0 0 0   color-mix(in srgb, var(--accent) 0%,  transparent); }
+}
+
 .footer-changelog-panel {
   position: absolute;
   bottom: calc(100% + 10px);
