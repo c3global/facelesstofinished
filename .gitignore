@@ -4,3 +4,9 @@ dist
 .env.local
 .DS_Store
 *.log
+.env.*
+*.env
+credentials.json
+*.pem
+*.key
+.credentials
