@@ -1,0 +1,36 @@
+{
+  "summary": "Iteration 37 — Group F (GoHighLevel outbound webhook integration) fully tested end-to-end. 13/13 pytest backend tests pass covering unconfigured state (status/test/push-buyer 503/400 errors), configured live push (sentinel, pinball, appsumo redemption), failure logging (ghl_push_failed activity row + redeem still succeeds), and custom auth header propagation. Frontend Playwright verified both states: amber 'GHL: off' pill + disabled Test GHL button + no per-buyer icons when unconfigured; green 'GHL: connected' pill + working Test GHL toast ('GHL test push succeeded') + visible per-buyer Send icons when configured. Footer correctly shows v1.13.0. No console errors. Env restored to GHL_WEBHOOK_URL='' and mock server killed.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Admin → Buyers toolbar", "issues": ["Toolbar row wraps to a second line when GHL is configured because the GHL connected pill + 'Test GHL' button push the layout past available width on 1920px viewport. Not blocking, but a flex-wrap container or smaller pill text would be cleaner."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter37_ghl.py",
+    "/app/test_reports/pytest/iter37_ghl.xml"
+  ],
+  "action_items": [
+    "(Optional polish) Improve Buyers toolbar layout so the GHL pill + Test GHL button don't wrap to a second row when GHL is configured.",
+    "Per-buyer Push success toast not observed (toasts area was empty after click). Worth confirming the success toast fires for /admin/ghl/push-buyer in BuyersTab — the API call did not error in network, but no visible toast captured. Likely a fast-disappearing toast and/or different toast container — not a functional bug, but a UX touch-up."
+  ],
+  "critical_code_review_comments": [
+    "ghl_integration.py is clean: env read at call-time (not import-time) so kill-switch works without code redeploys; tags taxonomy is documented as additive-only; httpx.AsyncClient context-managed; failures never raise into caller.",
+    "Both call sites (admin_routes.py:1207 pinball after newly_granted, licenses_routes.py:268 redeem after license_redeemed log) correctly gate on is_configured() AND use push_in_background() (NOT awaited), so GHL outages cannot slow buyer-facing requests. ✓",
+    "admin_ghl_status() correctly returns only url_host via regex extraction — full URL is never leaked.",
+    "ghl_push_failed activity rows are logged inside ghl_integration.push() via injected log_activity callback, keeping the module dependency-free.",
+    "The /admin/ghl/test endpoint awaits push() (not background) so the operator sees real-time status — appropriate design choice."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter37_ghl.py (new — 13 tests across 4 classes)"
+  ],
+  "success_rate": {"backend": "100% (13/13)", "frontend": "100% (all assertions pass)"},
+  "test_credentials": "drcharitycampbell@gmail.com (DEV_BYPASS passwordless admin)",
+  "seed_data_creation": "Test classes create+cleanup their own redemption_codes (GHLTEST<ts>, GHLFAIL<ts>) and buyers (TEST_pinball_<ts>). The /admin/pinball/test-webhook endpoint also creates synthetic buyers webhook-test+<ts>@faceless48.test which the test no longer reads — these may accumulate; admin can use the existing Delete row action to clear.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Group F GHL integration is solid. backend/.env GHL_WEBHOOK_URL and GHL_WEBHOOK_AUTH_HEADER are both empty (production-clean) as of iteration 37 finish. To re-test the live push, run /app/backend/tests/test_iter37_ghl.py — it auto-spins-up /app/backend/tests/mock_ghl_server.py on port 9989, writes echoes to /tmp/ghl_test_99.json, restarts backend with the env mutated, then restores clean env in teardown. Note: pytest test mutates backend/.env during run and runs `sudo supervisorctl restart backend` four times (~6s each), so the suite takes ~23s.",
+  "mocked_apis_used": "GoHighLevel inbound webhook replaced by /app/backend/tests/mock_ghl_server.py (HTTP 202, echoes payload + headers to /tmp/ghl_test_99.json). MOCKED — never hits Charity's real GHL workspace."
+}

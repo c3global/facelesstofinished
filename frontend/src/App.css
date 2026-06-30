@@ -6524,3 +6524,36 @@ body[data-founder="true"] .settings-key-save-btn {
   .thumb-lightbox-close { top: 12px; right: 12px; width: 36px; height: 36px; }
 }
 
+
+/* ============================================================
+   Admin toolbar pill — GHL connection status, etc
+   ============================================================ */
+.admin-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
+  border: 1px solid transparent;
+  white-space: nowrap;
+  cursor: default;
+}
+.admin-pill.is-ok {
+  background: rgba(123,217,148,0.12);
+  border-color: rgba(123,217,148,0.45);
+  color: #9CE0B0;
+}
+.admin-pill.is-warn {
+  background: rgba(245,178,80,0.10);
+  border-color: rgba(245,178,80,0.40);
+  color: #F5B250;
+}
+.admin-pill.is-err {
+  background: rgba(220,80,80,0.10);
+  border-color: rgba(220,80,80,0.40);
+  color: #FF9E9E;
+}
+

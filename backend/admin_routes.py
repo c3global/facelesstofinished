@@ -24,6 +24,10 @@ from fastapi import Body, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+# Outbound GHL push — fires on new buyer / new entitlement / license redemption.
+# Safe to import unconditionally: module no-ops when GHL_WEBHOOK_URL is unset.
+import ghl_integration  # noqa: E402
+
 logger = logging.getLogger("f48.admin")
 
 # Shared secret for Pinball.dev → emergent webhook. Single gate, no HMAC.
@@ -1196,6 +1200,33 @@ def register_admin_routes(
             email,
             {"status": "ok", "product": product, "order_id": order_id, "payload": body, "source": source},
         )
+
+        # GHL outbound push — only when this event actually granted a new
+        # entitlement (avoid spamming on duplicate / reprocessed webhooks).
+        # Fire-and-forget: errors are logged to db.activity, never raised.
+        if newly_granted and ghl_integration.is_configured():
+            try:
+                from tier_config import tier_for_entitlements  # local import — module-level cycle risk
+                tier = tier_for_entitlements(new_ents)
+                ghl_payload = ghl_integration.build_payload(
+                    email=email,
+                    tier_id=tier.id,
+                    tier_label=tier.label,
+                    source="pinball_purchase",
+                    founder=False,  # founders never enter via Pinball (manual onboarding)
+                    metadata={
+                        "order_id": order_id,
+                        "product": product,
+                        "newly_granted": newly_granted,
+                        "spend_cents": set_doc.get("totalSpendCents"),
+                    },
+                )
+                ghl_integration.push_in_background(
+                    ghl_payload, log_activity=log_activity,
+                )
+            except Exception as exc:
+                logger.warning("[ghl] pinball push wiring failed: %s: %s", type(exc).__name__, exc)
+
         return {"status": "ok", "product": product, "order_id": order_id, "email": email}
 
     @api.post("/pinball-webhook")
@@ -1417,6 +1448,88 @@ def register_admin_routes(
             "unmapped": unmapped_count,
             "fallback_mode": fallback_mode,  # null when normal items[] path
             "results": results,
+        }
+
+    # -----------------------------------------------------------------
+    # GHL admin tools — manual push + connection test
+    # -----------------------------------------------------------------
+    # Two scenarios:
+    #   (a) A buyer landed via a path that didn't fire GHL (e.g. legacy
+    #       import, manual buyer-create, or a transient outage). Admin
+    #       hits "Push to GHL" on the Buyers row and we re-emit.
+    #   (b) Admin wants to confirm the configured GHL webhook URL even
+    #       responds before turning the toggle on — POST /admin/ghl/test
+    #       sends a sentinel payload so Charity can verify the workflow
+    #       fires in her workspace.
+
+    @api.post("/admin/ghl/push-buyer")
+    async def admin_ghl_push_buyer(
+        payload: dict = Body(...),
+        _admin=Depends(require_admin),
+    ):
+        from tier_config import tier_for_entitlements  # local import — avoids cycle
+        email = (payload.get("email") or "").strip().lower()
+        if not email:
+            raise HTTPException(status_code=400, detail="email required")
+        if not ghl_integration.is_configured():
+            raise HTTPException(
+                status_code=503,
+                detail="GHL_WEBHOOK_URL not configured. Set it in backend/.env and restart.",
+            )
+
+        buyer = await db.buyers.find_one({"email": email})
+        if not buyer:
+            raise HTTPException(status_code=404, detail=f"No buyer found for {email}")
+
+        ents = list(buyer.get("entitlements") or [])
+        tier = tier_for_entitlements(ents)
+        ghl_payload = ghl_integration.build_payload(
+            email=email,
+            tier_id=tier.id,
+            tier_label=tier.label,
+            source=payload.get("source") or "manual",
+            founder=bool(buyer.get("founders")),
+            metadata={
+                "order_id":    buyer.get("orderId"),
+                "spend_cents": buyer.get("totalSpendCents"),
+                "added_at":    buyer.get("addedAt"),
+                "manual_replay": True,
+            },
+        )
+        result = await ghl_integration.push(ghl_payload, log_activity=log_activity)
+        await log_activity("ghl_push_manual", email, {"result": result, "tier_id": tier.id})
+        return {"sent": ghl_payload, "result": result}
+
+    @api.post("/admin/ghl/test")
+    async def admin_ghl_test(_admin=Depends(require_admin)):
+        """Sentinel payload — verifies the configured GHL webhook URL is
+        live + the workflow fires. Does NOT touch db.buyers."""
+        if not ghl_integration.is_configured():
+            raise HTTPException(
+                status_code=503,
+                detail="GHL_WEBHOOK_URL not configured. Set it in backend/.env and restart.",
+            )
+        sentinel = ghl_integration.build_payload(
+            email="ghl-test@f2f48.local",
+            tier_id="test",
+            tier_label="Test",
+            source="manual",
+            founder=False,
+            metadata={"test": True, "note": "Sentinel from admin /admin/ghl/test"},
+        )
+        result = await ghl_integration.push(sentinel, log_activity=log_activity)
+        return {"configured": True, "sent": sentinel, "result": result}
+
+    @api.get("/admin/ghl/status")
+    async def admin_ghl_status(_admin=Depends(require_admin)):
+        """Lightweight status — used by the admin UI to know whether to
+        show the 'GHL: connected' green pill or the 'GHL: not configured'
+        amber pill. Never leaks the URL itself."""
+        url = (os.environ.get("GHL_WEBHOOK_URL") or "").strip()
+        return {
+            "configured": bool(url),
+            "url_host": (re.search(r"https?://([^/]+)", url).group(1) if url else None),
+            "auth_header_set": bool((os.environ.get("GHL_WEBHOOK_AUTH_HEADER") or "").strip()),
         }
 
     return {"process_pinball_event": _process_pinball_event}

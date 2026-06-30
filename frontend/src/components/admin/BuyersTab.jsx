@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Search, Plus, Trash2, RefreshCw, X, FileUp, HelpCircle, Zap, Download } from "lucide-react";
+import { Search, Plus, Trash2, RefreshCw, X, FileUp, HelpCircle, Zap, Download, Send } from "lucide-react";
 import { apiClient } from "../../App";
 
 const ENTITLEMENTS = ["base", "shorts", "studio"];
@@ -116,6 +116,11 @@ export default function BuyersTab() {
   // toolbar so the admin can read the diagnostic without losing context.
   const [webhookTest, setWebhookTest] = useState(null);
   const [webhookTesting, setWebhookTesting] = useState(false);
+  // GHL connection status — { configured, url_host, auth_header_set } from
+  // /admin/ghl/status. Pill in the toolbar shows green/amber based on this.
+  const [ghlStatus, setGhlStatus] = useState(null);
+  const [ghlTesting, setGhlTesting] = useState(false);
+  const [ghlPushing, setGhlPushing] = useState(null); // email currently pushing
   const csvFileRef = useRef(null);
   const [addModal, setAddModal] = useState(false);
   const [newEmail, setNewEmail] = useState("");
@@ -146,6 +151,50 @@ export default function BuyersTab() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // GHL connection status — one-shot fetch on mount, then re-fetched after
+  // a successful test push so the pill reflects the latest reality.
+  useEffect(() => {
+    let cancelled = false;
+    apiClient.get("/admin/ghl/status").then((r) => {
+      if (!cancelled) setGhlStatus(r.data || null);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  // GHL sentinel push — sends a sentinel payload to verify the webhook
+  // is wired without affecting any buyer record.
+  const runGhlTest = async () => {
+    if (ghlTesting) return;
+    setGhlTesting(true);
+    try {
+      const r = await apiClient.post("/admin/ghl/test", {});
+      const ok = r.data?.result?.status === "ok";
+      showToast(ok ? "GHL test push succeeded" : `GHL push returned ${r.data?.result?.http_status || r.data?.result?.status}`, ok ? "ok" : "err");
+    } catch (e) {
+      const detail = e?.response?.data?.detail || e?.message || "GHL test failed";
+      showToast(typeof detail === "string" ? detail : "GHL test failed", "err");
+    } finally {
+      setGhlTesting(false);
+    }
+  };
+
+  // Per-buyer manual replay — used when a buyer landed via a path that
+  // didn't fire GHL (legacy import, transient outage, manual create).
+  const pushBuyerToGhl = async (email) => {
+    if (ghlPushing) return;
+    setGhlPushing(email);
+    try {
+      const r = await apiClient.post("/admin/ghl/push-buyer", { email });
+      const ok = r.data?.result?.status === "ok";
+      showToast(ok ? `Pushed ${email} to GHL` : `GHL push for ${email} returned ${r.data?.result?.http_status || r.data?.result?.status}`, ok ? "ok" : "err");
+    } catch (e) {
+      const detail = e?.response?.data?.detail || e?.message || "GHL push failed";
+      showToast(typeof detail === "string" ? detail : "GHL push failed", "err");
+    } finally {
+      setGhlPushing(null);
+    }
+  };
 
   // Silent auto-refresh so newly-arrived webhook buyers appear on the
   // Admin Buyers tab without the admin having to click Refresh manually.
@@ -465,6 +514,31 @@ export default function BuyersTab() {
         >
           <Zap size={13} /> {webhookTesting ? "Testing…" : "Test webhook"}
         </button>
+        {/* GHL connection status pill + sentinel-test trigger. Green pill
+            when GHL_WEBHOOK_URL is configured; amber when not. */}
+        <span
+          className={`admin-pill ${ghlStatus?.configured ? "is-ok" : "is-warn"}`}
+          data-testid="ghl-status-pill"
+          title={
+            ghlStatus?.configured
+              ? `GHL connected → ${ghlStatus.url_host || "webhook"}${ghlStatus.auth_header_set ? " · auth header set" : ""}`
+              : "GHL not configured. Set GHL_WEBHOOK_URL in backend/.env and restart."
+          }
+        >
+          GHL: {ghlStatus?.configured ? "connected" : "off"}
+        </span>
+        <button
+          className="admin-btn"
+          onClick={runGhlTest}
+          disabled={ghlTesting || !ghlStatus?.configured}
+          data-testid="ghl-test-button"
+          title={ghlStatus?.configured
+            ? "Send a sentinel payload to your GHL webhook to verify it fires."
+            : "Configure GHL_WEBHOOK_URL first."
+          }
+        >
+          <Send size={13} /> {ghlTesting ? "Testing…" : "Test GHL"}
+        </button>
         {selected.size > 0 && (
           <button
             className="admin-btn is-danger"
@@ -594,6 +668,19 @@ export default function BuyersTab() {
                 <td>{fmtDate(b.lastLoginAt)}</td>
                 <td>{fmtDate(b.addedAt)}</td>
                 <td>
+                  {ghlStatus?.configured && (
+                    <button
+                      className="admin-icon-btn"
+                      onClick={() => pushBuyerToGhl(b.email)}
+                      disabled={ghlPushing === b.email}
+                      aria-label="Push to GHL"
+                      title="Replay this buyer's GHL contact + tier push (no-op if already in your workflow)"
+                      data-testid={`ghl-push-${b.email}`}
+                      style={{ marginRight: 6 }}
+                    >
+                      <Send size={13} />
+                    </button>
+                  )}
                   <button
                     className="admin-icon-btn"
                     onClick={() => deleteOne(b.email)}

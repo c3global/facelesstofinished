@@ -12,6 +12,27 @@ first. Plain English — if you're a customer reading this, this is for you.
 
 ---
 
+## v1.13.0 — June 30, 2026
+
+- **GoHighLevel integration** ships. Every new buyer (Pinball webhook) and
+  every AppSumo code redemption now pushes a tagged contact JSON to your
+  GHL workspace automatically. Payload is stable + flat:
+  `{email, tier_id, tier_label, source, tags, metadata, occurred_at, app}`.
+  Tags include `f2f48-customer`, `tier:<id>`, `source:<pinball_purchase |
+  appsumo_redemption>`, plus `founder` for the 39.
+- **Admin Buyers tab** gains: a `GHL: connected | off` pill in the toolbar,
+  a `Test GHL` button that sends a sentinel payload without touching any
+  buyer record, and a per-row "Push to GHL" replay button for buyers who
+  landed via a legacy path or during a transient outage.
+- **Failures are observable**: every failed GHL push lands in
+  `db.activity` as `ghl_push_failed` with the offending payload + HTTP
+  status / exception, ready for replay.
+- **Config**: set `GHL_WEBHOOK_URL` in `backend/.env` (paste the inbound
+  webhook URL from your GHL workflow trigger node). Optional shared-secret
+  header via `GHL_WEBHOOK_AUTH_HEADER="Header-Name: value"`.
+
+---
+
 ## v1.12.0 — June 30, 2026
 
 - **NEW: API Keys settings page** for Pro Plus + Founder members — plug in

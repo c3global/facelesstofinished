@@ -14,9 +14,18 @@
 //    See PRD.md → "Workflow rule: changelog must move with every deploy."
 // 4. Most recent on top. Each entry has version + date + bullet list.
 
-export const APP_VERSION = "1.12.0";
+export const APP_VERSION = "1.13.0";
 
 export const CHANGELOG = [
+  {
+    version: "1.13.0",
+    date: "2026-06-30",
+    changes: [
+      "GoHighLevel integration — every new buyer (Pinball purchase) and every AppSumo code redemption now pushes a tagged contact to your GHL workspace automatically, with tier + source + founder tags",
+      "Admin Buyers tab: GHL connection pill (green when wired, amber when off), Test GHL button to verify the webhook live, per-buyer Push to GHL replay button for legacy buyers / outage recovery",
+      "Failures land in the activity log as ghl_push_failed so nothing slips silently",
+    ],
+  },
   {
     version: "1.12.0",
     date: "2026-06-30",

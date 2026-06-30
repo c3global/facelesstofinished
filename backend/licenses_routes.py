@@ -262,6 +262,28 @@ def register_license_routes(
             "batch_id": record.get("batch_id"),
         })
 
+        # GHL outbound push — fire-and-forget. The GHL workflow enrolls this
+        # buyer into the tier-specific onboarding sequence and tags them
+        # `source:appsumo` so Charity can split AppSumo cohort metrics.
+        try:
+            import ghl_integration  # local import keeps the routes module light
+            if ghl_integration.is_configured():
+                ghl_payload = ghl_integration.build_payload(
+                    email=user.email,
+                    tier_id=tier_id,
+                    tier_label=get_tier(tier_id).label,
+                    source="appsumo_redemption",
+                    founder=False,
+                    metadata={
+                        "code": code,
+                        "batch_id": record.get("batch_id"),
+                        "license_source": record.get("source"),
+                    },
+                )
+                ghl_integration.push_in_background(ghl_payload, log_activity=log_activity)
+        except Exception as exc:
+            logger.warning("[ghl] redeem push wiring failed: %s: %s", type(exc).__name__, exc)
+
         return {
             "ok": True,
             "tier": tier_id,
