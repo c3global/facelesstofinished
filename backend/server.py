@@ -147,6 +147,77 @@ async def _prewarm_heygen_caches() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Cycle reset loop — Group B of the AppSumo launch plan.
+#
+# Every hour, scan buyers whose anniversary cycle is due and roll their
+# counters forward. Founders bypass entirely (no quota → no cycle). Wrapped
+# in try/except so a transient Mongo error never crashes the loop.
+#
+# Uses asyncio.sleep + asyncio.create_task instead of apscheduler so the
+# codebase stays dependency-free. The 1-hour interval is fine for monthly
+# cycles — a buyer whose cycle was due at 03:17 just gets reset at the next
+# hourly tick by 04:00 worst-case. Under 1-hour drift on a 30-day cycle.
+# ---------------------------------------------------------------------------
+@app.on_event("startup")
+async def _start_cycle_reset_loop() -> None:
+    from tier_config import fresh_cycle_payload  # local import — avoids cycle risk
+
+    async def _reset_due_cycles() -> int:
+        """Advance every buyer whose cycleResetsAt has passed. Returns the
+        number of buyers reset (used for log volume management — only log on
+        non-zero days)."""
+        now_iso = datetime.now(timezone.utc).isoformat()
+        query = {
+            "cycleResetsAt": {"$lte": now_iso},
+            "$or": [{"founders": {"$ne": True}}, {"founders": {"$exists": False}}],
+        }
+        # Snapshot count + iterate so we can log who was reset (Activity row
+        # per reset for the admin Activity tab — keeps reset history auditable).
+        emails: list[str] = []
+        async for b in db.buyers.find(query, {"email": 1}):
+            emails.append(b["email"])
+        if not emails:
+            return 0
+        payload = fresh_cycle_payload()
+        await db.buyers.update_many(
+            {"email": {"$in": emails}},
+            {"$set": payload},
+        )
+        # Compact single activity row covering this batch — beats N rows on
+        # the 1st of each month when ~all buyers reset at once.
+        try:
+            await db.activity.insert_one({
+                "id": str(uuid.uuid4()),
+                "ts": now_iso,
+                "type": "cycle_reset_batch",
+                "email": "system",
+                "detail": {"count": len(emails), "emails": emails[:20], "truncated": len(emails) > 20},
+            })
+        except Exception:
+            pass  # telemetry only — never block the reset itself
+        return len(emails)
+
+    async def _loop() -> None:
+        # Wait 30s after startup so the warm-up tasks complete first before
+        # we start hitting Mongo with the cycle scan. Subsequent ticks run
+        # every hour.
+        await asyncio.sleep(30)
+        while True:
+            try:
+                n = await _reset_due_cycles()
+                if n:
+                    logger.info(f"[cycle-reset] advanced {n} buyer(s)")
+            except Exception as exc:  # noqa: BLE001 — keep loop alive forever
+                logger.warning(f"[cycle-reset] tick failed: {type(exc).__name__}: {exc}")
+            await asyncio.sleep(3600)  # 1 hour
+
+    import asyncio  # noqa: PLC0415
+    asyncio.create_task(_loop())
+
+
+
+
+# ---------------------------------------------------------------------------
 # Models
 # ---------------------------------------------------------------------------
 class AuthUser(BaseModel):
@@ -1714,6 +1785,19 @@ async def _run_render(job_id: str):
             }},
         )
 
+    # Group B refund-on-failure. Re-read the job to see the FINAL status the
+    # pipeline persisted (the inner functions also set status=failed on
+    # their own error paths, not just the catch above). If the render
+    # didn't complete, refund the quota slot the gate consumed at queue
+    # time. Founders/dev/grant emails are no-op'd inside _refund_quota_slot.
+    final = await db.renders.find_one({"id": job_id}, {"status": 1, "user_email": 1, "mode": 1, "estimated_cost_cents": 1})
+    if final and final.get("status") == "failed":
+        await _refund_quota_slot(
+            email=final.get("user_email") or "",
+            mode=final.get("mode") or "",
+            estimated_cents=int(final.get("estimated_cost_cents") or 0),
+        )
+
 
 # ---------------------------------------------------------------------------
 # Cost estimation. Numbers below are conservative ceiling estimates derived
@@ -2623,6 +2707,17 @@ async def studio_render(payload: RenderRequest, user: AuthUser = Depends(current
             detail="Render configuration is too large. Please contact support.",
         )
 
+    # Group B quota gate — atomically check + decrement the buyer's monthly
+    # render allowance before we kick off the background pipeline. Founders
+    # and dev_bypass admins are passed through unconditionally. Returns the
+    # snapshot of the buyer doc post-decrement so we can pass it to the
+    # background runner (used to refund the slot if the render fails).
+    quota_snapshot = await _quota_gate_or_402(
+        email=user.email,
+        mode=payload.mode,
+        estimated_cents=estimated_cents,
+    )
+
     job_id = str(uuid.uuid4())
     doc = {
         "id": job_id,
@@ -2673,6 +2768,198 @@ async def studio_render(payload: RenderRequest, user: AuthUser = Depends(current
 
     doc.pop("_id", None)
     return doc
+
+
+# ---------------------------------------------------------------------------
+# Quota gate (Group B of the AppSumo launch plan)
+# ---------------------------------------------------------------------------
+# Atomic per-render check + decrement against the buyer's anniversary cycle.
+# Three failure modes, all surfaced as 402 Payment Required with a structured
+# body the frontend uses to render the friendly "You've used all X renders
+# this cycle. Resets in N days · upgrade →" prompt:
+#
+#   • render_quota_exhausted — buyer hit their total render cap
+#   • avatar_sub_cap_exhausted — buyer still has render budget but hit the
+#     tier's Avatar sub-cap (protects HeyGen spend on T3/T4)
+#   • cost_cap_exhausted — buyer's monthlyCostCents + estimate would breach
+#     the per-tier kill-switch ceiling. Same friendly copy on the wire (the
+#     differentiation lives only in the Activity log so admin can see why).
+#
+# Founders bypass all three checks. Dev_bypass and STUDIO_GRANT admins are
+# implicit founders for gating purposes — they should never be rate-limited
+# while developing/supporting the app.
+#
+# The check + decrement is atomic via $expr-conditioned findOneAndUpdate so
+# concurrent renders from the same user can't race past the cap.
+# ---------------------------------------------------------------------------
+async def _quota_gate_or_402(*, email: str, mode: str, estimated_cents: int) -> dict | None:
+    """Returns the post-decrement buyer snapshot when the render is allowed,
+    or raises HTTPException(402) with a frontend-friendly body otherwise.
+    Returns None for founders/dev/grant users so the caller knows to skip
+    the refund-on-failure path."""
+
+    # Dev bypass + STUDIO_GRANT_EMAILS skip the gate entirely. They aren't
+    # necessarily in db.buyers, and we never want our own owner email to
+    # get rate-limited while building/supporting the app.
+    if DEV_BYPASS_EMAIL and email == DEV_BYPASS_EMAIL:
+        return None
+    if email in STUDIO_GRANT_EMAILS:
+        return None
+
+    buyer = await db.buyers.find_one({"email": email})
+    if not buyer:
+        # No buyer record means /auth/check would have already rejected this
+        # request. If we still got here, treat it as a forbidden path rather
+        # than a quota issue — better signal for monitoring.
+        raise HTTPException(status_code=403, detail="Buyer record missing")
+    if buyer.get("founders"):
+        return None
+
+    # Tier-aware caps. For pre-migration buyers without a `tier` field yet,
+    # fall back to deriving from entitlements (same logic admin Usage uses).
+    from tier_config import get_tier, tier_for_entitlements
+    tier_id = (buyer.get("tier") or "").strip().lower()
+    if not tier_id:
+        tier_id = tier_for_entitlements(list(buyer.get("entitlements") or [])).id
+    tier = get_tier(tier_id)
+
+    used_total  = int(buyer.get("rendersThisCycle") or 0)
+    used_avatar = int(buyer.get("avatarRendersThisCycle") or 0)
+    cost_so_far = int(buyer.get("monthlyCostCents") or 0)
+    cost_cap    = int(buyer.get("monthlyCostCapCents") or tier.monthly_cost_cap_cents)
+    quota_total = int(buyer.get("renderQuotaMonthly") or tier.render_quota_monthly)
+    avatar_cap  = int(buyer.get("avatarSubCap") or tier.avatar_sub_cap)
+    cycle_ends  = buyer.get("cycleResetsAt")
+
+    # All three failure modes share a single 402 message so the user sees
+    # "You've used your renders, here's when more are available" regardless
+    # of WHY internally — keeps cost-cap math invisible. Admin can see the
+    # actual reason in the Activity log.
+    def _exhausted(reason: str, used: int, total: int) -> HTTPException:
+        days_left = ""
+        if cycle_ends:
+            try:
+                resets_at = datetime.fromisoformat(cycle_ends.replace("Z", "+00:00"))
+                d = max(0, (resets_at - datetime.now(timezone.utc)).days)
+                days_left = (
+                    f" Resets in {d} day{'s' if d != 1 else ''}."
+                    if d > 0 else " Resets within the next hour."
+                )
+            except Exception:
+                pass
+        from tier_config import TIERS_ORDERED
+        ordered_ids = [t.id for t in TIERS_ORDERED]
+        upgrade_to = None
+        try:
+            cur_idx = ordered_ids.index(tier_id)
+            if cur_idx < len(ordered_ids) - 1:
+                upgrade_to = TIERS_ORDERED[cur_idx + 1]
+        except ValueError:
+            pass
+        upgrade_msg = (
+            f" Upgrade to {upgrade_to.label} for {upgrade_to.render_quota_monthly} renders/month →"
+            if upgrade_to else ""
+        )
+        return HTTPException(
+            status_code=402,
+            detail={
+                "reason": reason,
+                "message": f"You've used all {total} renders this cycle.{days_left}{upgrade_msg}",
+                "quota_used": used,
+                "quota_total": total,
+                "cycle_resets_at": cycle_ends,
+                "tier": tier_id,
+                "upgrade_to": upgrade_to.id if upgrade_to else None,
+            },
+        )
+
+    # Defensive: tier with zero renders allowed is a misset; reject cleanly.
+    if quota_total <= 0:
+        await _log_activity("quota_blocked", email, {
+            "reason": "render_quota_zero", "tier": tier_id,
+        })
+        raise _exhausted("render_quota_exhausted", 0, 0)
+
+    # Check 1 — total render cap.
+    if used_total >= quota_total:
+        await _log_activity("quota_blocked", email, {
+            "reason": "render_quota_exhausted",
+            "tier": tier_id, "used": used_total, "total": quota_total,
+        })
+        raise _exhausted("render_quota_exhausted", used_total, quota_total)
+
+    # Check 2 — avatar sub-cap (only if user is attempting an avatar render).
+    if mode == "avatar" and used_avatar >= avatar_cap:
+        await _log_activity("quota_blocked", email, {
+            "reason": "avatar_sub_cap_exhausted",
+            "tier": tier_id, "used": used_avatar, "total": avatar_cap,
+        })
+        raise _exhausted("avatar_sub_cap_exhausted", used_avatar, avatar_cap)
+
+    # Check 3 — silent cost-cap kill-switch. Same friendly copy on the wire
+    # so customers don't see "you hit your monthly cost ceiling" — they see
+    # the standard quota-exhausted message and the internal reason hides in
+    # the activity log for admin visibility.
+    if cost_cap > 0 and (cost_so_far + estimated_cents) > cost_cap:
+        await _log_activity("quota_blocked", email, {
+            "reason": "cost_cap_exhausted",
+            "tier": tier_id, "cost_so_far": cost_so_far,
+            "estimated_cents": estimated_cents, "cap_cents": cost_cap,
+        })
+        raise _exhausted("cost_cap_exhausted", used_total, quota_total)
+
+    # Atomic decrement. The $expr clause guards against races where two
+    # concurrent renders both pass the pre-check above — only one will
+    # satisfy the condition and win the slot. Mongo's findOneAndUpdate is
+    # atomic at the document level, which is exactly what we need here.
+    avatar_inc = 1 if mode == "avatar" else 0
+    expr_clauses = [
+        {"$lt": [{"$ifNull": ["$rendersThisCycle", 0]}, quota_total]},
+    ]
+    if mode == "avatar":
+        expr_clauses.append(
+            {"$lt": [{"$ifNull": ["$avatarRendersThisCycle", 0]}, avatar_cap]},
+        )
+    updated = await db.buyers.find_one_and_update(
+        {"email": email, "$expr": {"$and": expr_clauses}},
+        {"$inc": {
+            "rendersThisCycle": 1,
+            "avatarRendersThisCycle": avatar_inc,
+            "monthlyCostCents": estimated_cents,
+        }},
+        return_document=True,
+    )
+    if not updated:
+        await _log_activity("quota_blocked", email, {
+            "reason": "race_lost", "tier": tier_id,
+        })
+        raise _exhausted("render_quota_exhausted", used_total, quota_total)
+    return updated
+
+
+async def _refund_quota_slot(*, email: str, mode: str, estimated_cents: int) -> None:
+    """Reverse a successful quota gate when a render fails. Mirrors the
+    gate's $inc but with negative values. Skipped for founders / dev /
+    STUDIO_GRANT (they never decremented in the first place — signaled by
+    the gate returning None instead of a buyer snapshot).
+    """
+    if DEV_BYPASS_EMAIL and email == DEV_BYPASS_EMAIL:
+        return
+    if email in STUDIO_GRANT_EMAILS:
+        return
+    avatar_dec = -1 if mode == "avatar" else 0
+    try:
+        await db.buyers.update_one(
+            {"email": email, "founders": {"$ne": True}},
+            {"$inc": {
+                "rendersThisCycle": -1,
+                "avatarRendersThisCycle": avatar_dec,
+                "monthlyCostCents": -estimated_cents,
+            }},
+        )
+    except Exception as exc:
+        logger.warning(f"[quota] refund failed for {email}: {type(exc).__name__}: {exc}")
+
 
 
 @api.post("/studio/render/both-aspects")

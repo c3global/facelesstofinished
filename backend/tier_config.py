@@ -175,6 +175,75 @@ def get_tier(tier_id: Optional[str]) -> Tier:
     return TIERS_BY_ID.get(tier_id.strip().lower(), TIER_T1)
 
 
+# ============================================================================
+# Buyer provisioning + cycle helpers (Group B foundation, AppSumo launch plan)
+# ============================================================================
+
+from datetime import datetime, timedelta, timezone
+
+# Cycle length — 30 days from purchase / first provisioning, NOT calendar
+# month. Rationale: customers buying near the end of a calendar month would
+# otherwise lose almost-immediately if we reset on the 1st. Locked by user
+# 2026-06-29: "every user gets exactly 30 days per cycle, anchored to their
+# own purchase date."
+CYCLE_LENGTH_DAYS = 30
+
+
+def assign_buyer_to_tier(*, tier_id: str, is_upgrade: bool = False) -> dict:
+    """Compute the $set payload to stamp a buyer's tier + quota fields.
+
+    Two modes:
+      • is_upgrade=False (default, fresh provisioning) — also stamps a new
+        cycleStartedAt / cycleResetsAt and zeroes the counters. Use this on
+        Pinball webhook first-grant + admin first-grant.
+      • is_upgrade=True — ONLY updates the tier fields. Keeps the existing
+        cycle clock and counters untouched. Locked by user: mid-cycle
+        upgrades bump the cap immediately but keep the original 30-day
+        clock so the buyer doesn't get a free reset.
+
+    Returns a flat dict ready for `db.buyers.update_one({...}, {"$set": ...})`.
+    """
+    t = get_tier(tier_id)
+    now = datetime.now(timezone.utc)
+    payload = {
+        "tier": t.id,
+        "renderQuotaMonthly": t.render_quota_monthly,
+        "avatarSubCap": t.avatar_sub_cap,
+        "thumbnailQuotaMonthly": t.thumbnail_quota_monthly,
+        "monthlyCostCapCents": t.monthly_cost_cap_cents,
+        "byokAllowed": t.byok_allowed,
+        "updatedAt": now.isoformat(),
+    }
+    if not is_upgrade:
+        # Fresh cycle. Zero every counter and stamp clock fields.
+        payload.update({
+            "rendersThisCycle": 0,
+            "avatarRendersThisCycle": 0,
+            "thumbnailsThisCycle": 0,
+            "monthlyCostCents": 0,
+            "cycleStartedAt": now.isoformat(),
+            "cycleResetsAt": (now + timedelta(days=CYCLE_LENGTH_DAYS)).isoformat(),
+        })
+    return payload
+
+
+def fresh_cycle_payload() -> dict:
+    """Counters + clock to advance a buyer's cycle. Called by the cron loop
+    when `cycleResetsAt <= now`. Does NOT touch `tier`, `renderQuotaMonthly`,
+    or `avatarSubCap` — those persist across cycles by design."""
+    now = datetime.now(timezone.utc)
+    return {
+        "rendersThisCycle": 0,
+        "avatarRendersThisCycle": 0,
+        "thumbnailsThisCycle": 0,
+        "monthlyCostCents": 0,
+        "cycleStartedAt": now.isoformat(),
+        "cycleResetsAt": (now + timedelta(days=CYCLE_LENGTH_DAYS)).isoformat(),
+        "updatedAt": now.isoformat(),
+    }
+
+
+
 def tier_for_entitlements(entitlements: list[str]) -> Tier:
     """Map a buyer's entitlement set to the most appropriate tier when the
     `tier` field hasn't been migrated yet. Used by the one-time backfill
