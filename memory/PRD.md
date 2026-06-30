@@ -20,6 +20,46 @@ back to it for entitlement verification.
 
 ## 🔁 Workflow rule: Changelog moves with every change (set 2026-06-29 by user)
 
+### Iteration 41 (2026-06-30) — Light-mode polish trilogy completed (v1.17.0)
+
+**User-reported:** screenshots showed (a) Studio + Thumbnails hero eyebrow
+("FACELESS TO FINISHED · VIDEO ENGINE" / "THUMBNAIL ENGINE · V1")
+barely readable in light mode, (b) "Owner · unlimited renders" pill
+washed out, and the iter_40 testing agent had flagged Settings/Keys
+cards as the same class of bug.
+
+**Fixed via App.css L6735-6870 — single [data-theme='light'] block:**
+- `.studio-eyebrow` → deep copper via `color-mix(in srgb, var(--warning)
+  78%, #000 22%)` ≈ rgb(131,87,54). 4.5:1+ contrast on the lavender bg.
+  Same for Studio's avatar/faceless mode overrides + Thumbnails eyebrow.
+- `.quota-pill-unlimited` → cream-on-white gradient with full-saturation
+  copper border. Crown SVG → `--warning`. Mirror for
+  `.thumb-quota-unlimited`.
+- Settings/Keys page (`/settings/keys`) — every dark surface fixed:
+  `.settings-keys-hero` soft accent+warning wash; `.settings-key-card`
+  pure white with token border; `.is-saved` state uses warm cream;
+  `.settings-key-input` uses `--bg`; `.settings-key-save-btn` uses
+  `--warning` (copper-on-white CTA). All text routes through
+  `--text` / `--muted` / `--warning`.
+
+**Testing**: iteration_41.json — 9/9 PASS via `getComputedStyle`
+inspection. Dark-mode regression byte-for-byte verified
+(`.studio-eyebrow` stays `rgb(201,149,108)`, `.settings-key-card` stays
+`rgba(15,10,30,0.55)`). v1.16.0 thumbnails fixes still working.
+
+**Testing-agent forward suggestions (parked):**
+- App.css is now 6870+ lines. Recommend per-page CSS modules
+  (`studio.css`, `thumbnails.css`, `settings.css`) so the next card
+  component doesn't need a quadrilogy.
+- Consider a shared `.surface-card` utility (`bg=var(--surface)`,
+  `border=1px solid var(--border)`, `shadow=var(--shadow-card)`) so new
+  cards auto-theme-switch. Would eliminate the recurring pattern of
+  hardcoded `rgba(15,10,30,0.55)` leaking into light mode.
+
+---
+
+
+
 ### Iteration 39 (2026-06-30) — Refactor + CORS fix (v1.15.0)
 
 **3 backlog items shipped together — zero regressions:**
