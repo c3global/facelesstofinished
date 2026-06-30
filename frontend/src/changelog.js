@@ -14,9 +14,17 @@
 //    See PRD.md → "Workflow rule: changelog must move with every deploy."
 // 4. Most recent on top. Each entry has version + date + bullet list.
 
-export const APP_VERSION = "1.15.0";
+export const APP_VERSION = "1.16.0";
 
 export const CHANGELOG = [
+  {
+    version: "1.16.0",
+    date: "2026-06-30",
+    changes: [
+      "Light mode polish — Thumbnails page is no longer a sea of dark-gray boxes in light mode. The form card, prompt textarea, Engine/Aspect chips, and every gallery tile now use clean white surfaces with proper purple-gray text, copper-accented active states, and subtle shadows",
+      "Dark mode is unchanged — same gorgeous palette",
+    ],
+  },
   {
     version: "1.15.0",
     date: "2026-06-30",

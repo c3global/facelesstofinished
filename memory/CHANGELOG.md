@@ -12,6 +12,28 @@ first. Plain English — if you're a customer reading this, this is for you.
 
 ---
 
+## v1.16.0 — June 30, 2026 (Thumbnails light-mode polish)
+
+- **Thumbnails page in light mode** no longer renders as dark-gray boxes
+  on a pale background. Form card, prompt textarea, optional script-topic
+  input, Engine/Aspect segmented chips, gallery tiles, tile overlay icons,
+  zoom hint, and engine pills all gain dedicated `[data-theme="light"]`
+  overrides that route through the design tokens (`--surface`, `--bg`,
+  `--border`, `--text`, `--muted`, `--accent`, `--warning`).
+- **Active states** for Engine + Aspect now use a soft warm gradient
+  (warning + accent mix at 14%) with a copper border so the selection is
+  unmistakable.
+- **Generate thumbnail CTA** in light mode uses the copper warning token
+  so the primary action pops against the pale surface.
+- **Tile prompt + meta text** uses the muted token (`rgb(91, 86, 128)`) so
+  copy reads crisply on white backgrounds (was light lavender before —
+  invisible against the pale page).
+- **Dark mode is untouched.** All overrides are scoped to
+  `[data-theme="light"]` — verified in regression: `.thumb-card` bg in
+  dark stays `rgba(15, 10, 30, 0.55)` exactly.
+
+---
+
 ## v1.15.0 — June 30, 2026 (refactor + cross-origin auth)
 
 - **Cross-origin auth-me fixed.** The CORS middleware was configured with

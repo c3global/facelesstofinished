@@ -6586,3 +6586,148 @@ body[data-founder="true"] .settings-key-save-btn {
   color: #FF9E9E;
 }
 
+
+/* ============================================================
+   v1.16.0 — LIGHT MODE FIXES for Thumbnails + adjacent surfaces.
+   Originals were authored against the dark palette only, so on
+   [data-theme="light"] they rendered as gray-purple boxes on a
+   pale background with low-contrast text. We override only the
+   problem surfaces, leaving the dark-mode look untouched.
+   ============================================================ */
+
+/* --- Form card + nested inputs/textarea -------------------- */
+[data-theme="light"] .thumb-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-card);
+}
+[data-theme="light"] .thumb-card input,
+[data-theme="light"] .thumb-card textarea {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+[data-theme="light"] .thumb-card input::placeholder,
+[data-theme="light"] .thumb-card textarea::placeholder {
+  color: var(--muted);
+}
+[data-theme="light"] .thumb-card input:focus,
+[data-theme="light"] .thumb-card textarea:focus {
+  background: var(--surface);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+[data-theme="light"] .thumb-optional { color: var(--muted); }
+
+/* --- Rewrite button (subtle, secondary) -------------------- */
+[data-theme="light"] .thumb-rewrite-btn {
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  color: var(--accent);
+}
+[data-theme="light"] .thumb-rewrite-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 18%, var(--surface));
+}
+
+/* --- Engine + Aspect segmented chips ----------------------- */
+[data-theme="light"] .thumb-seg {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+[data-theme="light"] .thumb-seg:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--text);
+}
+[data-theme="light"] .thumb-seg.is-active {
+  background: linear-gradient(135deg,
+    color-mix(in srgb, var(--warning) 14%, var(--surface)),
+    color-mix(in srgb, var(--accent) 14%, var(--surface)));
+  border-color: var(--warning);
+  color: var(--text);
+}
+[data-theme="light"] .thumb-seg-sub { color: var(--muted); }
+
+/* --- Generate primary CTA (warm copper on light) ----------- */
+[data-theme="light"] .thumb-generate-btn {
+  background: var(--warning);
+  border-color: var(--warning);
+  color: #FFFFFF;
+}
+[data-theme="light"] .thumb-generate-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--warning) 88%, #000 12%);
+}
+[data-theme="light"] .thumb-generate-btn:disabled { opacity: 0.5; }
+
+/* --- Cover-prompt picker panel (when arriving from Scripts) - */
+[data-theme="light"] .thumb-picker {
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+/* --- Gallery tiles ----------------------------------------- */
+[data-theme="light"] .thumb-tile {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-card);
+}
+[data-theme="light"] .thumb-tile:hover {
+  border-color: var(--warning);
+  box-shadow: 0 4px 14px -4px color-mix(in srgb, var(--warning) 40%, transparent);
+}
+/* Image well: keep a soft neutral behind portrait/landscape mismatches */
+[data-theme="light"] .thumb-tile-img-wrap {
+  background: var(--surface-soft);
+}
+[data-theme="light"] .thumb-tile-prompt,
+[data-theme="light"] .thumb-tile-meta { color: var(--muted); }
+[data-theme="light"] .thumb-tile-aspect { color: var(--text); }
+
+/* Tile floating actions overlay: white pill on hover, dark icon */
+[data-theme="light"] .thumb-tile-action {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+[data-theme="light"] .thumb-tile-action:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+[data-theme="light"] .thumb-tile-action-danger:hover {
+  background: var(--danger-soft);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+[data-theme="light"] .thumb-tile-zoom-hint {
+  background: rgba(255,255,255,0.92);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+/* Engine pills inside tiles — keep them branded but bump contrast */
+[data-theme="light"] .thumb-tile-engine-premium {
+  background: color-mix(in srgb, var(--warning) 14%, var(--surface));
+  color: color-mix(in srgb, var(--warning) 75%, var(--text));
+  border-color: color-mix(in srgb, var(--warning) 55%, transparent);
+}
+[data-theme="light"] .thumb-tile-engine-fast {
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  color: color-mix(in srgb, var(--accent) 80%, var(--text));
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+/* History header refresh button + title sit on light bg cleanly */
+[data-theme="light"] .thumb-history-title { color: var(--text); }
+
+/* --- Hero subtitle + label (already designed for muted, but
+   the eyebrow uses a hardcoded warm copper. In light it's fine
+   — keep — only soften the body subtitle so headings dominate.) */
+[data-theme="light"] .thumb-hero-sub { color: var(--muted); }
+
+/* --- Lightbox (full-screen preview) ------------------------ */
+/* The lightbox itself stays dark — that's intentional (a viewer
+   should focus on the image). Just bump the caption text contrast
+   in light theme so the prompt + buttons read crisply on the
+   lightbox's dark surface. (No override needed — the lightbox
+   is dark in both themes, by design.) */
+
