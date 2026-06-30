@@ -20,6 +20,55 @@ back to it for entitlement verification.
 
 ## 🔁 Workflow rule: Changelog moves with every change (set 2026-06-29 by user)
 
+### Iteration 38 (2026-06-30) — User bug batch + carry-over tasks (v1.14.0)
+
+**Bugs reported by user:**
+1. Cloudflare 502 "origin web server returned an invalid or incomplete
+   response" on Thumbnails rewriter + generator. RCA: iter_37 backend was
+   restarted 4× during the GHL test suite; user happened to hit those
+   endpoints during the brief unavailability windows. Endpoints themselves
+   are healthy (8–11s typical response, 200 OK).
+2. ESLint "Send is not defined" compile error in BuyersTab.jsx. RCA: stale
+   hot-reload snapshot; the import is correct in HEAD.
+3. Light mode polish: footer "Have a redemption code?" link washed out;
+   pill hover states invisible; TikTok platform pill (cyan #25F4EE) had
+   white text — unreadable on the bright cyan fill.
+
+**Fixes shipped:**
+- `Thumbnails.jsx::friendlyError()` now layers status → network → detail
+  sniffing. 502/503/504 + Cloudflare HTML leaks render as "Our render
+  server is warming back up — give it ~30 seconds and try again, your
+  prompt is preserved." Network errors map to "Couldn't reach the render
+  server."
+- `App.css` `.cta-btn.is-platform` + `.platform-card.is-selected .length-name`
+  use a new `--platform-fg` CSS variable. `[data-platform="tiktok"]`
+  overrides it to `#0B1A1A` (near-black). Scripts.jsx mirrors the active
+  platform onto `document.documentElement[data-platform]` so the global
+  CTA inherits correctly.
+- `index.css` light-theme `--surface-hover` bumped from 5% → 9% so card
+  hover states are visible.
+- `App.css` `.footer-link` rewired to design-token `--muted` color so it
+  tracks both themes; light-mode override anchors to a 60/40
+  text/bg mix.
+
+**Carry-over tasks user reminded me of (now shipped):**
+- **Render regen soft-cap (5 per script)**: Studio.jsx tracks
+  `f48_regen:<mode>:<script-prefix>` in localStorage. After 5 regens of
+  the same source, further clicks show a "try tweaking instead" inline
+  error. Owners + Founders bypass via `/me/quota.unlimited`.
+- **Caption burn-in regression suite**: new
+  `backend/tests/test_caption_burn_in.py` — 7 tests verify
+  `_burn_in_captions` exists, soft-fails cleanly, and that the
+  style/position preset maps are intact. Httpx is monkey-patched so the
+  suite costs $0 to run.
+
+**Testing**: iteration_38.json — 18/18 (7 pytest + 11 frontend
+assertions). No action items, no regressions.
+
+---
+
+
+
 ### Iteration 37 (2026-06-30) — Group F: GoHighLevel (GHL) outbound integration
 
 **What landed:**
