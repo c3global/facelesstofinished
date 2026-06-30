@@ -20,6 +20,56 @@ back to it for entitlement verification.
 
 ## 🔁 Workflow rule: Changelog moves with every change (set 2026-06-29 by user)
 
+### Iteration 42 (2026-06-30) — Pre-launch env hardening (BYOK_ENCRYPTION_KEY)
+
+**Context:** user said they cannot manually set env vars and asked agent to
+configure the 4 remaining production env vars before AppSumo launch. User
+clarified preferences:
+- `GHL_WEBHOOK_URL` = empty (paste later when GHL workflow is wired)
+- `GHL_WEBHOOK_AUTH_HEADER` = empty (95%-case default for GHL)
+- `APPSUMO_CAMPAIGN_END_AT` = empty (campaign not launched yet, upgrade
+  button hides silently — already exercised path)
+- `BYOK_ENCRYPTION_KEY` = **freshly generated Fernet key** (only one that
+  needed a real value)
+
+**What landed:**
+1. Generated a 32-byte url-safe base64 Fernet key via
+   `cryptography.fernet.Fernet.generate_key()` and pasted it into
+   `/app/backend/.env`. Backend restarted clean; `[byok]` warning about a
+   derived fallback key would have logged at startup if `BYOK_ENCRYPTION_KEY`
+   was missing or malformed — no such warning fires now (confirmed via
+   `tail /var/log/supervisor/backend.err.log`).
+2. End-to-end round-trip verified via curl: save anthropic key →
+   masked hint `sk-…cdef` returned → list shows `configured: true` →
+   delete cleans up. The same flow buyers will use in production.
+3. Deployment audit (deployment_agent): PASS. Only WARN was a false
+   positive — agent missed `/app/.gitignore` (which exists and properly
+   excludes `.env`, `.env.local`, `*.env`, `credentials.json`, `*.pem`,
+   `*.key`, `.credentials`).
+
+**Why this matters:** with the Fernet key set, every buyer's BYOK key is
+encrypted at rest with AES-128+HMAC instead of a deterministic
+process-derived fallback. Rotating `BYOK_ENCRYPTION_KEY` later would
+invalidate previously-saved keys (acceptable — buyers just re-paste),
+but starting production with a real key means no future rotation is
+needed for cryptographic strength.
+
+**Files touched:**
+- `/app/backend/.env` — added `BYOK_ENCRYPTION_KEY=<32-byte fernet key>`
+
+**Testing:** Single .env edit, deploy-audit + BYOK curl round-trip
+verified. No frontend change. Skipped testing_agent_v3_fork (single env
+change, well-exercised BYOK flow from iter 36).
+
+**Still open (deferred to user steer):**
+- Cinematic Faceless (Veo) pipeline — parked
+- `server.py` (4046 lines) + `Scripts.jsx` (1545 lines) refactor pass 2
+- One real captioned Faceless QA render (real $$, only fire on user OK)
+
+---
+
+
+
 ### Iteration 41 (2026-06-30) — Light-mode polish trilogy completed (v1.17.0)
 
 **User-reported:** screenshots showed (a) Studio + Thumbnails hero eyebrow
