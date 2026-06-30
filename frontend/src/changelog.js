@@ -21,7 +21,7 @@ export const CHANGELOG = [
     version: "1.12.0",
     date: "2026-06-30",
     changes: [
-      "New API Keys settings page (Pro Plus + Founder) — plug in your own Anthropic, OpenAI, HeyGen, and fal.ai keys and your renders draw from your own provider quotas instead of ours",
+      "New API Keys settings page (Pro Plus + Founder) — plug in your own Anthropic, OpenAI, Google AI Studio, ElevenLabs, HeyGen, and fal.ai keys and your renders draw from your own provider quotas instead of ours",
       "Anthropic key unlocks the Script Engine + thumbnail prompt rewriter on your own Claude quota",
       "Keys are encrypted at rest and never displayed once saved — only a safe preview like 'sk-…0abc'",
       "Find it in your Profile menu → API keys",

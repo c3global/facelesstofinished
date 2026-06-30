@@ -15,9 +15,9 @@ first. Plain English — if you're a customer reading this, this is for you.
 ## v1.12.0 — June 30, 2026
 
 - **NEW: API Keys settings page** for Pro Plus + Founder members — plug in
-  your own **Anthropic**, OpenAI, HeyGen, and fal.ai keys and your scripts,
-  thumbnails, and video renders draw from your own provider quotas instead
-  of ours.
+  your own **Anthropic**, OpenAI, **Google AI Studio**, **ElevenLabs**,
+  HeyGen, and fal.ai keys and your scripts, thumbnails, and video renders
+  draw from your own provider quotas instead of ours.
 - **Anthropic key** unlocks the Script Engine + thumbnail prompt rewriter on
   your own Claude quota — every script generation routes through your key
   when one is saved.

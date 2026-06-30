@@ -49,6 +49,16 @@ SERVICES: dict[str, dict] = {
         "purpose": "Unlocks the Premium 2 thumbnail engine (gpt-image-2)",
         "key_hint": "starts with sk-…",
     },
+    "google": {
+        "label": "Google AI Studio",
+        "purpose": "Unlocks your own Gemini / Veo quota for thumbnails + future Studio renders",
+        "key_hint": "starts with AIza…",
+    },
+    "elevenlabs": {
+        "label": "ElevenLabs",
+        "purpose": "Use your own ElevenLabs voices for Faceless TTS (when wired)",
+        "key_hint": "from elevenlabs.io → profile → API key",
+    },
     "heygen": {
         "label": "HeyGen",
         "purpose": "Uses your own quota for Avatar video renders",
