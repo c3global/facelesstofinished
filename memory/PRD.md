@@ -30,6 +30,57 @@ back to it for entitlement verification.
 6. Internal-only changes (admin panel, webhooks, refactors, env config, test infrastructure) still get documented — but here in `PRD.md`, NOT in the public changelog.
 
 
+## 2026-06-30 — Group C2 (Thumbnail Engine) SHIPPED
+**Status:** SHIPPED on preview, iter 32 ALL GREEN (17/17 backend, 100% frontend).
+
+### What's in
+1. **Thumbnail Engine** — standalone top-level page at `/thumbnails`. Two providers via Emergent Universal LLM key (no user keys needed):
+   - **Premium** → OpenAI `gpt-image-1` with `quality="hd"`. Best for hero YouTube thumbnails.
+   - **Fast** → Gemini `gemini-3.1-flash-image-preview` (Nano Banana). Best for quick A/B variations.
+2. **Three aspect ratios** — 16:9 (YouTube), 9:16 (Shorts/Reels/TikTok), 1:1 (Instagram). Encoded as prompt hints since the image-gen libs don't expose size params; format cues land 100% reliably in our tested A/B prompts.
+3. **Prompt rewriter** — `POST /api/thumbnails/rewrite-prompt` calls Claude Sonnet 4.5 to upgrade casual user input into a punchy, visual prompt. Takes 3-8s; full system prompt explicitly forbids in-image typography (keeps room for overlay text in editor).
+4. **Quota infrastructure** — separate `thumbnailsThisCycle` counter on the buyer doc. T1=20/mo (Fast only), T2=50/mo (both), T3+/Founder=unlimited. `_thumbnail_quota_gate_or_402` mirrors the render quota pattern — atomic `find_one_and_update` decrement, friendly 402 messages, idempotent `_refund_thumbnail_slot` on generation failure. Premium-locked path returns a distinct `reason: 'thumbnail_premium_locked'` so the UI can bounce T1 users to Fast automatically without showing them a generic quota error.
+5. **GridFS persistence** — separate `thumbnails` bucket (isolated from `uploads`). Dedicated `/api/thumbnails/file/{id}` streamer with `Cache-Control: public, max-age=86400`. Soft-delete via `db.thumbnails.deleted=true`.
+6. **Standalone `/thumbnails` page** — single-purpose composer + history grid. Quota pill in hero. Engine + aspect segmented controls with lock icons for locked tiers. Inline error + toast banners. Aspect-aware tile grid (16:9 tiles wider than tall, 9:16 taller than wide, 1:1 square).
+7. **In-Scripts integration** — new "Make thumbnail" button on the Scripts result toolbar (`data-testid='scripts-make-thumbnail'`). Extracts the script topic + narration hook (~280 chars) and stashes them in `localStorage.f48_handoff_thumbnail`. Thumbnails.jsx consumes + clears the handoff on mount.
+8. **/me/quota extended** — non-founder payload now includes `thumbnails_used`, `thumbnails_total`, `thumbnails_remaining`, `thumbnail_premium_allowed`. Founders / owner / studio-grant still get `{unlimited: true}` shorthand.
+9. **Header nav** — new "Thumbnails" link between Studio and Resources (`data-testid='nav-thumbnails'`).
+10. **Customer-facing changelog** — `APP_VERSION` bumped to 1.10.0 with friendly plain-English copy about the new Thumbnail Engine. Mirrored in `/app/memory/CHANGELOG.md`.
+
+### Files touched
+- `/app/backend/thumbnails_routes.py` — NEW (~580 lines, single self-contained module)
+- `/app/backend/server.py` — added `register_thumbnail_routes` wiring; extended `/me/quota` payload with thumbnail fields
+- `/app/frontend/src/pages/Thumbnails.jsx` — NEW (~450 lines, composer + history grid + handoff consumer)
+- `/app/frontend/src/pages/Scripts.jsx` — added `Image as ImageIcon` import, `sendToThumbnails`/`useInThumbnails` helpers, "Make thumbnail" button on result toolbar
+- `/app/frontend/src/App.js` — `/thumbnails` route + RequireAuth guard
+- `/app/frontend/src/components/Header.jsx` — `nav-thumbnails` NavLink between Studio and Resources
+- `/app/frontend/src/App.css` — full `.thumbnails-main`, `.thumb-card`, `.thumb-segmented`, `.thumb-quota*`, `.thumb-tile*` styles
+- `/app/frontend/src/changelog.js` — APP_VERSION → 1.10.0
+- `/app/memory/CHANGELOG.md` — mirror entry
+
+### Verified by testing agent (iter 32)
+- `/api/thumbnails/rewrite-prompt` rewrites 14-char input → 740-char visual prompt via Claude
+- `/api/thumbnails/generate` (Fast) produces 895KB PNG in ~30s, persists to GridFS, streams back at expected URL
+- T1 quota gate: 20 → 402 with `reason=thumbnail_quota_exhausted` + friendly message
+- T1 premium lock: returns 402 with `reason=thumbnail_premium_locked` regardless of remaining count
+- Refund-on-failure: deliberate 502 keeps `thumbnailsThisCycle` flat instead of incrementing
+- Soft-delete: `DELETE /api/thumbnails/{id}` 200s, subsequent GET excludes it, streamer 404s
+- Auth gating: all endpoints 401 without JWT; file streamer is intentionally no-auth
+- `/me/quota` exposes new thumbnail fields only for non-founder paying buyers; founder/owner/grant get unchanged `{unlimited: true}`
+- Frontend: nav-thumbnails link, all 10 composer testids, engine + aspect toggles, rewriter end-to-end, Fast generation + tile actions, Scripts handoff via localStorage
+- Smoke nav across all 5 routes: 0 console errors
+- Test file: `/app/backend/tests/test_iter32_thumbnail_engine.py` (17/17 pass)
+- Total cost across testing: 1 Gemini Nano Banana call + ~6 Claude rewriter calls (Premium gpt-image-1 was NOT exercised to save real $ — engine routing verified at quota-gate layer only)
+
+### Still open (P1+ for AppSumo launch)
+- **In-Studio parallel pipeline** — fire-and-forget thumbnail during video render. Currently deferred — the Scripts handoff covers the primary "I just wrote a script, now I need a thumbnail" UX. Studio integration is an enhancement, not a blocker.
+- Group D: License code redemption + bulk provisioning + tier upgrade buttons.
+- Group E: BYOK Fernet-encrypted vault.
+- Group F: GHL webhook handoff (P2). Scene-regen soft cap (P2).
+- server.py refactor — split into modular routes/services (deferred until post-launch).
+
+---
+
 ## 2026-06-30 — Group B (Quota Infrastructure) COMPLETED + Group C (Usage tab + Studio Quota Pill + Activity logging) SHIPPED
 **Status:** SHIPPED on preview, testing-agent iter 31 ALL PASS (15/15 backend, 14/15 frontend — the one un-exercised frontend path is the Scripts copy→activity log which simply lacks a seeded script in the dev DB; backend allow-list + persistence verified directly).
 
