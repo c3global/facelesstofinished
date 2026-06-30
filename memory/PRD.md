@@ -20,6 +20,56 @@ back to it for entitlement verification.
 
 ## 🔁 Workflow rule: Changelog moves with every change (set 2026-06-29 by user)
 
+### Iteration 37 (2026-06-30) — Group F: GoHighLevel (GHL) outbound integration
+
+**What landed:**
+1. **New module** `backend/ghl_integration.py` — encapsulated outbound push
+   helper. Reads `GHL_WEBHOOK_URL` + optional `GHL_WEBHOOK_AUTH_HEADER` at
+   call-time (kill switch via env, no code redeploy needed). Stable, flat
+   payload schema documented in module docstring; tags taxonomy is
+   additive-only. Fire-and-forget — failures land in `db.activity` as
+   `ghl_push_failed`, never raised to the caller.
+2. **Two automatic call sites**:
+   - `admin_routes.py:_process_pinball_event` — fires after a Pinball
+     webhook actually grants new entitlements (skipped on duplicate/reprocessed
+     events).
+   - `licenses_routes.py:redeem` — fires after a successful AppSumo code
+     redemption (source tag = `appsumo_redemption`).
+3. **Three admin endpoints**:
+   - `GET /api/admin/ghl/status` — returns `{configured, url_host,
+     auth_header_set}`. NEVER leaks the URL itself; only the host portion.
+   - `POST /api/admin/ghl/test` — sends a sentinel payload to verify the
+     workflow without touching any buyer record.
+   - `POST /api/admin/ghl/push-buyer {email}` — manual replay (used for
+     legacy buyers / outage recovery).
+4. **Admin Buyers tab UI**: connection pill (`GHL: connected | off`,
+   amber/green), `Test GHL` button (disabled when not configured), per-buyer
+   Send icon in row Actions column (hidden when not configured).
+5. **Env**: `GHL_WEBHOOK_URL` + `GHL_WEBHOOK_AUTH_HEADER` added to
+   `/app/backend/.env`. Both currently empty — Charity pastes her GHL inbound
+   webhook URL when she's ready to flip the switch.
+
+**Testing**: iteration_37.json — 13/13 backend tests + frontend Playwright
+both states (unconfigured + live mock GHL on 127.0.0.1:9989). One cosmetic
+finding (Buyers toolbar wrapping) was fixed in-line by `margin-left: auto`
+on the GHL pill.
+
+**Files touched:**
+- `backend/ghl_integration.py` (NEW)
+- `backend/admin_routes.py` (+pinball GHL hook, +3 admin endpoints, +import)
+- `backend/licenses_routes.py` (+redeem GHL hook)
+- `backend/.env` (+GHL_WEBHOOK_URL, +GHL_WEBHOOK_AUTH_HEADER)
+- `backend/tests/mock_ghl_server.py` (NEW — test-only mock)
+- `frontend/src/components/admin/BuyersTab.jsx` (+ghl state, pill, test btn,
+  per-row push, lucide `Send` import)
+- `frontend/src/App.css` (+`.admin-pill` + variants)
+- `frontend/src/changelog.js` (v1.13.0)
+- `memory/CHANGELOG.md` (v1.13.0 entry)
+
+---
+
+
+
 ### Iteration 36 (2026-06-30) — Group E ships + 2 user-requested follow-ups
 
 **What landed:**

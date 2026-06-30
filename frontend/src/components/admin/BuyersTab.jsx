@@ -514,11 +514,14 @@ export default function BuyersTab() {
         >
           <Zap size={13} /> {webhookTesting ? "Testing…" : "Test webhook"}
         </button>
-        {/* GHL connection status pill + sentinel-test trigger. Green pill
-            when GHL_WEBHOOK_URL is configured; amber when not. */}
+        {/* GHL connection status pill + sentinel-test trigger. Anchored
+            to the right edge of the toolbar so the layout stays compact —
+            avoids the "Test GHL" button orphaning to a second row when
+            GHL is configured (iter_37 polish). */}
         <span
           className={`admin-pill ${ghlStatus?.configured ? "is-ok" : "is-warn"}`}
           data-testid="ghl-status-pill"
+          style={{ marginLeft: "auto" }}
           title={
             ghlStatus?.configured
               ? `GHL connected → ${ghlStatus.url_host || "webhook"}${ghlStatus.auth_header_set ? " · auth header set" : ""}`
