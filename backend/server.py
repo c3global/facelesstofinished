@@ -493,8 +493,15 @@ async def me_quota(user: AuthUser = Depends(current_user)):
 
     used_total  = int(buyer.get("rendersThisCycle") or 0)
     used_avatar = int(buyer.get("avatarRendersThisCycle") or 0)
+    used_thumbs = int(buyer.get("thumbnailsThisCycle") or 0)
     quota_total = int(buyer.get("renderQuotaMonthly") or tier.render_quota_monthly)
     avatar_cap  = int(buyer.get("avatarSubCap") or tier.avatar_sub_cap)
+    thumb_quota = int(buyer.get("thumbnailQuotaMonthly") or tier.thumbnail_quota_monthly)
+    premium_ok  = bool(
+        buyer.get("thumbnailPremiumAllowed")
+        if buyer.get("thumbnailPremiumAllowed") is not None
+        else tier.thumbnail_premium_allowed
+    )
 
     return {
         "unlimited": False,
@@ -506,6 +513,10 @@ async def me_quota(user: AuthUser = Depends(current_user)):
         "avatar_used": used_avatar,
         "avatar_cap": avatar_cap,
         "avatar_remaining": max(0, avatar_cap - used_avatar) if avatar_cap > 0 else 0,
+        "thumbnails_used": used_thumbs,
+        "thumbnails_total": thumb_quota,
+        "thumbnails_remaining": max(0, thumb_quota - used_thumbs),
+        "thumbnail_premium_allowed": premium_ok,
         "cycle_started_at": buyer.get("cycleStartedAt"),
         "cycle_resets_at": buyer.get("cycleResetsAt"),
         "byok_allowed": bool(buyer.get("byokAllowed") if buyer.get("byokAllowed") is not None else tier.byok_allowed),
@@ -3856,6 +3867,22 @@ register_uploads_routes(
     db=db,
     current_user_dep=current_user,
     require_studio=require_studio,
+)
+
+# Thumbnail Engine (OpenAI gpt-image-1 "Premium" + Gemini Nano Banana
+# "Fast") for YouTube/Shorts cover images. Mounted on the same /api router
+# alongside renders + uploads. Separate GridFS bucket (`thumbnails`) so the
+# uploads bucket stays focused on user-supplied B-roll/voiceovers.
+from thumbnails_routes import register_thumbnail_routes  # noqa: E402
+
+register_thumbnail_routes(
+    api=api,
+    db=db,
+    current_user_dep=current_user,
+    log_activity=_log_activity,
+    emergent_llm_key=EMERGENT_LLM_KEY,
+    dev_bypass_email=DEV_BYPASS_EMAIL,
+    studio_grant_emails=STUDIO_GRANT_EMAILS,
 )
 
 

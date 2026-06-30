@@ -8,6 +8,7 @@ import {
   ArrowLeft,
   ClipboardCopy,
   Layers,
+  Image as ImageIcon,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Lock } from "lucide-react";
@@ -743,6 +744,38 @@ export default function Scripts() {
     sendToStudio(output);
   };
 
+  // ---- Send-to-Thumbnails handoff (v1.9.0) ----
+  // Drops the script topic + extracted opening hook (best thumbnail
+  // inspiration) into localStorage so the Thumbnails page can pre-fill
+  // the prompt editor on mount. Mirrors the sendToStudio pattern.
+  const sendToThumbnails = (jobOutput) => {
+    if (!jobOutput) return;
+    const narration = extractNarration(jobOutput.text || "");
+    // Use the first ~280 chars of narration as a creative seed for the
+    // thumbnail prompt — that's typically the hook + first beat, which
+    // is also what the thumbnail needs to visually represent.
+    const seed = (narration || "").trim().slice(0, 280);
+    try {
+      localStorage.setItem("f48_handoff_thumbnail", JSON.stringify({
+        topic: jobOutput.topic || "",
+        seed,
+        script_id: jobOutput.id,
+        platform: jobOutput.platform,
+        ts: Date.now(),
+      }));
+    } catch {}
+    apiClient.post("/activity/log", {
+      type: "script_sent_to_studio",  // close-enough event for engagement metrics
+      detail: { script_id: jobOutput.id, target: "thumbnails" },
+    }).catch(() => {});
+    nav("/thumbnails");
+  };
+
+  const useInThumbnails = () => {
+    if (!output) return;
+    sendToThumbnails(output);
+  };
+
   // Per-platform Send-to-Studio for the compare-all view. Lets the user pick
   // their winner after A/B-ing all three platforms side-by-side without
   // having to leave compare-mode and switch tabs first.
@@ -1296,6 +1329,16 @@ export default function Scripts() {
                   onClick={useInStudio}
                 >
                   <Sparkles size={13} /> Send to Studio
+                </button>
+              )}
+              {output.mode !== "sprint" && (
+                <button
+                  className="header-btn"
+                  data-testid="scripts-make-thumbnail"
+                  onClick={useInThumbnails}
+                  title="Generate a click-worthy YouTube/Shorts thumbnail for this script"
+                >
+                  <ImageIcon size={13} /> Make thumbnail
                 </button>
               )}
             </div>

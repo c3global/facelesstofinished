@@ -12,6 +12,22 @@ first. Plain English — if you're a customer reading this, this is for you.
 
 ---
 
+## v1.10.0 — June 30, 2026
+
+- **NEW: Thumbnail Engine** — generate click-worthy YouTube and Shorts thumbnails
+  right inside Faceless 48. Pick **Premium** for hero shots or **Fast** for quick
+  A/B testing.
+- Built-in prompt rewriter — type a casual idea and tap **Rewrite for me** to get
+  a vivid, image-ready prompt.
+- Three aspect ratios baked in: **16:9** for YouTube, **9:16** for Shorts / Reels /
+  TikTok, **1:1** for Instagram feed.
+- **Make thumbnail** button in the Script Engine result view sends your script
+  topic + opening hook straight into the new tool.
+- Find **Thumbnails** as a top-level tab in the header alongside Script Engine
+  and Studio.
+
+---
+
 ## v1.9.0 — June 30, 2026
 
 - New render-budget pill in the Studio header — see how many renders you've

@@ -1,6 +1,6 @@
 import React from "react";
 import { useNavigate, useLocation, NavLink } from "react-router-dom";
-import { LogOut, Sun, Moon, FileText, Wand2, Shield, BookOpen } from "lucide-react";
+import { LogOut, Sun, Moon, FileText, Wand2, Shield, BookOpen, Image as ImageIcon } from "lucide-react";
 import { useAuth, useTheme } from "../App";
 
 export default function Header() {
@@ -60,6 +60,13 @@ export default function Header() {
                 guides themselves are static reference material that benefits
                 everyone, and they were a promised deliverable on the
                 pre-migration Netlify site. */}
+            <NavLink
+              to="/thumbnails"
+              className={({ isActive }) => `nav-link ${isActive ? "is-active" : ""}`}
+              data-testid="nav-thumbnails"
+            >
+              <ImageIcon size={13} /> Thumbnails
+            </NavLink>
             <NavLink
               to="/resources"
               className={({ isActive }) => `nav-link ${isActive ? "is-active" : ""}`}

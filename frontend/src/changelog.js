@@ -14,9 +14,20 @@
 //    See PRD.md → "Workflow rule: changelog must move with every deploy."
 // 4. Most recent on top. Each entry has version + date + bullet list.
 
-export const APP_VERSION = "1.9.0";
+export const APP_VERSION = "1.10.0";
 
 export const CHANGELOG = [
+  {
+    version: "1.10.0",
+    date: "2026-06-30",
+    changes: [
+      "NEW: Thumbnail Engine — generate click-worthy YouTube and Shorts thumbnails right inside Faceless 48. Pick Premium for hero shots or Fast for quick A/B testing",
+      "Built-in prompt rewriter — type a casual idea and tap 'Rewrite for me' to get a vivid, image-ready prompt",
+      "Three aspect ratios baked in: 16:9 for YouTube, 9:16 for Shorts/Reels/TikTok, 1:1 for Instagram feed",
+      "'Make thumbnail' button in the Script Engine result view sends your script topic + opening hook straight into the new tool",
+      "Find Thumbnails as a top-level tab in the header alongside Script Engine and Studio",
+    ],
+  },
   {
     version: "1.9.0",
     date: "2026-06-30",
