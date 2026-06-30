@@ -39,6 +39,11 @@ logger = logging.getLogger("byok")
 
 
 SERVICES: dict[str, dict] = {
+    "anthropic": {
+        "label": "Anthropic",
+        "purpose": "Powers the Script Engine + thumbnail prompt rewriter with your own Claude quota",
+        "key_hint": "starts with sk-ant-…",
+    },
     "openai": {
         "label": "OpenAI",
         "purpose": "Unlocks the Premium 2 thumbnail engine (gpt-image-2)",

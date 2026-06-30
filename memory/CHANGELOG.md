@@ -15,14 +15,21 @@ first. Plain English — if you're a customer reading this, this is for you.
 ## v1.12.0 — June 30, 2026
 
 - **NEW: API Keys settings page** for Pro Plus + Founder members — plug in
-  your own OpenAI, HeyGen, and fal.ai keys and your video / thumbnail renders
-  draw from your own provider quotas instead of ours.
+  your own **Anthropic**, OpenAI, HeyGen, and fal.ai keys and your scripts,
+  thumbnails, and video renders draw from your own provider quotas instead
+  of ours.
+- **Anthropic key** unlocks the Script Engine + thumbnail prompt rewriter on
+  your own Claude quota — every script generation routes through your key
+  when one is saved.
 - Keys are **encrypted at rest** (Fernet symmetric AES-128 + HMAC) and never
   displayed back to the dashboard after save — you only see a safe preview
   like `sk-…0abc`.
-- Find it in your **Profile menu → API keys**. Each key can be replaced or
-  removed at any time; renders silently fall back to platform keys when no
-  customer key is saved.
+- **Thumbnails — click any image in your gallery** to open a full-screen
+  preview with Download + Copy prompt actions right there (no more right-
+  clicking to save).
+- Find the API Keys page in your **Profile menu → API keys**. Each key can
+  be replaced or removed at any time; renders silently fall back to
+  platform keys when no customer key is saved.
 
 ---
 

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ImageIcon, Sparkles, Wand2, Loader2, Trash2, Download, RefreshCw,
-  Zap, Crown, Lock, Copy as CopyIcon, Layers, Check,
+  Zap, Crown, Lock, Copy as CopyIcon, Layers, Check, Maximize2, X,
 } from "lucide-react";
 import { apiClient } from "../App";
 
@@ -79,6 +79,17 @@ export default function Thumbnails() {
   const [coverChoices, setCoverChoices] = useState([]);
   const [selectedChoiceIndex, setSelectedChoiceIndex] = useState(null);
   const [confirmBatch, setConfirmBatch] = useState(false);
+
+  // Lightbox state — when set, renders a full-screen modal preview of the
+  // selected thumbnail. Closes on backdrop click or ESC.
+  const [lightboxThumb, setLightboxThumb] = useState(null);
+
+  useEffect(() => {
+    if (!lightboxThumb) return undefined;
+    const onKey = (e) => { if (e.key === "Escape") setLightboxThumb(null); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [lightboxThumb]);
 
   const flashToast = (msg) => {
     setToast(msg);
@@ -546,12 +557,24 @@ export default function Thumbnails() {
                 data-testid={`thumb-tile-${t.id}`}
               >
                 <div className="thumb-tile-img-wrap">
-                  <img
-                    src={t.url}
-                    alt={t.original_prompt || "Generated thumbnail"}
-                    className="thumb-tile-img"
-                    loading="lazy"
-                  />
+                  <button
+                    type="button"
+                    className="thumb-tile-img-btn"
+                    onClick={() => setLightboxThumb(t)}
+                    data-testid={`thumb-open-lightbox-${t.id}`}
+                    title="Click to enlarge"
+                    aria-label="Enlarge thumbnail"
+                  >
+                    <img
+                      src={t.url}
+                      alt={t.original_prompt || "Generated thumbnail"}
+                      className="thumb-tile-img"
+                      loading="lazy"
+                    />
+                    <span className="thumb-tile-zoom-hint" aria-hidden="true">
+                      <Maximize2 size={14} />
+                    </span>
+                  </button>
                   <div className="thumb-tile-overlay">
                     <button
                       type="button"
@@ -644,6 +667,67 @@ export default function Thumbnails() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Full-screen lightbox preview. Click outside the image, hit ESC, or
+          press the X to dismiss. Action buttons (Download / Copy prompt) are
+          duplicated here so users don't have to close + re-aim at the tile. */}
+      {lightboxThumb && (
+        <div
+          className="thumb-lightbox-backdrop"
+          onClick={() => setLightboxThumb(null)}
+          data-testid="thumb-lightbox-backdrop"
+        >
+          <button
+            type="button"
+            className="thumb-lightbox-close"
+            onClick={(e) => { e.stopPropagation(); setLightboxThumb(null); }}
+            aria-label="Close preview"
+            data-testid="thumb-lightbox-close"
+          >
+            <X size={20} />
+          </button>
+          <figure
+            className={`thumb-lightbox thumb-lightbox-${lightboxThumb.aspect}`}
+            onClick={(e) => e.stopPropagation()}
+            data-testid="thumb-lightbox"
+          >
+            <img
+              src={lightboxThumb.url}
+              alt={lightboxThumb.original_prompt || "Thumbnail preview"}
+              className="thumb-lightbox-img"
+              data-testid="thumb-lightbox-img"
+            />
+            <figcaption className="thumb-lightbox-caption">
+              <div className="thumb-lightbox-meta">
+                <span className={`thumb-tile-engine thumb-tile-engine-${lightboxThumb.engine}`}>
+                  {lightboxThumb.engine === "premium" ? "Premium" : "Fast"}
+                </span>
+                <span className="thumb-tile-aspect">{lightboxThumb.aspect.replace("_", ":")}</span>
+                <span className="thumb-tile-date">{fmtDate(lightboxThumb.created_at)}</span>
+              </div>
+              <p className="thumb-lightbox-prompt">{lightboxThumb.original_prompt || lightboxThumb.prompt}</p>
+              <div className="thumb-lightbox-actions">
+                <button
+                  type="button"
+                  className="thumb-lightbox-btn"
+                  onClick={() => onDownload(lightboxThumb)}
+                  data-testid="thumb-lightbox-download"
+                >
+                  <Download size={14} /> Download
+                </button>
+                <button
+                  type="button"
+                  className="thumb-lightbox-btn"
+                  onClick={() => onCopyPrompt(lightboxThumb.original_prompt || lightboxThumb.prompt)}
+                  data-testid="thumb-lightbox-copy"
+                >
+                  <CopyIcon size={14} /> Copy prompt
+                </button>
+              </div>
+            </figcaption>
+          </figure>
         </div>
       )}
     </main>

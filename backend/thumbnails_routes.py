@@ -191,6 +191,40 @@ def register_thumbnail_routes(
             system_message=system,
         ).with_model("anthropic", "claude-sonnet-4-5-20250929")
 
+        # BYOK Anthropic: if the buyer saved their own sk-ant-… key, hit
+        # Anthropic directly so their quota is consumed instead of the
+        # platform's. Falls back silently to the Emergent path on lookup
+        # failure or rotated key.
+        try:
+            anthropic_key = await get_byok_key(db, user.email, "anthropic") if get_byok_key else None
+        except Exception:
+            anthropic_key = None
+        if anthropic_key:
+            import httpx as _httpx  # noqa: WPS433
+            try:
+                async with _httpx.AsyncClient(timeout=60) as _client:
+                    _r = await _client.post(
+                        "https://api.anthropic.com/v1/messages",
+                        headers={
+                            "x-api-key": anthropic_key,
+                            "anthropic-version": "2023-06-01",
+                            "content-type": "application/json",
+                        },
+                        json={
+                            "model": "claude-sonnet-4-5-20250929",
+                            "max_tokens": 1024,
+                            "system": system,
+                            "messages": [{"role": "user", "content": message}],
+                        },
+                    )
+                if _r.status_code == 200:
+                    _blocks = (_r.json().get("content") or [])
+                    response = "".join(_b.get("text", "") for _b in _blocks if _b.get("type") == "text")
+                    return {"rewritten_prompt": response.strip(), "source": "byok-anthropic"}
+                logger.warning("BYOK anthropic rewrite returned %s; falling back to platform key", _r.status_code)
+            except Exception as exc:
+                logger.warning("BYOK anthropic rewrite exception: %s: %s", type(exc).__name__, exc)
+
         try:
             response = await chat.send_message(UserMessage(text=message))
         except Exception as exc:
@@ -281,14 +315,45 @@ def register_thumbnail_routes(
             system_message=system,
         ).with_model("anthropic", "claude-sonnet-4-5-20250929")
 
+        # BYOK Anthropic — direct call when buyer has saved their own key.
+        response = None
         try:
-            response = await chat.send_message(UserMessage(text=user_msg))
-        except Exception as exc:
-            logger.warning("Concept generation failed: %s: %s", type(exc).__name__, exc)
-            raise HTTPException(
-                status_code=502,
-                detail="Couldn't generate concepts right now. Please write a prompt manually below.",
-            )
+            anthropic_key = await get_byok_key(db, user.email, "anthropic") if get_byok_key else None
+        except Exception:
+            anthropic_key = None
+        if anthropic_key:
+            import httpx as _httpx  # noqa: WPS433
+            try:
+                async with _httpx.AsyncClient(timeout=90) as _client:
+                    _r = await _client.post(
+                        "https://api.anthropic.com/v1/messages",
+                        headers={
+                            "x-api-key": anthropic_key,
+                            "anthropic-version": "2023-06-01",
+                            "content-type": "application/json",
+                        },
+                        json={
+                            "model": "claude-sonnet-4-5-20250929",
+                            "max_tokens": 2048,
+                            "system": system,
+                            "messages": [{"role": "user", "content": user_msg}],
+                        },
+                    )
+                if _r.status_code == 200:
+                    _blocks = (_r.json().get("content") or [])
+                    response = "".join(_b.get("text", "") for _b in _blocks if _b.get("type") == "text")
+            except Exception as exc:
+                logger.warning("BYOK anthropic concepts exception: %s: %s", type(exc).__name__, exc)
+
+        if response is None:
+            try:
+                response = await chat.send_message(UserMessage(text=user_msg))
+            except Exception as exc:
+                logger.warning("Concept generation failed: %s: %s", type(exc).__name__, exc)
+                raise HTTPException(
+                    status_code=502,
+                    detail="Couldn't generate concepts right now. Please write a prompt manually below.",
+                )
 
         # Claude reliably returns clean JSON when asked, but it sometimes
         # wraps in ```json fences. Strip them defensively before parsing.

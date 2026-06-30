@@ -502,6 +502,7 @@ async def me_quota(user: AuthUser = Depends(current_user)):
             "unlimited": True,
             "tier_id": "owner",
             "tier_label": "Owner",
+            "byok_allowed": True,
         }
 
     buyer = await db.buyers.find_one({"email": user.email}) or {}
@@ -510,6 +511,7 @@ async def me_quota(user: AuthUser = Depends(current_user)):
             "unlimited": True,
             "tier_id": "founder",
             "tier_label": "Founder",
+            "byok_allowed": True,
         }
 
     tier_id = (buyer.get("tier") or "").strip().lower()
@@ -3288,8 +3290,46 @@ async def studio_render_bulk_delete(payload: BulkDeleteRequest, user: AuthUser =
 CLAUDE_MODEL = "claude-sonnet-4-5-20250929"
 
 
-async def _claude_complete(system_prompt: str, user_message: str, session_id: str | None = None) -> str:
-    """Single-shot Claude completion using the Emergent universal LLM key."""
+async def _anthropic_direct_complete(api_key: str, system_prompt: str, user_message: str) -> str:
+    """BYOK path: hit Anthropic's Messages API directly with the customer's
+    sk-ant-… key. Bypasses the Emergent universal LLM key entirely so the
+    customer's own quota is consumed."""
+    async with httpx.AsyncClient(timeout=180) as client:
+        r = await client.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": CLAUDE_MODEL,
+                "max_tokens": 8192,
+                "system": system_prompt,
+                "messages": [{"role": "user", "content": user_message}],
+            },
+        )
+    if r.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Anthropic error {r.status_code}: {r.text[:200]}")
+    body = r.json()
+    blocks = body.get("content") or []
+    return "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
+
+
+async def _claude_complete(system_prompt: str, user_message: str, session_id: str | None = None, user_email: str | None = None) -> str:
+    """Single-shot Claude completion. If the user has saved a BYOK Anthropic
+    key, route directly to Anthropic; else use the Emergent universal LLM key."""
+    # BYOK: customer's own Anthropic key takes precedence (consumes their quota).
+    if user_email:
+        try:
+            anthropic_key = await get_byok_key(db, user_email, "anthropic")
+            if anthropic_key:
+                return await _anthropic_direct_complete(anthropic_key, system_prompt, user_message)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.warning(f"[byok] anthropic single-shot lookup failed: {type(exc).__name__}: {exc}")
+
     if not EMERGENT_LLM_KEY:
         raise HTTPException(status_code=500, detail="LLM key missing")
     from emergentintegrations.llm.chat import LlmChat, UserMessage  # lazy import
@@ -3332,7 +3372,7 @@ async def studio_broll_prompts(payload: BrollPromptsRequest, user: AuthUser = De
         f"The viewer sees prompt #N while beat #N is being spoken.\n\n"
         f"Beats:\n{numbered}"
     )
-    text = await _claude_complete(BROLL_PROMPTS_SYSTEM, user_msg)
+    text = await _claude_complete(BROLL_PROMPTS_SYSTEM, user_msg, user_email=user.email)
 
     # Parse: one per line, drop blanks, strip bullets/quotes/numbering
     out: list[str] = []
@@ -3565,7 +3605,7 @@ async def scripts_angles(payload: AnglesRequest, user: AuthUser = Depends(curren
     if not topic:
         raise HTTPException(status_code=400, detail="Topic required")
 
-    raw = await _claude_complete(ANGLES_SYSTEM_PROMPT, build_angles_user_message(topic))
+    raw = await _claude_complete(ANGLES_SYSTEM_PROMPT, build_angles_user_message(topic), user_email=user.email)
     # Tolerate accidental markdown fences or preamble — extract the JSON array.
     text = raw.strip()
     m = re.search(r"\[\s*\{[\s\S]*\}\s*\]", text)
@@ -3644,11 +3684,103 @@ async def saved_angles_delete(angle_id: str, user: AuthUser = Depends(current_us
 # --- Script Engine: STEP 2 — full script package locked to a chosen angle --
 
 
-async def _run_script_job(script_id: str, system_prompt: str, user_message: str):
+async def _anthropic_direct_stream(api_key: str, session_id: str, system_prompt: str, user_message: str, script_id: str):
+    """BYOK streaming: SSE from Anthropic Messages API, writing accumulated
+    text into db.scripts on a throttled cadence (mirrors the Emergent path)."""
+    accumulated = ""
+    last_write = 0.0
+    loop = asyncio.get_event_loop()
+    async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0)) as client:
+        async with client.stream(
+            "POST",
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+                "accept": "text/event-stream",
+            },
+            json={
+                "model": CLAUDE_MODEL,
+                "max_tokens": 8192,
+                "system": system_prompt,
+                "stream": True,
+                "messages": [{"role": "user", "content": user_message}],
+            },
+        ) as resp:
+            if resp.status_code != 200:
+                body = await resp.aread()
+                raise HTTPException(status_code=502, detail=f"Anthropic stream {resp.status_code}: {body[:200]}")
+            async for line in resp.aiter_lines():
+                if not line or not line.startswith("data:"):
+                    continue
+                payload = line[5:].strip()
+                if not payload or payload == "[DONE]":
+                    continue
+                try:
+                    evt = json.loads(payload)
+                except Exception:
+                    continue
+                if evt.get("type") == "content_block_delta":
+                    delta = (evt.get("delta") or {}).get("text") or ""
+                    if delta:
+                        accumulated += delta
+                        now = loop.time()
+                        if now - last_write >= 0.25:
+                            await db.scripts.update_one(
+                                {"id": script_id},
+                                {"$set": {"text": accumulated}},
+                            )
+                            last_write = now
+    return accumulated
+
+
+async def _run_script_job(script_id: str, system_prompt: str, user_message: str, user_email: str | None = None):
     """Background worker — streams Claude's response, writing accumulating text
     back onto the script record so the frontend can render sections as they
     appear (drip / progressive reveal pattern). Falls back to single-shot if
     streaming isn't available on the model."""
+    # BYOK: customer's own Anthropic key streams direct from Anthropic
+    if user_email:
+        try:
+            anthropic_key = await get_byok_key(db, user_email, "anthropic")
+        except Exception:
+            anthropic_key = None
+        if anthropic_key:
+            try:
+                accumulated = await _anthropic_direct_stream(
+                    anthropic_key, script_id, system_prompt, user_message, script_id,
+                )
+                await db.scripts.update_one(
+                    {"id": script_id},
+                    {"$set": {
+                        "status": "complete",
+                        "text": accumulated,
+                        "completed_at": datetime.now(timezone.utc).isoformat(),
+                    }},
+                )
+                return
+            except HTTPException as e:
+                await db.scripts.update_one(
+                    {"id": script_id},
+                    {"$set": {
+                        "status": "failed",
+                        "error": str(e.detail)[:500],
+                        "completed_at": datetime.now(timezone.utc).isoformat(),
+                    }},
+                )
+                return
+            except Exception as e:  # noqa: BLE001
+                await db.scripts.update_one(
+                    {"id": script_id},
+                    {"$set": {
+                        "status": "failed",
+                        "error": str(e)[:500],
+                        "completed_at": datetime.now(timezone.utc).isoformat(),
+                    }},
+                )
+                return
+
     from emergentintegrations.llm.chat import LlmChat, UserMessage, TextDelta, StreamDone  # noqa: E402
     if not EMERGENT_LLM_KEY:
         await db.scripts.update_one(
@@ -3727,7 +3859,7 @@ async def _enqueue_script(*, user: AuthUser, mode: str, topic: str, system_promp
         **extra,
     }
     await db.scripts.insert_one(rec)
-    asyncio.create_task(_run_script_job(script_id, system_prompt, user_message))
+    asyncio.create_task(_run_script_job(script_id, system_prompt, user_message, user_email=user.email))
     rec.pop("_id", None)
     return rec
 
@@ -3929,6 +4061,10 @@ register_uploads_routes(
 # alongside renders + uploads. Separate GridFS bucket (`thumbnails`) so the
 # uploads bucket stays focused on user-supplied B-roll/voiceovers.
 from thumbnails_routes import register_thumbnail_routes  # noqa: E402
+# Import BYOK helper here (the routes are registered below) so the
+# thumbnails rewriter + concepts-from-script can route through a buyer's
+# own Anthropic key when present.
+from byok_routes import register_byok_routes, get_byok_key  # noqa: E402
 
 register_thumbnail_routes(
     api=api,
@@ -3938,6 +4074,7 @@ register_thumbnail_routes(
     emergent_llm_key=EMERGENT_LLM_KEY,
     dev_bypass_email=DEV_BYPASS_EMAIL,
     studio_grant_emails=STUDIO_GRANT_EMAILS,
+    get_byok_key=get_byok_key,
 )
 
 # License redemption + upgrade-target + admin tier-bump tools (Group D).
@@ -3955,10 +4092,11 @@ register_license_routes(
     studio_grant_emails=STUDIO_GRANT_EMAILS,
 )
 
-# BYOK vault — encrypted OpenAI / HeyGen / fal.ai keys for T4 / Founder users.
+# BYOK vault — encrypted Anthropic / OpenAI / HeyGen / fal.ai keys for
+# T4 / Founder users. (get_byok_key was imported above for the thumbnails
+# rewriter; register_byok_routes mounts /api/user/byok* here.)
 # The module also exposes get_byok_key(db, email, service) which the render
 # paths call to decide whether to use a customer's key vs the platform key.
-from byok_routes import register_byok_routes, get_byok_key  # noqa: E402
 
 register_byok_routes(
     api=api,
