@@ -710,7 +710,7 @@ def register_admin_routes(
         q: Optional[str] = Query(None, description="Case-insensitive email substring"),
         sort_by: str = Query(
             "last_seen",
-            regex="^(last_seen|email|scripts_total|renders_total|spend_cents|added_at)$",
+            regex="^(last_seen|email|scripts_total|renders_total|thumbnails_total|spend_cents|added_at)$",
             description="Column to sort by",
         ),
         sort_dir: str = Query("desc", regex="^(asc|desc)$"),

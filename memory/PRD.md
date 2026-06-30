@@ -20,6 +20,70 @@ back to it for entitlement verification.
 
 ## 🔁 Workflow rule: Changelog moves with every change (set 2026-06-29 by user)
 
+### Iteration 36 (2026-06-30) — Group E ships + 2 user-requested follow-ups
+
+**What landed:**
+1. **Group E (BYOK) complete**. Pro Plus + Founder users can save their own
+   Anthropic / OpenAI / HeyGen / fal.ai keys via a new `/settings/keys` page
+   reachable from the Profile menu. Keys are Fernet-encrypted at rest (AES-128
+   + HMAC) and never returned to the client after save — only a masked
+   `sk-…0abc` hint. Render paths use `_override_*_key_ctx` ContextVar to swap
+   keys for the duration of a single render coroutine without touching
+   process-wide env vars.
+2. **Anthropic added as a 4th BYOK service** (user request). When a buyer
+   saves `sk-ant-…`, the Script Engine streaming worker (`_run_script_job`),
+   single-shot completions (`_claude_complete`), thumbnail rewriter, and
+   thumbnail concepts-from-script all route through `httpx →
+   https://api.anthropic.com/v1/messages` directly instead of the Emergent
+   universal LLM key. Falls back silently on lookup failure or rotated key.
+3. **Thumbnail full-screen lightbox** (user request). Clicking any thumbnail
+   in the gallery opens a modal preview with Download + Copy prompt actions.
+   Dismisses via X, backdrop click, or ESC.
+4. **Thumbnails fully wired into Admin usage stats** (user request). New
+   sortable Thumbnails column in `/admin/usage`, Premium/Fast split in the
+   per-buyer drilldown, footer total, new Stats tile, and 4 new CSV export
+   columns.
+
+**Bug fixes:**
+- `/api/me/quota` early-return dicts (owner/grant/founder) now include
+  `byok_allowed:True` so the ProfileMenu API keys link shows up for non-
+  buyer admins (iter_35 HIGH bug).
+- `admin_routes.py` sort_by regex extended to accept `thumbnails_total` —
+  was missing in the validator while `sort_key_map` already had the lambda.
+- `UsageTab.jsx` now coerces FastAPI 422 error array shapes through an
+  `extractErrMsg()` helper so any future Pydantic validation error never
+  crashes the React tree with "Objects are not valid as a React child".
+
+**Files touched (server-side):**
+- `backend/server.py` (BYOK ContextVar, render-path BYOK lookups, Anthropic
+  direct httpx calls, me_quota byok_allowed, _claude_complete + _run_script_job
+  user_email plumbing)
+- `backend/byok_routes.py` (Anthropic added as 1st SERVICE entry)
+- `backend/thumbnails_routes.py` (rewrite-prompt + concepts-from-script BYOK
+  Anthropic branches)
+- `backend/admin_routes.py` (thumbs_by_email aggregation, stitched into
+  buyer rows, total_thumbnails stat, sort_by regex, CSV columns)
+
+**Files touched (frontend):**
+- `frontend/src/pages/SettingsKeys.jsx` (NEW — full BYOK settings page)
+- `frontend/src/pages/Thumbnails.jsx` (lightbox state + modal + zoom hint)
+- `frontend/src/components/ProfileMenu.jsx` (API keys link gated on
+  quota.byok_allowed)
+- `frontend/src/components/admin/UsageTab.jsx` (Thumbnails column, drilldown
+  card, totals, extractErrMsg guard, colSpan fix)
+- `frontend/src/components/admin/StatsTab.jsx` (Thumbnails generated tile)
+- `frontend/src/App.js` (new /settings/keys route)
+- `frontend/src/App.css` (settings-keys-*, thumb-lightbox-*, thumb-tile-img-btn)
+- `frontend/src/changelog.js` (v1.12.0)
+- `memory/CHANGELOG.md` (v1.12.0)
+
+**Testing:** Iteration 36 ran 16 pytest cases (15 pass, 1 surfaced both bugs
+above; all fixed and verified end-to-end via screenshot + curl).
+
+---
+
+
+
 **Hard rule for every agent working on this app:**
 
 1. **Every shipped change must add or extend an entry in `/app/frontend/src/changelog.js` AND `/app/memory/CHANGELOG.md`** — in the SAME action as the code edit. Not "later". Not "before deploy". Same atomic batch as the feature/fix.

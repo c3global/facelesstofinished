@@ -66,6 +66,23 @@ export default function UsageTab() {
     setTimeout(() => setToast(null), 4000);
   }, []);
 
+  // Defensively normalize an axios error into a single human string. FastAPI
+  // returns Pydantic 422 errors as Array<{loc, msg, type, …}>, which React
+  // refuses to render directly ("Objects are not valid as a React child").
+  // This helper handles strings, arrays of validation errors, and unknown
+  // dict shapes uniformly so the toast never crashes the tree.
+  const extractErrMsg = (e, fallback = "Something went wrong") => {
+    const detail = e?.response?.data?.detail;
+    if (Array.isArray(detail)) {
+      return detail.map((d) => (d?.msg || JSON.stringify(d))).join("; ");
+    }
+    if (typeof detail === "string") return detail;
+    if (detail && typeof detail === "object") {
+      return detail.message || JSON.stringify(detail);
+    }
+    return e?.message || fallback;
+  };
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -75,7 +92,7 @@ export default function UsageTab() {
       setItems(r.data.items || []);
       setTotal(r.data.total || 0);
     } catch (e) {
-      showToast(e?.response?.data?.detail || "Failed to load usage", "err");
+      showToast(extractErrMsg(e, "Failed to load usage"), "err");
     } finally {
       setLoading(false);
     }
@@ -100,7 +117,7 @@ export default function UsageTab() {
       URL.revokeObjectURL(url);
       showToast("Usage CSV downloaded");
     } catch (e) {
-      showToast(e?.response?.data?.detail || e?.message || "CSV export failed", "err");
+      showToast(extractErrMsg(e, "CSV export failed"), "err");
     } finally {
       setExporting(false);
     }
@@ -188,10 +205,10 @@ export default function UsageTab() {
           </thead>
           <tbody>
             {loading && (
-              <tr><td colSpan={8} className="admin-empty">Loading…</td></tr>
+              <tr><td colSpan={9} className="admin-empty">Loading…</td></tr>
             )}
             {!loading && items.length === 0 && (
-              <tr><td colSpan={8} className="admin-empty">No customers found.</td></tr>
+              <tr><td colSpan={9} className="admin-empty">No customers found.</td></tr>
             )}
             {!loading && items.map((row) => {
               const open = expanded.has(row.email);
