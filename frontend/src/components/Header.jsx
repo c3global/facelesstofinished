@@ -1,12 +1,12 @@
 import React from "react";
-import { useNavigate, useLocation, NavLink } from "react-router-dom";
-import { LogOut, Sun, Moon, FileText, Wand2, Shield, BookOpen, Image as ImageIcon } from "lucide-react";
+import { useLocation, NavLink } from "react-router-dom";
+import { Sun, Moon, FileText, Wand2, Shield, BookOpen, Image as ImageIcon } from "lucide-react";
 import { useAuth, useTheme } from "../App";
+import ProfileMenu from "./ProfileMenu";
 
 export default function Header() {
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
   const { theme, toggle } = useTheme();
-  const nav = useNavigate();
   const loc = useLocation();
 
   // Logo naming is inverse: the file named "light" has light-colored text and is
@@ -87,9 +87,6 @@ export default function Header() {
         )}
       </div>
       <div className="header-meta">
-        {showNav && (
-          <span className="header-email" data-testid="header-email">{user.email}</span>
-        )}
         <button
           className="theme-toggle"
           data-testid="theme-toggle"
@@ -99,15 +96,7 @@ export default function Header() {
         >
           {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
         </button>
-        {showNav && (
-          <button
-            className="header-btn"
-            data-testid="logout-btn"
-            onClick={() => { logout(); nav("/login"); }}
-          >
-            <LogOut size={13} /> Sign out
-          </button>
-        )}
+        {showNav && <ProfileMenu />}
       </div>
     </header>
   );

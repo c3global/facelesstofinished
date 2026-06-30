@@ -12,6 +12,25 @@ first. Plain English — if you're a customer reading this, this is for you.
 
 ---
 
+## v1.11.0 — June 30, 2026
+
+- **Profile dropdown menu** in the header — quick access to your tier label,
+  redeem codes, and sign out from one place.
+- **NEW: Code redemption flow** — paste any access code on the dedicated
+  **Redeem** page (reachable from a "Have a redemption code?" footer link,
+  an "I have a code instead" toggle on the login screen, and a "Redeem code"
+  item in the Profile dropdown). Generic by design: works for any code,
+  doesn't reveal the channel it came from.
+- **Tier names refreshed** — **Starter** / **Creator** / **Pro** / **Pro Plus**
+  (legacy Founder badge unchanged for our OG members).
+- **Founders now get a subtle copper accent** throughout the app + a
+  small "Founder" badge in the header. Quiet, exclusive, recognizable.
+- **Upgrade button appears in the quota popover** when you're running low
+  on renders. Routes you to the right place automatically (no broken links
+  while we're between campaigns).
+
+---
+
 ## v1.10.2 — June 30, 2026
 
 - **Fixed**: "Make thumbnail" now correctly extracts your 3 cover concepts

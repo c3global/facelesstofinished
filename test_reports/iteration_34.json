@@ -1,0 +1,31 @@
+{
+  "summary": "Iter 34 (Group D — AppSumo Launch) is GREEN. Backend pytest: 27/27 PASS — covers tier rename labels (Starter/Creator/Pro/Pro Plus via /api/me/quota), /api/licenses/redeem (auth-gated, first-time tier bump, same-user idempotent, different-user 409, voided 410, not-found 404, owner protected-no-demote, T3 buyer redeeming T1 code no-downgrade-but-burn), /api/admin/licenses/bulk-create (programmatic + CSV + idempotent + founder-tier rejection), /api/admin/licenses listing+filters (status/tier/q regex)+totals, /api/admin/licenses/{code}/void, /api/admin/buyers/{email}/upgrade-tier (t3 + founder flip + bogus 400), /api/me/upgrade-target (dev_bypass, founder, top_tier, no_url_configured), and non-admin 403 gating. Frontend Playwright (cluster-internal fetch auth path): /redeem page renders with copper KeyRound icon + redeem-input + redeem-submit; footer-redeem-link visible on /redeem AND /scripts; /login toggle navigates to /redeem; /login?redeem=TEST-Z1 deep-link shows login-pending-redeem + 'Sign in to redeem.' title + 'Sign in & redeem' CTA; ProfileMenu replaces flat header (old logout-btn + header-email testids confirmed GONE); profile-menu opens with profile-menu-redeem + profile-menu-signout, NO profile-menu-upgrade for owner (correct dev_bypass); click-outside dismisses menu; body[data-founder='true'] flips nav-link.is-active color to rgb(245, 217, 182) = #F5D9B6 (copper accent verified); Admin Licenses tab present + clickable, licenses-table + licenses-create-btn + licenses-create-panel + licenses-csv-input + licenses-status-filter + licenses-tier-filter + licenses-search all render; zero console errors across /scripts → /admin → /redeem nav.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter34_licenses.py",
+    "/app/test_reports/pytest/iteration_34.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "licenses_routes.py (~545 LOC) — clean self-contained module; atomic find_one_and_update on {_id, status:'available'} prevents redeem race; downgrade-no-rank-bump path still burns code (correct); protected-user check uses union of DEV_BYPASS_EMAIL + STUDIO_GRANT_EMAILS + founders flag (matches spec).",
+    "REDEEMABLE_TIER_IDS frozenset excludes 'founder' — bulk-create test_admin_bulk_create_invalid_tier confirms founder codes are rejected with reason='tier'. Defense-in-depth: the redeem path ALSO double-checks and voids any code with non-redeemable tier that somehow slipped in.",
+    "tier_config.py TIER_T1.label='Starter', T2='Creator', T3='Pro', T4='Pro Plus', FOUNDER='Founder' — verified via parametrized /me/quota test across all 4 seeded buyers.",
+    "/me/upgrade-target — campaign-window logic via APPSUMO_CAMPAIGN_END_AT (accepts date-only or full ISO, treats as end-of-day UTC, defaults to FALSE on malformed input → safe hide). With all 3 env vars blank, returns {visible:false, reason:'no_url_configured'} as expected.",
+    "Auth gating: redeem requires JWT (returns 401/403 unauthenticated); /api/admin/licenses/* all gated by require_admin dep — non-admin (directkynections@gmail.com) properly receives 401/403.",
+    "Frontend ProfileMenu — body[data-founder] flag is properly toggled on mount/unmount via the founder-badge component. CSS copper accent (#F5D9B6 / #C9956C) is correctly applied to .nav-link.is-active under body[data-founder='true'].",
+    "Old logout-btn and header-email data-testids are confirmed REMOVED — clean migration to ProfileMenu.",
+    "Footer redemption link is globally rendered (present on both /redeem and /scripts pages).",
+    "Login deep-link replay /login?redeem=CODE correctly stamps the pending-redeem chip and swaps title/CTA copy; clean useSearchParams + localStorage f48_pending_redeem flow."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter34_licenses.py (new — 27 pytest cases)"
+  ],
+  "success_rate": {"backend": "100% (27/27)", "frontend": "100% — all required testids + behaviors verified via Playwright"},
+  "test_credentials": "Owner/Admin: drcharitycampbell@gmail.com (DEV_BYPASS passwordless). Non-admin: directkynections@gmail.com (STUDIO_GRANT). Seeded buyers use forged JWT signed with backend JWT_SECRET (DEV_BYPASS only honors the configured email).",
+  "seed_data_creation": "Created ~10 temporary buyer docs prefixed test_iter34_*@example.com and ~12 TEST-* redemption codes during the test run. Session-scoped autouse fixture cleans them up after the suite finishes (db.redemption_codes.delete_many + db.buyers.delete_many).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Group D shipped GREEN. Active campaign behavior (APPSUMO_STACK_URL set + future end date → button visible) was not exercised under live env vars — the three env vars remain blank by default. To test that path: set APPSUMO_STACK_URL='https://appsumo.com/products/test' + APPSUMO_CAMPAIGN_END_AT='2027-01-01' in /app/backend/.env, restart backend, then verify /api/me/upgrade-target returns {visible:true, destination:'appsumo'} for a T2 buyer. The studio-quota-upgrade-btn rendering condition is (isLow || isExhausted) && upgrade.visible — with env unset, visible=false makes the button correctly hide. Frontend Playwright must use page.evaluate(fetch('/api/auth/check')) cluster-internal-style for auth — direct requests.post from outside cluster hits the WAF (iter33 documented this).",
+  "rca of the issue": "No bugs found. Spec is fully implemented and all 27 backend + all 11 frontend assertions pass."
+}

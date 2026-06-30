@@ -90,7 +90,7 @@ class Tier:
 
 TIER_T1 = Tier(
     id="t1",
-    label="Script Engine",
+    label="Starter",
     sticker_cents=4_900,             # $49
     entitlements=("base",),
     render_quota_monthly=5,           # 5 free Faceless renders/month for tier credibility
@@ -103,7 +103,7 @@ TIER_T1 = Tier(
 
 TIER_T2 = Tier(
     id="t2",
-    label="Scripts + Shorts",
+    label="Creator",
     sticker_cents=9_900,             # $99
     entitlements=("base", "shorts"),
     render_quota_monthly=10,
@@ -116,7 +116,7 @@ TIER_T2 = Tier(
 
 TIER_T3 = Tier(
     id="t3",
-    label="Studio Pro",
+    label="Pro",
     sticker_cents=17_900,            # $179
     entitlements=("base", "shorts", "studio"),
     render_quota_monthly=15,
@@ -129,7 +129,7 @@ TIER_T3 = Tier(
 
 TIER_T4 = Tier(
     id="t4",
-    label="Studio Pro + BYOK",
+    label="Pro Plus",
     sticker_cents=34_900,            # $349
     entitlements=("base", "shorts", "studio", "byok"),
     render_quota_monthly=40,
@@ -140,6 +140,11 @@ TIER_T4 = Tier(
     byok_allowed=True,
 )
 
+# Founder = special legacy/honorary bucket. NOT redeemable via AppSumo or any
+# public flow — only set by admin grant OR the `founders: true` migration
+# flag on the buyer doc. Kept here so `get_tier("founder")` still resolves
+# cleanly when older code paths look it up by id, but excluded from every
+# redemption / upgrade / pricing surface.
 TIER_FOUNDER = Tier(
     id="founder",
     label="Founder",
@@ -154,8 +159,16 @@ TIER_FOUNDER = Tier(
     is_founder_grandfather=True,
 )
 
-# Order-preserved tuple (low → high sticker, then FOUNDER as a separate bucket).
+# Order-preserved tuple (low → high sticker). Founder is INTENTIONALLY EXCLUDED
+# — it's not a redeemable / purchasable tier, just an honorary legacy bucket.
+# The upgrade-path resolver walks this list to find "next tier above current"
+# without ever surfacing Founder to AppSumo or direct buyers.
 TIERS_ORDERED: tuple[Tier, ...] = (TIER_T1, TIER_T2, TIER_T3, TIER_T4)
+
+# Set of tier ids that are LEGITIMATELY redeemable via /api/licenses/redeem.
+# Used as a hard whitelist when accepting bulk-uploaded redemption codes to
+# prevent an admin from accidentally minting a code that grants Founder.
+REDEEMABLE_TIER_IDS: frozenset[str] = frozenset({t.id for t in TIERS_ORDERED})
 
 # Lookup map for O(1) access by id.
 TIERS_BY_ID: dict[str, Tier] = {t.id: t for t in (TIER_T1, TIER_T2, TIER_T3, TIER_T4, TIER_FOUNDER)}

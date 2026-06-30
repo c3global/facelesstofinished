@@ -1,7 +1,7 @@
-import React, { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { Zap, Mic, Film, ArrowRight } from "lucide-react";
-import { useAuth } from "../App";
+import React, { useEffect, useMemo, useState } from "react";
+import { useNavigate, useSearchParams, Link } from "react-router-dom";
+import { Zap, Mic, Film, ArrowRight, KeyRound } from "lucide-react";
+import { useAuth, apiClient } from "../App";
 
 // Brief landing-feel sign-in page. Two columns on desktop, stacked on
 // mobile. The left column gives non-customers enough context to know
@@ -12,9 +12,11 @@ import { useAuth } from "../App";
 export default function Login() {
   const { login } = useAuth();
   const nav = useNavigate();
+  const [params] = useSearchParams();
   const [email, setEmail] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+  const [pendingRedeem, setPendingRedeem] = useState("");
 
   // Detect returning customers from the durable localStorage flag. Falls
   // back to false on first paint (SSR-safe in case we ever ship one).
@@ -22,6 +24,18 @@ export default function Login() {
     try { return localStorage.getItem("f48_studio_returning") === "1"; }
     catch { return false; }
   }, []);
+
+  // If the user got bounced here from /redeem (because they weren't signed
+  // in yet), the code is in either ?redeem=… or localStorage. Pick it up
+  // and replay after a successful sign-in. Mirrors the "deep link continue"
+  // pattern from Stripe checkout success flows.
+  useEffect(() => {
+    const urlCode = params.get("redeem");
+    let stash = "";
+    try { stash = localStorage.getItem("f48_pending_redeem") || ""; } catch {}
+    const code = (urlCode || stash || "").trim();
+    if (code) setPendingRedeem(code);
+  }, [params]);
 
   const submit = async (e) => {
     e.preventDefault();
@@ -38,6 +52,20 @@ export default function Login() {
           sessionStorage.setItem("f48_pending_welcome", JSON.stringify(welcome));
         } catch {}
       }
+
+      // Replay a deferred redemption now that auth is established. If it
+      // succeeds the user lands on /redeem and sees the success state;
+      // failures still navigate to /redeem so the error message renders
+      // in context rather than as a silent failure.
+      if (pendingRedeem) {
+        try {
+          await apiClient.post("/licenses/redeem", { code: pendingRedeem });
+        } catch { /* surface on /redeem */ }
+        try { localStorage.removeItem("f48_pending_redeem"); } catch {}
+        nav(`/redeem?code=${encodeURIComponent(pendingRedeem)}`);
+        return;
+      }
+
       // Default landing on the Script Engine — Studio access is gated and
       // many customers only purchased Faceless to Finished (no Studio).
       nav("/scripts");
@@ -119,13 +147,21 @@ export default function Login() {
         <form className="login-card" onSubmit={submit} data-testid="login-form">
           <p className="login-eyebrow">Studio Access</p>
           <h2 className="login-title" data-testid="login-title">
-            {isReturning ? "Welcome back." : "Sign in."}
+            {pendingRedeem ? "Sign in to redeem." : isReturning ? "Welcome back." : "Sign in."}
           </h2>
           <p className="login-sub">
-            {isReturning
+            {pendingRedeem
+              ? "Sign in with your email and we'll apply your code automatically."
+              : isReturning
               ? "Enter your email to jump back into the Studio."
               : "Use the email you purchased Faceless to Finished with — no password needed."}
           </p>
+          {pendingRedeem && (
+            <div className="login-pending-redeem" data-testid="login-pending-redeem">
+              <KeyRound size={13} />
+              <span>Code: <b>{pendingRedeem}</b></span>
+            </div>
+          )}
           <div className="login-form">
             <input
               type="email"
@@ -143,9 +179,18 @@ export default function Login() {
               data-testid="login-submit-btn"
               disabled={busy || !email}
             >
-              {busy ? "Signing in…" : "Enter Studio"}
+              {busy ? "Signing in…" : pendingRedeem ? "Sign in & redeem" : "Enter Studio"}
             </button>
             {err && <p className="login-error" data-testid="login-error">{err}</p>}
+            {!pendingRedeem && (
+              <Link
+                to="/redeem"
+                className="login-redeem-toggle"
+                data-testid="login-redeem-toggle"
+              >
+                <KeyRound size={12} /> I have a redemption code instead
+              </Link>
+            )}
           </div>
         </form>
         </div>

@@ -324,6 +324,15 @@ def require_studio(user: AuthUser) -> None:
         raise HTTPException(status_code=403, detail="Studio entitlement required")
 
 
+async def require_admin(user: AuthUser = Depends(current_user)) -> AuthUser:
+    """Top-level admin dependency. `admin_routes.py` defines its own inner
+    copy for historical reasons; this one is shared with `licenses_routes.py`
+    and any future modular routers that need the same gate."""
+    if not (user.is_admin or user.email.lower() in ADMIN_EMAILS):
+        raise HTTPException(status_code=403, detail="Admin only")
+    return user
+
+
 # ---------------------------------------------------------------------------
 # Auth routes
 # ---------------------------------------------------------------------------
@@ -3881,6 +3890,21 @@ register_thumbnail_routes(
     current_user_dep=current_user,
     log_activity=_log_activity,
     emergent_llm_key=EMERGENT_LLM_KEY,
+    dev_bypass_email=DEV_BYPASS_EMAIL,
+    studio_grant_emails=STUDIO_GRANT_EMAILS,
+)
+
+# License redemption + upgrade-target + admin tier-bump tools (Group D).
+# Kept self-contained so server.py doesn't accumulate another 400 LOC and
+# the AppSumo launch logic can evolve independently.
+from licenses_routes import register_license_routes  # noqa: E402
+
+register_license_routes(
+    api=api,
+    db=db,
+    current_user_dep=current_user,
+    require_admin_dep=require_admin,
+    log_activity=_log_activity,
     dev_bypass_email=DEV_BYPASS_EMAIL,
     studio_grant_emails=STUDIO_GRANT_EMAILS,
 )

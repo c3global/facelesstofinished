@@ -14,9 +14,20 @@
 //    See PRD.md → "Workflow rule: changelog must move with every deploy."
 // 4. Most recent on top. Each entry has version + date + bullet list.
 
-export const APP_VERSION = "1.10.2";
+export const APP_VERSION = "1.11.0";
 
 export const CHANGELOG = [
+  {
+    version: "1.11.0",
+    date: "2026-06-30",
+    changes: [
+      "Profile dropdown menu in the header — quick access to your tier, redeem codes, and sign out from one place",
+      "New code redemption flow — paste any access code on the Redeem page (linked from the footer, the login screen, and your Profile menu) and we'll unlock your plan instantly",
+      "Tier names refreshed — Starter / Creator / Pro / Pro Plus (Founder badge unchanged for our OG legacy members)",
+      "Founders now get a subtle copper accent throughout the app + a 'Founder' badge in the header",
+      "Upgrade button appears in the quota popover when you're running low — links to the right place automatically",
+    ],
+  },
   {
     version: "1.10.2",
     date: "2026-06-30",

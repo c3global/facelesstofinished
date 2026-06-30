@@ -1,4 +1,5 @@
 import React from "react";
+import { Link } from "react-router-dom";
 import { APP_VERSION, CHANGELOG } from "../changelog.js";
 
 // Site footer — port of the legacy Netlify Footer (/app/legacy_netlify/src/
@@ -75,6 +76,13 @@ export default function Footer() {
       <div className="footer-text">
         <div className="footer-line">
           <span data-testid="footer-copyright">© 2026 C3 Global</span>
+          <Link
+            to="/redeem"
+            className="footer-link"
+            data-testid="footer-redeem-link"
+          >
+            Have a redemption code?
+          </Link>
           <details
             className="footer-changelog"
             data-testid="footer-changelog"

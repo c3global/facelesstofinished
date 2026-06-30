@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Zap, Crown, X } from "lucide-react";
+import { Zap, Crown, X, ArrowUpCircle } from "lucide-react";
 import { apiClient } from "../App";
 
 /**
@@ -37,16 +37,22 @@ function daysUntil(iso) {
 
 export default function StudioQuotaPill({ bump = 0 }) {
   const [quota, setQuota] = useState(null);
+  const [upgrade, setUpgrade] = useState(null);
   const [open, setOpen] = useState(false);
   const popoverRef = useRef(null);
 
   const load = useCallback(async () => {
     try {
-      const r = await apiClient.get("/me/quota");
-      setQuota(r.data);
+      const [q, u] = await Promise.all([
+        apiClient.get("/me/quota"),
+        apiClient.get("/me/upgrade-target"),
+      ]);
+      setQuota(q.data);
+      setUpgrade(u.data);
     } catch {
       // Quota endpoint failing shouldn't break the page — just hide the pill.
       setQuota(null);
+      setUpgrade(null);
     }
   }, []);
 
@@ -167,6 +173,26 @@ export default function StudioQuotaPill({ bump = 0 }) {
               You've used every render this cycle.
               {resetLabel && <> Renders unlock again on <b>{resetLabel}</b>.</>}
             </div>
+          )}
+
+          {/* Upgrade CTA — only renders when (a) quota is low/exhausted AND
+              (b) the backend's /me/upgrade-target says it's visible (which
+              accounts for tier ceiling, founder status, and the auto-flip
+              between AppSumo stack URL and your own pricing URL based on
+              the campaign window). Hidden completely otherwise so it
+              doesn't pester users who have plenty of headroom. */}
+          {(isLow || isExhausted) && upgrade?.visible && upgrade.url && (
+            <a
+              href={upgrade.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="quota-pop-upgrade-btn"
+              data-testid="studio-quota-upgrade-btn"
+              onClick={() => setOpen(false)}
+            >
+              <ArrowUpCircle size={13} />
+              <span>{upgrade.label || "Upgrade your plan"}</span>
+            </a>
           )}
         </div>
       )}

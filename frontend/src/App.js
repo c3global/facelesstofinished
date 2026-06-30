@@ -5,6 +5,7 @@ import Studio from "./pages/Studio";
 import Scripts from "./pages/Scripts";
 import Resources from "./pages/Resources";
 import Thumbnails from "./pages/Thumbnails";
+import Redeem from "./pages/Redeem";
 import Login from "./pages/Login";
 import Admin from "./pages/Admin";
 import Header from "./components/Header";
@@ -189,6 +190,7 @@ export default function App() {
             <Route path="/scripts" element={<RequireAuth><Scripts /></RequireAuth>} />
             <Route path="/thumbnails" element={<RequireAuth><Thumbnails /></RequireAuth>} />
             <Route path="/resources" element={<RequireAuth><Resources /></RequireAuth>} />
+            <Route path="/redeem" element={<Redeem />} />
             <Route path="/admin" element={<RequireAuth><Admin /></RequireAuth>} />
             <Route path="/" element={<Navigate to="/scripts" replace />} />
             <Route path="*" element={<Navigate to="/scripts" replace />} />

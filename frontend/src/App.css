@@ -5592,3 +5592,548 @@
 }
 .thumb-modal-btn-primary:hover { filter: brightness(1.08); }
 
+
+/* ============================================================================
+ * Group D — License redemption / Profile dropdown / Founder theme accent
+ * ========================================================================= */
+
+/* ---- Profile dropdown (top-right of header) -------------------------- */
+.profile-menu-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.profile-menu-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px 6px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(127,119,221,0.28);
+  background: rgba(15,10,30,0.45);
+  color: #E8E1F8;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+.profile-menu-trigger:hover { background: rgba(127,119,221,0.18); border-color: rgba(127,119,221,0.5); }
+.profile-menu-trigger.is-founder {
+  border-color: rgba(201,149,108,0.55);
+  background: linear-gradient(135deg, rgba(201,149,108,0.14), rgba(127,119,221,0.10));
+}
+.profile-menu-trigger.is-founder:hover {
+  border-color: rgba(201,149,108,0.85);
+  background: linear-gradient(135deg, rgba(201,149,108,0.22), rgba(127,119,221,0.14));
+}
+.profile-menu-email {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.profile-menu-caret {
+  transition: transform 0.15s ease;
+  opacity: 0.7;
+}
+.profile-menu-caret.is-open { transform: rotate(180deg); }
+
+.profile-founder-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #C9956C, #8E6B4D);
+  color: #1B0F2A;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.profile-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 240px;
+  max-width: 320px;
+  z-index: 50;
+  border-radius: 12px;
+  border: 1px solid rgba(127,119,221,0.4);
+  background: #0F0A1E;
+  box-shadow: 0 18px 50px rgba(0,0,0,0.5);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+}
+.profile-menu-head {
+  padding: 10px 12px 12px;
+  border-bottom: 1px solid rgba(127,119,221,0.2);
+  margin-bottom: 6px;
+}
+.profile-menu-email-full {
+  font-size: 12px;
+  color: rgba(216,210,234,0.7);
+  word-break: break-all;
+  line-height: 1.4;
+}
+.profile-menu-tier {
+  margin-top: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(127,119,221,0.35);
+  background: rgba(127,119,221,0.12);
+  color: #DCD5FF;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.profile-menu-tier.is-founder {
+  border-color: rgba(201,149,108,0.55);
+  background: linear-gradient(135deg, rgba(201,149,108,0.22), rgba(127,119,221,0.12));
+  color: #F5D9B6;
+}
+.profile-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: none;
+  background: none;
+  color: #E8E1F8;
+  font-size: 13px;
+  cursor: pointer;
+  text-decoration: none;
+  width: 100%;
+  text-align: left;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+.profile-menu-item:hover { background: rgba(127,119,221,0.18); color: #FFFAEC; }
+.profile-menu-item-upgrade {
+  color: #F5D9B6;
+  font-weight: 700;
+}
+.profile-menu-item-upgrade:hover {
+  background: linear-gradient(135deg, rgba(201,149,108,0.22), rgba(127,119,221,0.16));
+  color: #FFFAEC;
+}
+.profile-menu-item-signout {
+  color: rgba(255,180,180,0.85);
+  border-top: 1px solid rgba(127,119,221,0.2);
+  margin-top: 4px;
+  border-radius: 0 0 8px 8px;
+}
+.profile-menu-item-signout:hover { background: rgba(229,99,99,0.18); color: #FFC4C4; }
+
+/* ---- Footer redemption link ------------------------------------------ */
+.footer-link {
+  color: rgba(216,210,234,0.55);
+  text-decoration: none;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  margin: 0 12px;
+  transition: color 0.15s ease;
+}
+.footer-link:hover { color: #C9956C; }
+
+/* ---- Login page: pending redeem banner + redeem toggle --------------- */
+.login-pending-redeem {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  margin: 0 0 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(201,149,108,0.45);
+  background: linear-gradient(135deg, rgba(201,149,108,0.14), rgba(127,119,221,0.10));
+  color: #F5D9B6;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+.login-pending-redeem b {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11.5px;
+  color: #FFFAEC;
+  letter-spacing: 0.04em;
+}
+.login-redeem-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 14px;
+  font-size: 12px;
+  color: rgba(216,210,234,0.6);
+  text-decoration: none;
+  letter-spacing: 0.02em;
+  transition: color 0.15s ease;
+  align-self: center;
+}
+.login-redeem-toggle:hover { color: #C9956C; }
+
+/* ---- Redeem page ----------------------------------------------------- */
+.redeem-main {
+  min-height: calc(100vh - 200px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+}
+.redeem-card {
+  width: 100%;
+  max-width: 440px;
+  padding: 32px 28px 24px;
+  border-radius: 16px;
+  border: 1px solid rgba(127,119,221,0.28);
+  background: rgba(15,10,30,0.7);
+  box-shadow: 0 20px 60px rgba(0,0,0,0.45);
+  text-align: center;
+}
+.redeem-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px; height: 56px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, rgba(201,149,108,0.22), rgba(127,119,221,0.16));
+  border: 1px solid rgba(201,149,108,0.55);
+  color: #C9956C;
+  margin-bottom: 16px;
+}
+.redeem-title {
+  font-size: 24px;
+  font-weight: 700;
+  color: #FFFAEC;
+  margin: 0 0 8px;
+}
+.redeem-sub {
+  font-size: 14px;
+  color: rgba(216,210,234,0.7);
+  margin: 0 0 24px;
+  line-height: 1.5;
+}
+.redeem-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  text-align: left;
+}
+.redeem-label {
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #C9956C;
+  font-weight: 700;
+}
+.redeem-form input {
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(127,119,221,0.3);
+  background: rgba(8,5,20,0.7);
+  color: #FFFAEC;
+  font-size: 14px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  letter-spacing: 0.06em;
+  text-align: center;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+.redeem-form input:focus {
+  outline: none;
+  border-color: rgba(201,149,108,0.7);
+  background: rgba(8,5,20,0.9);
+}
+.redeem-submit-btn {
+  margin-top: 8px;
+  padding: 12px 18px;
+  border-radius: 999px;
+  border: 1px solid rgba(201,149,108,0.6);
+  background: linear-gradient(135deg, #C9956C, #8E6B4D);
+  color: #1B0F2A;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: filter 0.15s ease, transform 0.1s ease;
+}
+.redeem-submit-btn:hover:not(:disabled) { filter: brightness(1.1); transform: translateY(-1px); }
+.redeem-submit-btn:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
+.redeem-error {
+  margin-top: 4px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(229,99,99,0.10);
+  border: 1px solid rgba(229,99,99,0.4);
+  color: #FFD0D0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  text-align: left;
+}
+.redeem-success {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 24px 16px 20px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(120,200,180,0.12), rgba(127,119,221,0.10));
+  border: 1px solid rgba(120,200,180,0.5);
+  color: #BFEFE3;
+}
+.redeem-success > svg { color: #BFEFE3; }
+.redeem-success strong {
+  display: block;
+  font-size: 16px;
+  color: #FFFAEC;
+  margin-bottom: 4px;
+}
+.redeem-success p {
+  margin: 0;
+  font-size: 13px;
+
+/* ---- Admin Licenses tab --------------------------------------------- */
+.admin-select {
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(127,119,221,0.3);
+  background: rgba(8,5,20,0.7);
+  color: #E8E1F8;
+  font-size: 12px;
+  cursor: pointer;
+}
+.admin-select:focus {
+  outline: none;
+  border-color: rgba(201,149,108,0.65);
+}
+.admin-textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(127,119,221,0.3);
+  background: rgba(8,5,20,0.6);
+  color: #F0EBFF;
+  font-size: 12.5px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  line-height: 1.5;
+  resize: vertical;
+  margin: 10px 0;
+}
+.admin-textarea:focus {
+  outline: none;
+  border-color: rgba(201,149,108,0.65);
+  background: rgba(8,5,20,0.85);
+}
+.admin-create-panel {
+  margin: 14px 0 18px;
+  padding: 16px 18px;
+  border-radius: 12px;
+  border: 1px solid rgba(127,119,221,0.3);
+  background: rgba(15,10,30,0.55);
+}
+.admin-create-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  gap: 12px;
+}
+.admin-create-head h4 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: #FFFAEC;
+  letter-spacing: 0.04em;
+  flex: 1 1 auto;
+}
+.admin-create-head .admin-icon-btn {
+  flex: 0 0 auto;
+}
+.admin-create-hint {
+  margin: 0 0 6px;
+  font-size: 12px;
+  color: rgba(216,210,234,0.6);
+  line-height: 1.6;
+}
+.admin-create-hint code {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11.5px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(127,119,221,0.12);
+  color: #DCD5FF;
+}
+.admin-create-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+}
+.admin-create-row > label {
+  display: flex !important;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 160px;
+  flex: 1 1 200px;
+}
+.admin-create-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: #C9956C;
+  font-weight: 700;
+}
+.admin-create-row input {
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(127,119,221,0.3);
+  background: rgba(8,5,20,0.7);
+  color: #F0EBFF;
+  font-size: 12.5px;
+  font-family: inherit;
+}
+.admin-create-row input:focus {
+  outline: none;
+  border-color: rgba(201,149,108,0.65);
+}
+.admin-td-code {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11.5px;
+  letter-spacing: 0.04em;
+  color: #F0EBFF;
+}
+.licenses-status {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.licenses-status-available {
+  background: rgba(120,200,180,0.18);
+  color: #BFEFE3;
+  border: 1px solid rgba(120,200,180,0.45);
+}
+.licenses-status-redeemed {
+  background: rgba(127,119,221,0.22);
+  color: #DCD5FF;
+  border: 1px solid rgba(127,119,221,0.5);
+}
+.licenses-status-void {
+  background: rgba(229,99,99,0.14);
+  color: #FFC4C4;
+  border: 1px solid rgba(229,99,99,0.45);
+}
+.admin-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px; height: 26px;
+  border-radius: 6px;
+  border: 1px solid rgba(127,119,221,0.3);
+  background: transparent;
+  color: rgba(216,210,234,0.7);
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.admin-icon-btn:hover { background: rgba(229,99,99,0.18); color: #FFC4C4; border-color: rgba(229,99,99,0.45); }
+
+  color: rgba(216,210,234,0.85);
+  line-height: 1.45;
+}
+.redeem-go-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 18px;
+  margin-top: 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(201,149,108,0.6);
+  background: linear-gradient(135deg, #C9956C, #8E6B4D);
+  color: #1B0F2A;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  text-decoration: none;
+}
+.redeem-go-btn:hover { filter: brightness(1.1); }
+.redeem-foot {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(127,119,221,0.2);
+}
+.redeem-foot-link {
+  color: rgba(216,210,234,0.55);
+  font-size: 12px;
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+.redeem-foot-link:hover { color: #C9956C; }
+
+/* ---- Quota popover upgrade button ------------------------------------ */
+.quota-pop-upgrade-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  margin-top: 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(201,149,108,0.6);
+  background: linear-gradient(135deg, #C9956C, #8E6B4D);
+  color: #1B0F2A;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  text-decoration: none;
+  transition: filter 0.15s ease;
+}
+.quota-pop-upgrade-btn:hover { filter: brightness(1.1); }
+
+/* ============================================================================
+ * Founder theme accent — flipped via body[data-founder="true"] when the
+ * ProfileMenu detects the legacy `founders: true` flag. Swaps the dominant
+ * purple `--accent` to copper across the most visible surfaces. Non-founders
+ * see the existing purple theme; founders see a quiet copper highlight that
+ * makes the app feel exclusive without being shouty.
+ *
+ * We DO NOT swap every color token — only the ones that read as "brand
+ * accent" (focus rings, primary CTA fills, nav active underline, quota pill
+ * border). Component-specific copper accents (.thumb-modal-btn-primary, etc)
+ * keep their copper regardless since copper is already a brand color.
+ * ========================================================================= */
+body[data-founder="true"] .nav-link.is-active {
+  color: #F5D9B6;
+}
+body[data-founder="true"] .nav-link.is-active::after {
+  background: linear-gradient(90deg, #C9956C, #E0A458) !important;
+}
+body[data-founder="true"] .quota-pill:not(.quota-pill-unlimited):not(.is-low):not(.is-exhausted) {
+  border-color: rgba(201,149,108,0.45);
+}
+body[data-founder="true"] .quota-pill:not(.quota-pill-unlimited):hover {
+  background: rgba(201,149,108,0.18);
+}
+body[data-founder="true"] .quota-pill .quota-pill-text {
+  color: #F5D9B6;
+}
+body[data-founder="true"] .header-btn {
+  border-color: rgba(201,149,108,0.5);
+}
+body[data-founder="true"] .header-btn:hover {
+  background: rgba(201,149,108,0.18);
+}
+body[data-founder="true"] a:focus-visible,
+body[data-founder="true"] button:focus-visible,
+body[data-founder="true"] input:focus-visible,
+body[data-founder="true"] textarea:focus-visible {
+  outline-color: rgba(201,149,108,0.7);
+}
+
