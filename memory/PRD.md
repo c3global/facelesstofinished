@@ -20,6 +20,48 @@ back to it for entitlement verification.
 
 ## 🔁 Workflow rule: Changelog moves with every change (set 2026-06-29 by user)
 
+### Iteration 39 (2026-06-30) — Refactor + CORS fix (v1.15.0)
+
+**3 backlog items shipped together — zero regressions:**
+
+1. **Cross-origin auth-me fixed.** Previous CORS config had
+   `allow_origins=["*"] + allow_credentials=True` — silently invalid per
+   W3C spec. Browsers MUST reject the combination on credentialed
+   requests, which manifested as failing `/api/auth/me` calls when the
+   deployed frontend lives on a different host. Fix: drop
+   `allow_credentials=True` (frontend uses bearer JWT, not cookies), use
+   `allow_origin_regex=".*"` by default, with explicit `FRONTEND_ORIGINS`
+   env-var whitelist for production. Verified end-to-end: cross-origin
+   GET `/api/auth/me` with `Origin: https://different.test` returns 200
+   + valid CORS headers + correct user JSON.
+2. **server.py refactor pass 1.** Caption burn-in pipeline extracted to
+   `backend/caption_burn_in.py` (158 lines, single public surface, soft-
+   fails to None, BYOK-aware `fal_key_provider` callable). server.py
+   compat shim re-exports for any legacy import path. 7-test pytest
+   regression suite locks the contract through the extraction. server.py
+   shrunk from ~4144 → 4046 lines.
+3. **Scripts.jsx refactor pass 1.** Constants (`MODES`, `STEPS`,
+   `LENGTHS`, `PLATFORMS`, `TAGLINES`, `LONG_PHASES`, `SHORTS_PHASES`,
+   `SPRINT_PHASES`, `angleKey`, `currentStreamingPhase`) extracted to
+   `components/scripts/scriptsConstants.js`. The platform-accent
+   side-effect (mirrors active platform onto
+   `documentElement[data-platform]`) extracted to
+   `hooks/usePlatformAccent.js`. Scripts.jsx shrunk from 1618 → 1545
+   lines. No behavioural change — same data-testids, same renders,
+   contrast fix for TikTok cyan still works (CTA computed color
+   = rgb(11, 26, 26)).
+
+**Testing**: iteration_39.json — 13/13 PASS, 7/7 caption pytest, 100%
+frontend assertions. Testing agent flagged 3 non-blocking refactor
+opportunities for future passes: (a) server.py still 4046 lines —
+extract render pipelines next; (b) `@app.on_event` → lifespan handlers
+migration overdue; (c) `regex=` Query args should migrate to `pattern=`
+in admin_routes.py.
+
+---
+
+
+
 ### Iteration 38 (2026-06-30) — User bug batch + carry-over tasks (v1.14.0)
 
 **Bugs reported by user:**
