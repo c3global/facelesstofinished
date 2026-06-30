@@ -14,9 +14,20 @@
 //    See PRD.md → "Workflow rule: changelog must move with every deploy."
 // 4. Most recent on top. Each entry has version + date + bullet list.
 
-export const APP_VERSION = "1.10.0";
+export const APP_VERSION = "1.10.1";
 
 export const CHANGELOG = [
+  {
+    version: "1.10.1",
+    date: "2026-06-30",
+    changes: [
+      "Long-form scripts now get 3 Title/Thumbnail variants + 3 ready-to-go Cover Image Prompts (matches what Shorts has had all along)",
+      "Click 'Make thumbnail' on any new script and you'll see a picker of 3 cover concepts — choose the one you like, or hit 'Generate all 3' to compare them side-by-side",
+      "Dramatically upgraded the thumbnail rewriter — every prompt now bakes in viral YouTube thumbnail rules: expressive focal subject, bold color palette, dramatic cinematic lighting, clear space for overlay text",
+      "Final image prompts get a hidden viral-style boost suffix before they hit OpenAI — more 'top creator' production quality, less stock-photo flat",
+      "Confirmation prompt when you hit 'Generate all 3' on a quota-bound tier — never burn 3 slots by accident",
+    ],
+  },
   {
     version: "1.10.0",
     date: "2026-06-30",

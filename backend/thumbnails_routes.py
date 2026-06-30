@@ -43,10 +43,28 @@ logger = logging.getLogger("thumbnails")
 # don't expose an explicit aspect parameter, but they reliably honor format
 # cues embedded in the prompt. Tested on both gpt-image-1 + Nano Banana.
 ASPECT_HINTS: dict[str, str] = {
-    "16_9": "Format: 16:9 widescreen landscape composition, optimized as a YouTube video thumbnail. Bold focal subject, high contrast, clear negative space for overlay text.",
+    "16_9": "Format: 16:9 widescreen landscape composition, optimized as a YouTube video thumbnail. Bold focal subject, high contrast, clear negative space on the upper-right or upper-left for overlay text.",
     "9_16":  "Format: 9:16 vertical portrait composition, optimized as a YouTube Shorts / Instagram Reels / TikTok cover. Subject framed in the upper-third, eye-line clear of platform UI overlays.",
     "1_1":  "Format: 1:1 square composition, optimized for Instagram feed posts. Balanced central subject, edge-safe layout (no critical detail in the outer 10%).",
 }
+
+# Viral thumbnail style suffix appended to EVERY final image prompt before
+# it hits gpt-image-1 (or Gemini Nano Banana). Forces the model toward the
+# bold, high-contrast, expressive-subject aesthetic that wins clicks on
+# YouTube/Shorts/Reels. Without this suffix, gpt-image-1 tends to produce
+# tasteful-but-flat stock-photo compositions that get scrolled past.
+#
+# Note: NO explicit "no text" / "no typography" instruction here — that's
+# already part of the rewriter's system prompt and gpt-image-1 sometimes
+# tries to over-correct by rendering watermarks if we double up on it.
+VIRAL_STYLE_SUFFIX = (
+    "Photorealistic, ultra-detailed, sharp focus, 4K rendering quality. "
+    "Dramatic cinematic lighting with strong rim light and high contrast. "
+    "Hyper-saturated bold color palette — vivid accents, deep shadows. "
+    "Professional viral YouTube thumbnail aesthetic, mirroring top creator "
+    "production quality. Expressive focal subject framed prominently, "
+    "clear negative space for overlay text. Eye-catching at thumbnail size."
+)
 
 
 # Premium engine is OpenAI's flagship. Gemini's Nano Banana is the fast lane.
@@ -113,12 +131,36 @@ def register_thumbnail_routes(
 
         system = (
             "You are a thumbnail-prompt rewriter for a YouTube creator tool. "
-            "Take the user's casual idea and rewrite it as ONE punchy image-generation "
-            "prompt (60-120 words). Be VISUAL: name the subject, lighting, mood, "
-            "composition, color palette. Avoid words inside the image — describe a "
-            "background that LEAVES ROOM for overlay text instead. Never include the "
-            "user's literal headline as on-image typography. Output ONLY the rewritten "
-            "prompt, no preamble, no quotation marks, no markdown."
+            "Your job: take the user's casual idea and rewrite it as ONE punchy "
+            "image-generation prompt (90-160 words) optimized for a VIRAL "
+            "YouTube/Shorts thumbnail.\n\n"
+            "MUST INCLUDE in every rewrite:\n"
+            "• A specific, expressive HUMAN FOCAL SUBJECT (or a single iconic object) "
+            "  taking up 40-60% of the frame. If a person: describe their exact facial "
+            "  expression — shocked, gasping wide-eyed, smug grin, mouth open in awe, "
+            "  finger pointing in disbelief. Avoid neutral resting faces.\n"
+            "• A BOLD COLOR PALETTE with at least one high-saturation accent "
+            "  (electric blue, neon red, golden yellow, magenta, cyan). State the "
+            "  exact palette explicitly.\n"
+            "• DRAMATIC CINEMATIC LIGHTING — rim light, golden-hour glow, hard "
+            "  side-light, godrays, or studio key-light with strong shadow falloff. "
+            "  Name the light type.\n"
+            "• A CURIOSITY GAP visual — a transformation (before/after), a comparison "
+            "  (vs / arrow), a giant number, a hidden reveal, or a 'wait, what?' "
+            "  composition. Pick ONE.\n"
+            "• EXPLICIT NEGATIVE SPACE on one side (upper-right or upper-left) "
+            "  where overlay text will sit. State which side.\n"
+            "• An aspirational, premium 'top YouTube creator' production quality — "
+            "  4K, sharp focus, professional thumbnail composition.\n\n"
+            "MUST AVOID:\n"
+            "• Words, letters, or any typography on the image itself.\n"
+            "• Generic stock-photo language ('businessman standing', 'happy woman').\n"
+            "• Neutral, flat, or 'tasteful' compositions — thumbnails are LOUD.\n"
+            "• Multiple humans (one focal subject only, unless the comparison "
+            "  composition requires exactly two).\n"
+            "• Cluttered backgrounds — keep it bold and readable at 1 inch tall.\n\n"
+            "Output ONLY the rewritten prompt as a single paragraph. No preamble, no "
+            "quotation marks, no markdown, no labels."
         )
         topic_hint = f"\n\nScript topic (for grounding only): {payload.topic}" if payload.topic else ""
         message = (
@@ -176,11 +218,14 @@ def register_thumbnail_routes(
             studio_grant_emails=studio_grant_emails,
         )
 
-        # Compose the prompt sent to the image model. Aspect hints go AFTER
-        # the user prompt so the subject leads and the format constraint
-        # follows — produces noticeably better composition than the
-        # opposite order in our manual A/B testing.
-        composed_prompt = f"{payload.prompt}\n\n{ASPECT_HINTS[aspect]}"
+        # Compose the prompt sent to the image model in three stacked layers:
+        #   1. User prompt (what the SUBJECT is)
+        #   2. Aspect hint (composition + overlay-text safe zone)
+        #   3. Viral style suffix (lighting, palette, "viral YouTube" quality)
+        # Stacked in this order so the subject leads, the format constraint
+        # follows, and the style language anchors the model in the viral-
+        # thumbnail aesthetic rather than tasteful stock-photo composition.
+        composed_prompt = f"{payload.prompt}\n\n{ASPECT_HINTS[aspect]}\n\n{VIRAL_STYLE_SUFFIX}"
 
         thumb_id = uuid.uuid4().hex
         try:

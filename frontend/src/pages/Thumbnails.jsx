@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ImageIcon, Sparkles, Wand2, Loader2, Trash2, Download, RefreshCw,
-  Zap, Crown, Lock, Copy as CopyIcon,
+  Zap, Crown, Lock, Copy as CopyIcon, Layers, Check,
 } from "lucide-react";
 import { apiClient } from "../App";
 
@@ -66,10 +66,19 @@ export default function Thumbnails() {
   const [history, setHistory] = useState([]);
   const [loadingHistory, setLoadingHistory] = useState(true);
   const [generating, setGenerating] = useState(false);
+  const [batchStatus, setBatchStatus] = useState(null);  // {current, total} when generating all 3
   const [rewriting, setRewriting] = useState(false);
   const [error, setError] = useState("");
   const [toast, setToast] = useState("");
   const [quota, setQuota] = useState(null);
+
+  // ---- Cover-prompt picker state (v1.10.1) ----
+  // When the user arrives from Scripts via "Make thumbnail", we may receive a
+  // list of pre-written cover prompts (one per title variant). User can pick
+  // one OR fire "Generate all" which renders all 3 in sequence.
+  const [coverChoices, setCoverChoices] = useState([]);
+  const [selectedChoiceIndex, setSelectedChoiceIndex] = useState(null);
+  const [confirmBatch, setConfirmBatch] = useState(false);
 
   const flashToast = (msg) => {
     setToast(msg);
@@ -97,11 +106,11 @@ export default function Thumbnails() {
 
   useEffect(() => { loadHistory(); loadQuota(); }, [loadHistory, loadQuota]);
 
-  // ---- Handoff pickup (v1.9.0) ----
+  // ---- Handoff pickup (v1.10.1) ----
   // When a user lands here from Scripts via "Make thumbnail", the Scripts
-  // page stashes the script topic + opening hook in localStorage. Read it
-  // once on mount, pre-fill the inputs, and clear so a manual revisit
-  // doesn't re-populate stale data.
+  // page stashes the script topic + an optional list of cover-prompt
+  // choices in localStorage. Read it once on mount, populate state, and
+  // clear so a manual revisit doesn't re-populate stale data.
   useEffect(() => {
     let raw = null;
     try { raw = localStorage.getItem("f48_handoff_thumbnail"); } catch { return; }
@@ -109,13 +118,39 @@ export default function Thumbnails() {
     try {
       const handoff = JSON.parse(raw);
       if (handoff?.topic) setTopic((cur) => cur || handoff.topic);
-      if (handoff?.seed) {
+
+      // Default aspect to 16:9 for long-form scripts, 9:16 for shorts/sprint
+      // so the user doesn't have to flip it after handoff. Override their
+      // last manual selection only on first arrival.
+      if (handoff?.mode === "long") setAspect("16_9");
+      else if (handoff?.mode === "shorts" || handoff?.mode === "sprint") setAspect("9_16");
+
+      // Path A — script has 3 picked-apart cover prompts → show the picker.
+      if (Array.isArray(handoff?.choices) && handoff.choices.length > 0) {
+        setCoverChoices(handoff.choices);
+        // Auto-select the first option so the prompt textarea has content
+        // — keeps "Generate thumbnail" enabled even if the user doesn't click
+        // a chip first. They can click another chip to swap.
+        setSelectedChoiceIndex(handoff.choices[0].index);
+        setPrompt(handoff.choices[0].prompt);
+        flashToast("Pick one of the 3 cover concepts below — or hit 'Generate all 3' to compare.");
+      } else if (handoff?.seed) {
+        // Path B — legacy script (no cover prompts) → drop in narration seed.
         setPrompt((cur) => cur || handoff.seed);
         flashToast("Pre-filled from your script — rewrite or edit as needed.");
       }
     } catch { /* malformed; ignore */ }
     try { localStorage.removeItem("f48_handoff_thumbnail"); } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // When the user clicks a cover-prompt chip, swap the textarea content
+  // and remember which one they picked so the chip highlights visually.
+  const pickCoverChoice = (choice) => {
+    setSelectedChoiceIndex(choice.index);
+    setPrompt(choice.prompt);
+    setError("");
+  };
 
   // When the quota response says Premium is locked, the user dropped to a
   // tier that doesn't include it. Bounce them to Fast automatically so they
@@ -165,6 +200,58 @@ export default function Thumbnails() {
       setError(friendlyError(e));
     } finally {
       setGenerating(false);
+    }
+  };
+
+  // ---- Generate-all flow (v1.10.1) ----
+  // Fires the 3 cover prompts SEQUENTIALLY (not in parallel) so gpt-image-1's
+  // rate limit doesn't trip and the user sees thumbnails populate one by one
+  // in the history grid. Each individual failure surfaces as an inline error
+  // but doesn't stop the remaining renders — partial success is better than
+  // none. The cost-confirmation modal gates this for non-unlimited tiers
+  // since 3 slots is a meaningful chunk of the monthly quota.
+  const generateAll = async () => {
+    if (!coverChoices.length || batchStatus) return;
+    const isUnlimited = !!(quota?.unlimited);
+    if (!isUnlimited && !confirmBatch) {
+      setConfirmBatch(true);
+      return;
+    }
+    setConfirmBatch(false);
+    setError("");
+    setGenerating(true);
+    const successes = [];
+    const failures = [];
+    for (let i = 0; i < coverChoices.length; i++) {
+      setBatchStatus({ current: i + 1, total: coverChoices.length });
+      try {
+        const r = await apiClient.post("/thumbnails/generate", {
+          prompt: coverChoices[i].prompt,
+          engine,
+          aspect,
+        }, { timeout: 120_000 });
+        setHistory((prev) => [r.data, ...prev]);
+        successes.push(r.data);
+      } catch (e) {
+        failures.push({ idx: i + 1, msg: friendlyError(e) });
+        // If we hit a quota wall mid-batch, stop instead of burning more
+        // slots that will all 402. Other failure types we keep going.
+        if (e?.response?.status === 402) break;
+      }
+    }
+    setBatchStatus(null);
+    setGenerating(false);
+    loadQuota();
+
+    if (successes.length === coverChoices.length) {
+      flashToast(`All ${successes.length} thumbnails ready — pick your favorite.`);
+    } else if (successes.length > 0) {
+      const failMsg = failures.length === 1
+        ? failures[0].msg
+        : `${failures.length} variants failed.`;
+      setError(`${successes.length} of ${coverChoices.length} succeeded. ${failMsg}`);
+    } else {
+      setError(failures[0]?.msg || "All variants failed. Please try again.");
     }
   };
 
@@ -249,6 +336,63 @@ export default function Thumbnails() {
       </div>
 
       <section className="thumb-card" data-testid="thumb-composer">
+        {coverChoices.length > 0 && (
+          <div className="thumb-picker" data-testid="thumb-cover-picker">
+            <div className="thumb-picker-head">
+              <span className="thumb-label">
+                <Layers size={11} /> Cover concepts from your script
+              </span>
+              <button
+                type="button"
+                className="thumb-genall-btn"
+                onClick={generateAll}
+                disabled={generating || !!batchStatus}
+                data-testid="thumb-generate-all-btn"
+                title="Generate one thumbnail per concept and pick your favorite"
+              >
+                {batchStatus ? (
+                  <>
+                    <Loader2 size={13} className="thumb-spin" />
+                    Generating {batchStatus.current} of {batchStatus.total}…
+                  </>
+                ) : (
+                  <>
+                    <Sparkles size={13} /> Generate all {coverChoices.length}
+                  </>
+                )}
+              </button>
+            </div>
+            <div className="thumb-picker-grid">
+              {coverChoices.map((c) => {
+                const active = selectedChoiceIndex === c.index;
+                return (
+                  <button
+                    type="button"
+                    key={c.index}
+                    className={`thumb-choice ${active ? "is-active" : ""}`}
+                    onClick={() => pickCoverChoice(c)}
+                    data-testid={`thumb-choice-${c.index}`}
+                  >
+                    <div className="thumb-choice-head">
+                      <span className="thumb-choice-num">{c.index}</span>
+                      {c.label && <span className="thumb-choice-label">{c.label}</span>}
+                      {active && <Check size={13} className="thumb-choice-check" />}
+                    </div>
+                    {c.title && (
+                      <div className="thumb-choice-title">{c.title}</div>
+                    )}
+                    <div className="thumb-choice-prompt">{c.prompt}</div>
+                  </button>
+                );
+              })}
+            </div>
+            <p className="thumb-picker-hint">
+              Pick one to load it into the editor below, or hit{" "}
+              <b>Generate all {coverChoices.length}</b> to render every concept and compare.
+            </p>
+          </div>
+        )}
+
         <div className="thumb-row">
           <label className="thumb-label" htmlFor="thumb-topic">
             Script topic <span className="thumb-optional">(optional)</span>
@@ -453,6 +597,55 @@ export default function Thumbnails() {
           </div>
         )}
       </section>
+
+      {/* Cost-confirmation modal for "Generate all 3" on paid quota-bound
+          tiers. Founders / owner / studio-grant bypass this entirely
+          (generateAll fires immediately for unlimited users). */}
+      {confirmBatch && (
+        <div
+          className="thumb-modal-backdrop"
+          onClick={() => setConfirmBatch(false)}
+          data-testid="thumb-confirm-backdrop"
+        >
+          <div
+            className="thumb-modal"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-labelledby="thumb-confirm-title"
+            data-testid="thumb-confirm-modal"
+          >
+            <h3 id="thumb-confirm-title" className="thumb-modal-title">
+              Generate all {coverChoices.length} variants?
+            </h3>
+            <p className="thumb-modal-body">
+              This will use <b>{coverChoices.length} thumbnails</b> from your
+              current cycle —
+              {quota?.thumbnails_remaining !== undefined && (
+                <> you'll have <b>{Math.max(0, (quota.thumbnails_remaining ?? 0) - coverChoices.length)}</b> left after.</>
+              )}
+              {" "}You can delete the ones you don't like afterwards.
+            </p>
+            <div className="thumb-modal-actions">
+              <button
+                type="button"
+                className="thumb-modal-btn"
+                onClick={() => setConfirmBatch(false)}
+                data-testid="thumb-confirm-cancel"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="thumb-modal-btn thumb-modal-btn-primary"
+                onClick={generateAll}
+                data-testid="thumb-confirm-proceed"
+              >
+                <Sparkles size={13} /> Generate all {coverChoices.length}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

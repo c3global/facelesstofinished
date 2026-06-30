@@ -5411,3 +5411,184 @@
   .thumb-row-double { flex-direction: column; gap: 14px; }
 }
 
+
+/* ============================================================================
+ * Cover-prompt picker — shown only when the user arrives from Scripts via
+ * "Make thumbnail" and we have 3 picked-apart cover prompts. Acts as a
+ * pre-composer panel that auto-populates the prompt textarea below it.
+ * ========================================================================= */
+.thumb-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 14px;
+  background: rgba(127,119,221,0.06);
+  border: 1px solid rgba(127,119,221,0.28);
+}
+.thumb-picker-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.thumb-picker-head .thumb-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.thumb-genall-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(201,149,108,0.55);
+  background: linear-gradient(135deg, rgba(201,149,108,0.18), rgba(127,119,221,0.18));
+  color: #FFFAEC;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease, filter 0.15s ease;
+}
+.thumb-genall-btn:hover:not(:disabled) { filter: brightness(1.1); border-color: rgba(201,149,108,0.85); }
+.thumb-genall-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+.thumb-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+.thumb-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(127,119,221,0.22);
+  background: rgba(8,5,20,0.55);
+  color: rgba(216,210,234,0.78);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.thumb-choice:hover {
+  border-color: rgba(201,149,108,0.55);
+  color: #F0EBFF;
+}
+.thumb-choice.is-active {
+  border-color: rgba(201,149,108,0.85);
+  background: linear-gradient(135deg, rgba(201,149,108,0.16), rgba(127,119,221,0.16));
+  color: #FFFAEC;
+}
+.thumb-choice-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #C9956C;
+  font-weight: 700;
+}
+.thumb-choice-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: rgba(201,149,108,0.25);
+  color: #F5D9B6;
+  font-size: 11px;
+  font-weight: 700;
+}
+.thumb-choice-label { color: rgba(216,210,234,0.6); font-weight: 600; }
+.thumb-choice-check { margin-left: auto; color: #C9956C; }
+.thumb-choice-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #F0EBFF;
+  line-height: 1.35;
+}
+.thumb-choice-prompt {
+  font-size: 12px;
+  line-height: 1.45;
+  color: rgba(216,210,234,0.7);
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.thumb-picker-hint {
+  margin: 0;
+  font-size: 12px;
+  color: rgba(216,210,234,0.55);
+  line-height: 1.5;
+}
+.thumb-picker-hint b { color: #E8E1F8; font-weight: 700; }
+
+/* Cost-confirmation modal for paying users hitting "Generate all". */
+.thumb-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(5, 3, 12, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+.thumb-modal {
+  width: 100%;
+  max-width: 440px;
+  border-radius: 14px;
+  background: #0F0A1E;
+  border: 1px solid rgba(127,119,221,0.4);
+  padding: 22px 24px 18px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.55);
+  color: #E8E1F8;
+}
+.thumb-modal-title {
+  margin: 0 0 12px;
+  font-size: 16px;
+  font-weight: 700;
+  color: #FFFAEC;
+}
+.thumb-modal-body {
+  margin: 0 0 18px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: rgba(216,210,234,0.85);
+}
+.thumb-modal-body b { color: #F5D9B6; font-weight: 700; }
+.thumb-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.thumb-modal-btn {
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid rgba(127,119,221,0.4);
+  background: transparent;
+  color: #E8E1F8;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+.thumb-modal-btn:hover { background: rgba(127,119,221,0.18); }
+.thumb-modal-btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-color: rgba(201,149,108,0.7);
+  background: linear-gradient(135deg, #C9956C, #8E6B4D);
+  color: #1B0F2A;
+}
+.thumb-modal-btn-primary:hover { filter: brightness(1.08); }
+

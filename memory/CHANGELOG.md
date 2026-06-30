@@ -12,6 +12,28 @@ first. Plain English — if you're a customer reading this, this is for you.
 
 ---
 
+## v1.10.1 — June 30, 2026
+
+- Long-form scripts now get 3 **Title/Thumbnail variants** + 3 **Cover Image
+  Prompts** (matches what Shorts has had all along).
+- Click **Make thumbnail** on any new script and you'll see a picker of 3 cover
+  concepts — choose the one you like, or hit **Generate all 3** to compare
+  them side-by-side.
+- Dramatically upgraded the thumbnail rewriter — every prompt now bakes in
+  viral YouTube thumbnail rules: expressive focal subject, bold color palette,
+  dramatic cinematic lighting, clear space for overlay text.
+- Final image prompts get a hidden viral-style boost suffix before they hit
+  OpenAI — more "top creator" production quality, less stock-photo flat.
+- Confirmation prompt when you hit **Generate all 3** on a quota-bound tier —
+  never burn 3 slots by accident.
+
+> **Note for early users:** Long-form scripts you generated *before* this
+> update won't have cover prompts. Re-generate the script to get the new
+> sections, or hit **Make thumbnail** anyway — we'll fall back to extracting
+> your hook so you still get a usable starting point.
+
+---
+
 ## v1.10.0 — June 30, 2026
 
 - **NEW: Thumbnail Engine** — generate click-worthy YouTube and Shorts thumbnails

@@ -19,6 +19,8 @@ import {
   SHORTS_SECTION_ORDER,
   extractNarration,
   extractBrollPrompts,
+  extractCoverPrompts,
+  extractTitleVariants,
   parseSprintVariants,
 } from "../utils/parser";
 import PhoneFrame from "../components/PhoneFrame";
@@ -744,29 +746,58 @@ export default function Scripts() {
     sendToStudio(output);
   };
 
-  // ---- Send-to-Thumbnails handoff (v1.9.0) ----
-  // Drops the script topic + extracted opening hook (best thumbnail
-  // inspiration) into localStorage so the Thumbnails page can pre-fill
-  // the prompt editor on mount. Mirrors the sendToStudio pattern.
+  // ---- Send-to-Thumbnails handoff (v1.10.1) ----
+  // Tries 3 sources in priority order:
+  //   1. Cover image prompts from the script's `### 🎨 COVER IMAGE PROMPTS`
+  //      section, paired with their title variants → renders as a picker
+  //      UI on the Thumbnails page (user chooses one OR "Generate all 3").
+  //   2. Narration hook (first 280 chars) as fallback for LEGACY scripts
+  //      generated before the long-form template included cover prompts.
+  //   3. Topic-only seed as the last resort.
+  // The script's mode is included so the Thumbnails page can default the
+  // aspect picker to 16:9 for long, 9:16 for shorts.
   const sendToThumbnails = (jobOutput) => {
     if (!jobOutput) return;
-    const narration = extractNarration(jobOutput.text || "");
-    // Use the first ~280 chars of narration as a creative seed for the
-    // thumbnail prompt — that's typically the hook + first beat, which
-    // is also what the thumbnail needs to visually represent.
-    const seed = (narration || "").trim().slice(0, 280);
+    const text = jobOutput.text || "";
+    const coverPrompts = extractCoverPrompts(text);
+    const titleVariants = extractTitleVariants(text);
+
+    // Stitch each cover prompt with its matching title variant by index so
+    // the picker UI can show "Curiosity title → Cover prompt" pairs.
+    const choices = coverPrompts.map((cp) => {
+      const match = titleVariants.find((t) => t.index === cp.index);
+      return {
+        index: cp.index,
+        label: cp.label || match?.label || "",
+        title: match?.title || "",
+        prompt: cp.prompt,
+      };
+    });
+
+    let seed = "";
+    if (choices.length === 0) {
+      const narration = extractNarration(text);
+      seed = (narration || "").trim().slice(0, 280);
+    }
+
     try {
       localStorage.setItem("f48_handoff_thumbnail", JSON.stringify({
         topic: jobOutput.topic || "",
+        choices,
         seed,
+        mode: jobOutput.mode,
         script_id: jobOutput.id,
         platform: jobOutput.platform,
         ts: Date.now(),
       }));
     } catch {}
     apiClient.post("/activity/log", {
-      type: "script_sent_to_studio",  // close-enough event for engagement metrics
-      detail: { script_id: jobOutput.id, target: "thumbnails" },
+      type: "script_sent_to_studio",
+      detail: {
+        script_id: jobOutput.id,
+        target: "thumbnails",
+        choices_count: choices.length,
+      },
     }).catch(() => {});
     nav("/thumbnails");
   };
