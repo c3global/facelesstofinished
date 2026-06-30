@@ -12,6 +12,34 @@ first. Plain English — if you're a customer reading this, this is for you.
 
 ---
 
+## v1.17.0 — June 30, 2026 (Light-mode polish round 2)
+
+- **Hero eyebrow** ("FACELESS TO FINISHED · VIDEO ENGINE" /
+  "THUMBNAIL ENGINE · V1") was 11px copper on lavender — barely
+  readable. Now uses `color-mix(in srgb, var(--warning) 78%, #000 22%)`
+  for a deep copper with `font-weight: 700` and slightly tighter tracking
+  in light mode. Studio's mode-specific overrides (avatar/faceless) get
+  the same deeper-copper treatment.
+- **"Owner · unlimited renders" pill** (`.quota-pill-unlimited`) had a
+  16%-opacity gradient that completely washed out on light bg. Now uses
+  an 18%/14% warm-gradient on white surface with a full-saturation copper
+  border and `color-mix(in srgb, var(--warning) 75%, var(--text))` text.
+  Crown icon picks up the warning token. Same fix applies to
+  `.thumb-quota-unlimited` on the Thumbnails page.
+- **Settings/Keys page** — every dark-gray surface flagged by the iter_40
+  testing agent now has a `[data-theme="light"]` override:
+  - `.settings-keys-hero` → soft accent+warning gradient on white
+  - `.settings-key-card` → pure white surface with design-token border
+  - `.settings-key-card.is-saved` → warm cream wash for saved state
+  - `.settings-key-input` → light bg with focus-ring
+  - `.settings-key-save-btn` → copper CTA (warning token)
+  - `.settings-key-delete-btn` → soft danger
+  - All text colors route through `--text` / `--muted` / `--warning`.
+- **Dark mode unchanged** — every override scoped to `[data-theme="light"]`
+  cascade.
+
+---
+
 ## v1.16.0 — June 30, 2026 (Thumbnails light-mode polish)
 
 - **Thumbnails page in light mode** no longer renders as dark-gray boxes

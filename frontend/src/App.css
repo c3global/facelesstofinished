@@ -6731,3 +6731,140 @@ body[data-founder="true"] .settings-key-save-btn {
    lightbox's dark surface. (No override needed — the lightbox
    is dark in both themes, by design.) */
 
+
+
+/* ============================================================
+   v1.17.0 — More LIGHT MODE polish:
+     (1) Hero eyebrow ("FACELESS TO FINISHED · VIDEO ENGINE")
+         — copper at 11px on lavender was barely readable.
+     (2) Owner / unlimited pill — 16% gradient washed out on
+         pale bg.
+     (3) Settings/Keys page cards — same rgba(15,10,30,0.55)
+         pattern as the thumbnails bug fixed in v1.16.0.
+   ============================================================ */
+
+/* --- Hero eyebrow text ------------------------------------- */
+/* In dark mode the copper has good contrast on the deep purple
+   page. In light mode the same copper hex melts into the pale
+   lavender bg, so we deepen + add weight + soften the tracking. */
+[data-theme="light"] .studio-eyebrow {
+  color: color-mix(in srgb, var(--warning) 78%, #000 22%);
+  font-weight: 700;
+  letter-spacing: 0.28em;
+}
+[data-theme="light"] .studio-main[data-mode="avatar"]   .studio-eyebrow,
+[data-theme="light"] .studio-main[data-mode="faceless"] .studio-eyebrow {
+  color: color-mix(in srgb, var(--warning) 78%, #000 22%);
+}
+
+/* --- Quota / Owner pill (header) --------------------------- */
+[data-theme="light"] .quota-pill {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text);
+}
+[data-theme="light"] .quota-pill-unlimited {
+  background: linear-gradient(135deg,
+    color-mix(in srgb, var(--warning) 18%, var(--surface)),
+    color-mix(in srgb, var(--accent) 14%, var(--surface)));
+  border-color: var(--warning);
+  color: color-mix(in srgb, var(--warning) 75%, var(--text));
+  font-weight: 600;
+}
+[data-theme="light"] .quota-pill-unlimited svg { color: var(--warning); }
+
+/* The quota popover (clicking the pill) — keep readable on light. */
+[data-theme="light"] .quota-pop {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text);
+  box-shadow: var(--shadow-modal);
+}
+
+/* Studio Quota pill on the page itself (not the header) */
+[data-theme="light"] .thumb-quota {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text);
+}
+[data-theme="light"] .thumb-quota-unlimited {
+  background: linear-gradient(135deg,
+    color-mix(in srgb, var(--warning) 18%, var(--surface)),
+    color-mix(in srgb, var(--accent) 14%, var(--surface)));
+  border-color: var(--warning);
+  color: color-mix(in srgb, var(--warning) 75%, var(--text));
+}
+
+/* --- Settings/Keys page (BYOK) ----------------------------- */
+[data-theme="light"] .settings-keys-hero {
+  background: linear-gradient(135deg,
+    color-mix(in srgb, var(--accent) 8%, var(--surface)),
+    color-mix(in srgb, var(--warning) 6%, var(--surface)));
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-card);
+}
+[data-theme="light"] .settings-keys-title { color: var(--text); }
+[data-theme="light"] .settings-keys-sub { color: var(--muted); }
+[data-theme="light"] .settings-keys-sub strong { color: color-mix(in srgb, var(--warning) 75%, var(--text)); }
+[data-theme="light"] .settings-keys-trust {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--muted);
+}
+[data-theme="light"] .settings-keys-trust svg { color: var(--accent); }
+[data-theme="light"] .settings-keys-back { color: var(--muted); }
+[data-theme="light"] .settings-keys-back:hover { color: var(--accent); }
+[data-theme="light"] .settings-keys-loading { color: var(--muted); }
+
+[data-theme="light"] .settings-key-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-card);
+}
+[data-theme="light"] .settings-key-card.is-saved {
+  border-color: var(--warning);
+  background: linear-gradient(135deg,
+    color-mix(in srgb, var(--warning) 6%, var(--surface)),
+    var(--surface));
+}
+[data-theme="light"] .settings-key-card-title { color: var(--text); }
+[data-theme="light"] .settings-key-card-purpose { color: var(--muted); }
+[data-theme="light"] .settings-key-card-badge {
+  background: color-mix(in srgb, var(--warning) 14%, var(--surface));
+  border-color: var(--warning);
+  color: color-mix(in srgb, var(--warning) 75%, var(--text));
+}
+[data-theme="light"] .settings-key-label {
+  color: color-mix(in srgb, var(--warning) 78%, #000 22%);
+}
+[data-theme="light"] .settings-key-input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+[data-theme="light"] .settings-key-input::placeholder { color: var(--muted); }
+[data-theme="light"] .settings-key-input:focus {
+  background: var(--surface);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+[data-theme="light"] .settings-key-save-btn {
+  background: var(--warning);
+  border-color: var(--warning);
+  color: #FFFFFF;
+}
+[data-theme="light"] .settings-key-save-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--warning) 88%, #000 12%);
+}
+[data-theme="light"] .settings-key-delete-btn {
+  background: var(--danger-soft);
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+  color: var(--danger);
+}
+[data-theme="light"] .settings-key-delete-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 18%, var(--surface));
+}
+[data-theme="light"] .settings-key-ok { color: var(--success); }
+[data-theme="light"] .settings-key-err { color: var(--danger); }
+[data-theme="light"] .settings-keys-foot { color: var(--muted); }
+[data-theme="light"] .settings-keys-foot a { color: var(--accent); }

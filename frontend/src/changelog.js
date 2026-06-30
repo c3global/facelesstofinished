@@ -14,9 +14,18 @@
 //    See PRD.md → "Workflow rule: changelog must move with every deploy."
 // 4. Most recent on top. Each entry has version + date + bullet list.
 
-export const APP_VERSION = "1.16.0";
+export const APP_VERSION = "1.17.0";
 
 export const CHANGELOG = [
+  {
+    version: "1.17.0",
+    date: "2026-06-30",
+    changes: [
+      "Light mode polish round 2 — the 'FACELESS TO FINISHED · VIDEO ENGINE' eyebrow and the 'Owner · unlimited renders' pill are now properly legible on the pale background. Studio and Thumbnails pages both fixed",
+      "Settings/Keys page (BYOK) — all 6 service cards now render clean white in light mode with crisp dark text. No more dark-gray boxes on lavender",
+      "Dark mode remains untouched — beautiful as ever",
+    ],
+  },
   {
     version: "1.16.0",
     date: "2026-06-30",
