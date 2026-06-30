@@ -97,6 +97,20 @@ class ThumbnailRewriteRequest(BaseModel):
     """Optional script topic for extra grounding context."""
 
 
+class ThumbnailConceptsRequest(BaseModel):
+    """Used by the Thumbnails page when arriving with a LEGACY script (one
+    generated before cover prompts were part of the template). Sends a chunk
+    of the script's text + topic and asks Claude to produce 3 distinct,
+    selectable cover-image concepts on the fly."""
+
+    script_text: str = Field(..., min_length=10, max_length=8000)
+    """Script content (narration or the full script) to base concepts on."""
+
+    topic: Optional[str] = Field(default=None, max_length=300)
+    mode: Optional[str] = Field(default=None, max_length=20)
+    """`long` | `shorts` | `sprint` — affects default aspect framing."""
+
+
 def register_thumbnail_routes(
     *,
     api: APIRouter,
@@ -191,6 +205,137 @@ def register_thumbnail_routes(
             rewritten = rewritten[:1800]
 
         return {"rewritten_prompt": rewritten}
+
+    @api.post("/thumbnails/concepts-from-script")
+    async def concepts_from_script(payload: ThumbnailConceptsRequest, user=Depends(current_user_dep)):
+        """Generate 3 distinct, viral-grade cover-image concepts on the fly
+        from a script's text. Used when the user arrives at the Thumbnails
+        page from a LEGACY script (generated before cover prompts were part
+        of the template). Costs ~$0.02 per call (one Claude turn) but gives
+        legacy users the same 3-concept picker UX as fresh scripts.
+
+        Returns the same shape the frontend expects from the Scripts handoff:
+        {choices: [{index, label, title, prompt}]} so the same picker
+        component renders without branching."""
+        if not emergent_llm_key:
+            raise HTTPException(status_code=503, detail="Concept engine not configured.")
+        from emergentintegrations.llm.chat import LlmChat, UserMessage  # noqa: WPS433
+
+        # Trim the script text — Claude only needs the hook + first beats to
+        # understand the topic visually. The full script wastes tokens.
+        script_excerpt = (payload.script_text or "").strip()
+        if len(script_excerpt) > 4000:
+            script_excerpt = script_excerpt[:4000]
+
+        mode_hint = ""
+        if payload.mode == "shorts" or payload.mode == "sprint":
+            mode_hint = "This is for a vertical YouTube Shorts/Reels/TikTok thumbnail (9:16). Frame the focal subject in the upper-third so platform UI doesn't cover it.\n\n"
+        else:
+            mode_hint = "This is for a YouTube long-form thumbnail (16:9 widescreen). Frame the focal subject prominently with negative space on the upper-right or upper-left for overlay text.\n\n"
+
+        # The system prompt mirrors the language used by the Script Engine's
+        # long-form template (build_long_system_prompt → TITLE / THUMBNAIL
+        # VARIANTS + COVER IMAGE PROMPTS sections) so legacy + fresh scripts
+        # produce thematically consistent concepts. Output is a strict JSON
+        # array so the frontend can parse without regex acrobatics.
+        system = (
+            "You are a YouTube thumbnail concept director. Given a script topic + "
+            "an excerpt of the script's narration, produce EXACTLY 3 distinct visual "
+            "thumbnail concepts. Each concept needs:\n\n"
+            "  • A short title variant (max 7 words) — bold, click-worthy, no clickbait lies.\n"
+            "    Label one as 'Curiosity', one as 'Bold Claim', one as 'Question'.\n"
+            "  • A vivid 90-160 word image prompt designed for a VIRAL thumbnail. It MUST include:\n"
+            "    - A specific, expressive human focal subject (with named facial expression) OR "
+            "      a single iconic object, taking up 40-60% of the frame.\n"
+            "    - A bold high-saturation color palette (electric blue, neon red, golden "
+            "      yellow, magenta, cyan — pick at least one).\n"
+            "    - Dramatic cinematic lighting (rim light, golden-hour glow, godrays, etc.) — name the type.\n"
+            "    - A curiosity-gap visual element (transformation, comparison, giant number, "
+            "      hidden reveal, or 'wait, what?' composition).\n"
+            "    - Explicit negative-space side for overlay text.\n"
+            "    - Top YouTube creator production quality (4K, sharp, professional composition).\n"
+            "  • NO words, letters, or typography on the image itself.\n"
+            "  • Each concept must be visually DISTINCT from the others (different framing, "
+            "    palette, or composition pattern).\n\n"
+            "Respond with ONLY a JSON array (no preamble, no markdown fences). Schema:\n"
+            "[\n"
+            '  {"label": "Curiosity", "title": "...", "prompt": "..."},\n'
+            '  {"label": "Bold Claim", "title": "...", "prompt": "..."},\n'
+            '  {"label": "Question", "title": "...", "prompt": "..."}\n'
+            "]"
+        )
+
+        topic_line = f"Script topic: {payload.topic}\n\n" if payload.topic else ""
+        user_msg = (
+            f"{mode_hint}{topic_line}"
+            f"Script excerpt:\n\"\"\"\n{script_excerpt}\n\"\"\"\n\n"
+            "Return the JSON array with exactly 3 concept objects."
+        )
+
+        chat = LlmChat(
+            api_key=emergent_llm_key,
+            session_id=f"thumb-concepts-{uuid.uuid4().hex}",
+            system_message=system,
+        ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+
+        try:
+            response = await chat.send_message(UserMessage(text=user_msg))
+        except Exception as exc:
+            logger.warning("Concept generation failed: %s: %s", type(exc).__name__, exc)
+            raise HTTPException(
+                status_code=502,
+                detail="Couldn't generate concepts right now. Please write a prompt manually below.",
+            )
+
+        # Claude reliably returns clean JSON when asked, but it sometimes
+        # wraps in ```json fences. Strip them defensively before parsing.
+        import json as _json
+        raw = (response or "").strip()
+        if raw.startswith("```"):
+            # Strip leading ``` / ```json and trailing ```
+            raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
+            if raw.endswith("```"):
+                raw = raw[:-3].rstrip()
+
+        try:
+            concepts = _json.loads(raw)
+        except _json.JSONDecodeError:
+            logger.warning("Concept generation returned non-JSON: %s", raw[:400])
+            raise HTTPException(
+                status_code=502,
+                detail="Couldn't parse concept output. Please write a prompt manually below.",
+            )
+        if not isinstance(concepts, list) or len(concepts) < 1:
+            raise HTTPException(status_code=502, detail="No concepts generated.")
+
+        # Normalize to the exact {index, label, title, prompt} shape the
+        # frontend handoff already consumes. Strip any --ar / --no flags
+        # Claude might've leaked into the prompt (they confuse gpt-image-1).
+        out = []
+        for idx, c in enumerate(concepts[:3], start=1):
+            if not isinstance(c, dict):
+                continue
+            prompt_text = (c.get("prompt") or "").strip()
+            prompt_text = (
+                prompt_text
+                .replace("--ar 16:9", "")
+                .replace("--ar 9:16", "")
+                .replace("--ar 1:1", "")
+                .replace("--no text", "")
+                .replace("**", "")
+                .strip()
+            )
+            if not prompt_text:
+                continue
+            out.append({
+                "index": idx,
+                "label": (c.get("label") or "").strip(),
+                "title": (c.get("title") or "").strip(),
+                "prompt": prompt_text,
+            })
+        if not out:
+            raise HTTPException(status_code=502, detail="No usable concepts generated.")
+        return {"choices": out}
 
     @api.post("/thumbnails/generate")
     async def generate_thumbnail(payload: ThumbnailGenerateRequest, user=Depends(current_user_dep)):

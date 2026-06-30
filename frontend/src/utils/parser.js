@@ -158,12 +158,17 @@ export function extractBrollPrompts(raw, maxCount = 12) {
 
 /**
  * Pull cover image prompts out of the "COVER IMAGE PROMPTS" section. Returns
- * an array of {index, label, prompt} entries (max 3). Tolerates several
- * formats Claude has emitted in the wild:
+ * an array of {index, label, prompt} entries (max 3). Tolerates many format
+ * variations Claude emits in the wild — most notably the markdown-bold
+ * wrapping of the number prefix (`**1. [Curiosity variant]** — ...`) which
+ * earlier versions of this regex silently failed to match.
  *
- *   "1. [matches title variant 1] — Vivid prompt here --ar 16:9 --no text"
- *   "1. **[Curiosity]** — Vivid prompt here..."
- *   "1) [Bold Claim] — Prompt..."
+ * Format examples now handled:
+ *   "1. [Curiosity] — Vivid prompt here"
+ *   "1) [Bold Claim] — Vivid prompt..."
+ *   "**1. [Curiosity variant]** — Vivid prompt..."  ← the one that broke us
+ *   "**1.** [Question] — Vivid prompt..."
+ *   "1. **[Label]** — Vivid prompt..."
  *
  * Pairs with extractTitleVariants() — both sections live next to each other
  * in the bento grid and are emitted by the same Claude pass.
@@ -174,22 +179,24 @@ export function extractCoverPrompts(raw, maxCount = 3) {
   const body = sections.coverPrompts?.body || "";
   if (!body) return [];
   const out = [];
-  // Match a numbered list item, optional bracketed label, optional em-dash/colon, then the prompt.
-  const re = /^\s*(\d{1,2})[.)]\s*(?:\*\*)?(?:\[(.+?)\])?(?:\*\*)?\s*[—–\-:]?\s*(.+)$/;
+  // Strategy: strip ALL markdown bold markers from the line, THEN apply a
+  // single permissive regex. Markdown `**` is decoration only — removing it
+  // before parsing is far more robust than trying to anchor `**` optionality
+  // at every position in the pattern.
+  const re = /^\s*(\d{1,2})\s*[.)]\s*(?:\[\s*([^\]]+?)\s*\])?\s*[—–\-:]?\s*(.+)$/;
   for (const rawLine of body.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line) continue;
-    const m = line.match(re);
+    const cleaned = rawLine.replace(/\*\*/g, "").trim();
+    if (!cleaned) continue;
+    const m = cleaned.match(re);
     if (!m) continue;
     const idx = parseInt(m[1], 10);
     const label = (m[2] || "").trim();
-    // Strip trailing `--ar X:Y --no text` flags — those are useful for some
-    // image models (Midjourney) but get embedded directly into our gpt-image
-    // prompt and confuse it. Aspect ratio is already chosen via the UI picker.
+    // Strip trailing `--ar X:Y --no text` flags — those help with Midjourney
+    // but get embedded directly into our gpt-image prompt and confuse it.
+    // Aspect ratio is already chosen via the UI picker.
     let prompt = m[3]
       .replace(/--ar\s+\d+:\d+/gi, "")
       .replace(/--no\s+[a-z]+(\s+[a-z]+)*/gi, "")
-      .replace(/\*\*/g, "")
       .trim();
     if (!prompt) continue;
     out.push({ index: idx, label, prompt });
@@ -201,7 +208,8 @@ export function extractCoverPrompts(raw, maxCount = 3) {
 /**
  * Pull the 3 title/thumbnail variants out of the "TITLE / THUMBNAIL VARIANTS"
  * section. Returns array of {index, label, title} entries. Used to show
- * the title alongside its matching cover prompt in the picker UI.
+ * the title alongside its matching cover prompt in the picker UI. Same
+ * markdown-strip-then-regex approach as extractCoverPrompts.
  */
 export function extractTitleVariants(raw, maxCount = 3) {
   if (!raw) return [];
@@ -209,16 +217,16 @@ export function extractTitleVariants(raw, maxCount = 3) {
   const body = sections.titleVariants?.body || "";
   if (!body) return [];
   const out = [];
-  const re = /^\s*(\d{1,2})[.)]\s*(?:\*\*)?(?:\[(.+?)\])?(?:\*\*)?\s*[—–\-:]?\s*(.+)$/;
+  const re = /^\s*(\d{1,2})\s*[.)]\s*(?:\[\s*([^\]]+?)\s*\])?\s*[—–\-:]?\s*(.+)$/;
   for (const rawLine of body.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line) continue;
-    const m = line.match(re);
+    const cleaned = rawLine.replace(/\*\*/g, "").trim();
+    if (!cleaned) continue;
+    const m = cleaned.match(re);
     if (!m) continue;
     out.push({
       index: parseInt(m[1], 10),
       label: (m[2] || "").trim(),
-      title: m[3].replace(/\*\*/g, "").trim(),
+      title: m[3].trim(),
     });
     if (out.length >= maxCount) break;
   }

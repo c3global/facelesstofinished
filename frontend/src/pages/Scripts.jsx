@@ -780,11 +780,18 @@ export default function Scripts() {
       seed = (narration || "").trim().slice(0, 280);
     }
 
+    // Always pass a script excerpt for the legacy auto-concepts path. Even
+    // when choices ARE populated (fresh long-form/shorts) we include this so
+    // the user can hit "Regenerate concepts" on the Thumbnails page later.
+    // 4000 chars is the same cap the backend uses internally.
+    const scriptExcerpt = (extractNarration(text) || text || "").slice(0, 4000);
+
     try {
       localStorage.setItem("f48_handoff_thumbnail", JSON.stringify({
         topic: jobOutput.topic || "",
         choices,
         seed,
+        scriptExcerpt,
         mode: jobOutput.mode,
         script_id: jobOutput.id,
         platform: jobOutput.platform,

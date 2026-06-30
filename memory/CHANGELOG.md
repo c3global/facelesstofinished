@@ -12,6 +12,19 @@ first. Plain English — if you're a customer reading this, this is for you.
 
 ---
 
+## v1.10.2 — June 30, 2026
+
+- **Fixed**: "Make thumbnail" now correctly extracts your 3 cover concepts
+  from long-form scripts. The parser was silently failing on Claude's
+  markdown bold-wrapping of numbered list items (`**1. [Label]**`),
+  falling back to a truncated chunk of narration instead. Stripped all
+  `**` markers before regex matching — picker now populates cleanly for
+  every script that contains the cover-prompts section.
+- Cover concepts picker now shows all 3 options with their matching title
+  variants — pick the one you want, or hit **Generate all 3** to compare.
+
+---
+
 ## v1.10.1 — June 30, 2026
 
 - Long-form scripts now get 3 **Title/Thumbnail variants** + 3 **Cover Image

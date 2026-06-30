@@ -14,9 +14,17 @@
 //    See PRD.md → "Workflow rule: changelog must move with every deploy."
 // 4. Most recent on top. Each entry has version + date + bullet list.
 
-export const APP_VERSION = "1.10.1";
+export const APP_VERSION = "1.10.2";
 
 export const CHANGELOG = [
+  {
+    version: "1.10.2",
+    date: "2026-06-30",
+    changes: [
+      "Fixed: 'Make thumbnail' now correctly extracts your 3 cover concepts from long-form scripts (was silently falling back to the truncated narration because of a markdown bold-wrapping quirk in the parser)",
+      "Cover concepts picker now shows all 3 options with their matching title variants — pick the one you want, or hit Generate all 3 to compare",
+    ],
+  },
   {
     version: "1.10.1",
     date: "2026-06-30",
