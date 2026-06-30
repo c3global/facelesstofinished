@@ -20,6 +20,29 @@ back to it for entitlement verification.
 
 ## 🔁 Workflow rule: Changelog moves with every change (set 2026-06-29 by user)
 
+### Iteration 43 (2026-06-30) — Production deploy fix: missing requirements.txt entries
+
+**Symptom:** K8s production deploy failed with `deployment failed to become ready: timeout waiting for deployment to be ready`. Preview was 100% healthy.
+
+**Root cause (NOT what deployment_agent reported):** Two packages that the backend imports at module-load time were **missing from `/app/backend/requirements.txt`** — they existed only as transitive deps in the preview venv, so preview worked. On a fresh production container build, pip's resolver chose a transitive chain that didn't pull them in → `ModuleNotFoundError` on backend boot → uvicorn never binds to 8001 → K8s readiness probe times out → deploy fails.
+
+Missing packages:
+- `cryptography==48.0.0` — used by `byok_routes.py:33` (`from cryptography.fernet import Fernet, InvalidToken`)
+- `python-multipart==0.0.30` — required by FastAPI's `UploadFile`/`File` (used in `uploads_routes.py` + `thumbnails_routes.py` for image/audio uploads)
+
+**Fix:** appended both to `requirements.txt` with the verified versions matching the preview venv. Backend restarted clean, `/` returns 200 + `{"service":"F2F48 Studio API","status":"ok"}`, prewarm task fires normally.
+
+**Why deployment_agent didn't catch this:** it scans for hardcoded secrets, env-var leaks, CORS misconfigs, port mismatches, and ML/blockchain deps — not for missing pip declarations on transitive imports. Recommend filing this as a deployment_agent enhancement (run `python -c "import X"` for each known top-level import vs `pip freeze`).
+
+**Iter 42 work (BYOK_ENCRYPTION_KEY env var) remains valid** — the new Fernet key is in `.env` and works correctly once `cryptography` is properly declared.
+
+**Files touched:**
+- `/app/backend/requirements.txt` (+cryptography, +python-multipart)
+
+---
+
+
+
 ### Iteration 42 (2026-06-30) — Pre-launch env hardening (BYOK_ENCRYPTION_KEY)
 
 **Context:** user said they cannot manually set env vars and asked agent to
