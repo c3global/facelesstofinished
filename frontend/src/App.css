@@ -4842,3 +4842,206 @@
 .nav-link:hover .nav-upgrade-pill {
   filter: brightness(1.08);
 }
+
+/* ============================================================================
+ * Studio quota pill — anchored top-right of the Studio hero. Lives in its
+ * own positioned wrapper so the popover (.quota-pop) can absolute-position
+ * relative to the trigger without disturbing the hero layout.
+ * ========================================================================= */
+.studio-hero-top {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  width: 100%;
+}
+.quota-pill-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.quota-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(127,119,221,0.35);
+  background: rgba(15, 10, 30, 0.45);
+  color: var(--text-muted, #B5ADCE);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.quota-pill:hover { background: rgba(127,119,221,0.18); color: #E8E1F8; }
+.quota-pill .quota-pill-text { color: #E8E1F8; }
+.quota-pill .quota-pill-reset { opacity: 0.65; font-weight: 500; }
+.quota-pill.is-low {
+  border-color: rgba(224,164,88,0.55);
+  background: rgba(224,164,88,0.12);
+  color: #F5D9B6;
+}
+.quota-pill.is-low .quota-pill-text { color: #F5D9B6; }
+.quota-pill.is-exhausted {
+  border-color: rgba(229, 99, 99, 0.55);
+  background: rgba(229,99,99,0.14);
+  color: #FFC4C4;
+}
+.quota-pill.is-exhausted .quota-pill-text { color: #FFC4C4; }
+.quota-pill-unlimited {
+  background: linear-gradient(135deg, rgba(201,149,108,0.16), rgba(127,119,221,0.16));
+  border-color: rgba(201,149,108,0.45);
+  color: #F5D9B6;
+  cursor: default;
+}
+.quota-pill-unlimited:hover { filter: brightness(1.04); }
+
+.quota-pop {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 30;
+  min-width: 280px;
+  max-width: 320px;
+  padding: 14px 14px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(127,119,221,0.35);
+  background: #0F0A1E;
+  box-shadow: 0 16px 40px rgba(0,0,0,0.45);
+  color: #E8E1F8;
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: left;
+}
+.quota-pop-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  color: #C9956C;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.quota-pop-close {
+  background: none; border: none; color: rgba(216,210,234,0.55);
+  cursor: pointer; padding: 2px; border-radius: 6px;
+}
+.quota-pop-close:hover { color: #E8E1F8; background: rgba(127,119,221,0.12); }
+.quota-pop-row {
+  display: flex; justify-content: space-between; align-items: baseline;
+  font-size: 13px;
+}
+.quota-pop-row b { font-weight: 700; color: #FAFAFF; }
+.quota-pop-bar {
+  margin-top: 6px;
+  height: 6px; width: 100%;
+  border-radius: 999px;
+  background: rgba(127,119,221,0.18);
+  overflow: hidden;
+}
+.quota-pop-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #7F77DD, #C9956C);
+  transition: width 0.3s ease;
+}
+.quota-pop-bar-fill.is-avatar {
+  background: linear-gradient(90deg, #C9956C, #E0A458);
+}
+.quota-pop-foot {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(127,119,221,0.18);
+  color: rgba(216,210,234,0.7);
+  font-size: 12px;
+}
+.quota-pop-foot b { color: #E8E1F8; font-weight: 600; }
+.quota-pop-cta {
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: 8px;
+  background: rgba(229,99,99,0.10);
+  border: 1px solid rgba(229,99,99,0.35);
+  color: #FFD0D0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+@media (max-width: 720px) {
+  .quota-pop { right: auto; left: 0; min-width: 240px; max-width: 90vw; }
+}
+
+/* ============================================================================
+ * Tier chips (T1/T2/T3/T4/Founder) shown in admin Usage tab.
+ * ========================================================================= */
+.ent-chip-t1      { background: rgba(120,200,180,0.18); color: #BFEFE3; border: 1px solid rgba(120,200,180,0.4); }
+.ent-chip-t2      { background: rgba(120,170,230,0.18); color: #C8DEFF; border: 1px solid rgba(120,170,230,0.4); }
+.ent-chip-t3      { background: rgba(201,149,108,0.20); color: #F5D9B6; border: 1px solid rgba(201,149,108,0.45); }
+.ent-chip-t4      { background: rgba(224,164,88,0.22);  color: #FFEAD0; border: 1px solid rgba(224,164,88,0.55); }
+.ent-chip-founder { background: rgba(127,119,221,0.22); color: #DCD5FF; border: 1px solid rgba(127,119,221,0.5); font-weight: 700; }
+
+/* ============================================================================
+ * Usage tab — sortable headers + drilldown row.
+ * ========================================================================= */
+.usage-table .usage-th-sortable {
+  cursor: pointer;
+  user-select: none;
+  transition: color 0.15s ease;
+}
+.usage-table .usage-th-sortable:hover { color: var(--accent); }
+.usage-table .usage-th-sortable.is-active { color: var(--accent); }
+.usage-row.is-open { background: rgba(127,119,221,0.06); }
+.usage-row:hover { background: rgba(127,119,221,0.08); }
+.usage-drilldown-row > td { padding: 0 !important; background: rgba(15,10,30,0.4); }
+.usage-drilldown {
+  padding: 18px 22px 22px;
+  border-bottom: 1px solid rgba(127,119,221,0.18);
+}
+.usage-drilldown-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+}
+.usage-card {
+  border-radius: 10px;
+  background: rgba(15,10,30,0.55);
+  border: 1px solid rgba(127,119,221,0.22);
+  padding: 14px;
+}
+.usage-card h4 {
+  margin: 0 0 8px;
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--accent);
+  font-weight: 700;
+}
+.usage-num {
+  font-size: 24px;
+  font-weight: 700;
+  color: #FAFAFF;
+  line-height: 1.1;
+}
+.usage-breakdown {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: rgba(216,210,234,0.78);
+}
+.usage-breakdown b { color: #E8E1F8; font-weight: 700; }
+.usage-mute {
+  font-size: 11px;
+  color: rgba(216,210,234,0.5);
+  margin-top: 10px;
+}
+@media (max-width: 980px) {
+  .usage-drilldown-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 600px) {
+  .usage-drilldown-grid { grid-template-columns: 1fr; }
+}
+

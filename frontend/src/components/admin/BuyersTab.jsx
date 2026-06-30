@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Search, Plus, Trash2, RefreshCw, X, FileUp, HelpCircle, Zap } from "lucide-react";
+import { Search, Plus, Trash2, RefreshCw, X, FileUp, HelpCircle, Zap, Download } from "lucide-react";
 import { apiClient } from "../../App";
 
 const ENTITLEMENTS = ["base", "shorts", "studio"];
@@ -317,6 +317,35 @@ export default function BuyersTab() {
     }
   };
 
+  // Download the buyers list as CSV. Backend streams the file with a
+  // filename header (F2F48-buyers-YYYY-MM-DD-export.csv); we use the
+  // browser's anchor-download trick rather than apiClient.get so the
+  // file lands in the user's downloads folder directly instead of
+  // showing up as a JSON-stringified blob in the network tab.
+  const [exporting, setExporting] = useState(false);
+  const downloadBuyersCSV = async () => {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      const r = await apiClient.get("/admin/buyers/export", { responseType: "blob" });
+      const blob = new Blob([r.data], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const today = new Date().toISOString().slice(0, 10);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `F2F48-buyers-${today}-export.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showToast("Buyers CSV downloaded");
+    } catch (e) {
+      showToast(e?.response?.data?.detail || e?.message || "CSV export failed", "err");
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const openAddBuyer = () => {
     setNewEmail("");
     setNewEnts(new Set(["base"]));
@@ -408,6 +437,15 @@ export default function BuyersTab() {
           title="Upload a CSV exported from Netlify, GHL, Pinball, or anywhere else"
         >
           <FileUp size={13} /> {importing ? "Importing…" : "Import CSV"}
+        </button>
+        <button
+          className="admin-btn"
+          onClick={downloadBuyersCSV}
+          disabled={exporting}
+          data-testid="buyers-export-csv"
+          title="Download every buyer as a CSV (F2F48-buyers-YYYY-MM-DD-export.csv)"
+        >
+          <Download size={13} /> {exporting ? "Exporting…" : "Export CSV"}
         </button>
         <button
           className="admin-btn"

@@ -456,6 +456,98 @@ async def auth_me(user: AuthUser = Depends(current_user)):
 
 
 # ---------------------------------------------------------------------------
+# Quota status — drives the Studio header pill ("12 of 15 renders · resets…")
+# ---------------------------------------------------------------------------
+# Returns a customer-facing snapshot of the buyer's current cycle: their tier
+# label, how many renders they've used vs their cap, the avatar sub-cap, when
+# the cycle resets, and a boolean `unlimited` flag for founders / dev / grant
+# emails so the UI can hide the pill entirely (no caps to display).
+#
+# Internal-only fields (cost cents, kill-switch ceiling) are NOT exposed —
+# the cost cap is a SILENT backstop per the AppSumo launch spec.
+# ---------------------------------------------------------------------------
+@api.get("/me/quota")
+async def me_quota(user: AuthUser = Depends(current_user)):
+    from tier_config import get_tier, tier_for_entitlements
+
+    # Dev bypass / studio-grant emails are treated as unlimited in the pill.
+    if (DEV_BYPASS_EMAIL and user.email == DEV_BYPASS_EMAIL) or user.email in STUDIO_GRANT_EMAILS:
+        return {
+            "unlimited": True,
+            "tier_id": "owner",
+            "tier_label": "Owner",
+        }
+
+    buyer = await db.buyers.find_one({"email": user.email}) or {}
+    if buyer.get("founders"):
+        return {
+            "unlimited": True,
+            "tier_id": "founder",
+            "tier_label": "Founder",
+        }
+
+    tier_id = (buyer.get("tier") or "").strip().lower()
+    if not tier_id:
+        tier_id = tier_for_entitlements(list(buyer.get("entitlements") or [])).id
+    tier = get_tier(tier_id)
+
+    used_total  = int(buyer.get("rendersThisCycle") or 0)
+    used_avatar = int(buyer.get("avatarRendersThisCycle") or 0)
+    quota_total = int(buyer.get("renderQuotaMonthly") or tier.render_quota_monthly)
+    avatar_cap  = int(buyer.get("avatarSubCap") or tier.avatar_sub_cap)
+
+    return {
+        "unlimited": False,
+        "tier_id": tier.id,
+        "tier_label": tier.label,
+        "renders_used": used_total,
+        "renders_total": quota_total,
+        "renders_remaining": max(0, quota_total - used_total),
+        "avatar_used": used_avatar,
+        "avatar_cap": avatar_cap,
+        "avatar_remaining": max(0, avatar_cap - used_avatar) if avatar_cap > 0 else 0,
+        "cycle_started_at": buyer.get("cycleStartedAt"),
+        "cycle_resets_at": buyer.get("cycleResetsAt"),
+        "byok_allowed": bool(buyer.get("byokAllowed") if buyer.get("byokAllowed") is not None else tier.byok_allowed),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Lightweight activity logger — frontend pings this for soft engagement
+# events (script copied, script sent to Studio, video played, history opened)
+# so the Stats / Usage admin tabs can show real per-customer behavior.
+#
+# Strict allow-list on the type field so a leaky frontend can't pollute the
+# activity collection. Quietly drops unknown types (returns ok=False) rather
+# than 4xx-ing the UI.
+# ---------------------------------------------------------------------------
+_USER_ACTIVITY_TYPES = {
+    "script_copied",
+    "script_sent_to_studio",
+    "video_played",
+    "script_opened_from_history",
+}
+
+
+class UserActivityRequest(BaseModel):
+    type: str
+    detail: Optional[dict] = None
+
+
+@api.post("/activity/log")
+async def post_activity_log(payload: UserActivityRequest, user: AuthUser = Depends(current_user)):
+    if payload.type not in _USER_ACTIVITY_TYPES:
+        return {"ok": False, "reason": "type not allowed"}
+    detail = payload.detail or {}
+    # Trim payload to keep activity rows small. We mostly care about presence
+    # + frequency for engagement metrics, not deep context.
+    if isinstance(detail, dict):
+        detail = {k: detail[k] for k in list(detail.keys())[:8]}
+    await _log_activity(payload.type, user.email, detail)
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
 # HeyGen — avatars + voices (with 24h Mongo cache)
 # ---------------------------------------------------------------------------
 async def _heygen_get(path: str) -> dict:
@@ -2975,6 +3067,11 @@ async def studio_render_both_aspects(payload: RenderRequest, user: AuthUser = De
         raise HTTPException(status_code=400, detail="Script required")
 
     jobs = []
+    # Track which aspects already passed the quota gate so we can refund
+    # if the SECOND gate-call raises (e.g. user has 1 render left + clicks
+    # both-aspects → first call consumes it, second call must 402 cleanly
+    # AND refund the first slot we just took).
+    gated_aspects: list[tuple[str, int]] = []  # (mode, estimated_cents)
     for aspect in ("9_16", "16_9"):
         per_payload = payload.model_copy(update={"aspect": aspect})
         estimated_cents = estimate_render_cost_cents(per_payload)
@@ -2983,10 +3080,30 @@ async def studio_render_both_aspects(payload: RenderRequest, user: AuthUser = De
                 "Both-aspects render circuit-breaker tripped: user=%s aspect=%s estimated=%s¢ threshold=%s¢",
                 user.email, aspect, estimated_cents, RENDER_COST_CIRCUIT_BREAKER_CENTS,
             )
+            # Refund any already-consumed slot before bailing.
+            for prev_mode, prev_cents in gated_aspects:
+                await _refund_quota_slot(email=user.email, mode=prev_mode, estimated_cents=prev_cents)
             raise HTTPException(
                 status_code=400,
                 detail="Render configuration is too large. Please contact support.",
             )
+
+        # Group B quota gate per render. Both-aspects fires two renders, so
+        # we consume two slots — one per aspect. If the second gate-call
+        # raises, refund the first slot we already took so the user isn't
+        # silently charged a quota slot for an unrun render.
+        try:
+            await _quota_gate_or_402(
+                email=user.email,
+                mode=per_payload.mode,
+                estimated_cents=estimated_cents,
+            )
+        except HTTPException:
+            for prev_mode, prev_cents in gated_aspects:
+                await _refund_quota_slot(email=user.email, mode=prev_mode, estimated_cents=prev_cents)
+            raise
+        gated_aspects.append((per_payload.mode, estimated_cents))
+
         job_id = str(uuid.uuid4())
         doc = {
             "id": job_id,

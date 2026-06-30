@@ -21,6 +21,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Any, Optional
 
 from fastapi import Body, Depends, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger("f48.admin")
@@ -846,6 +847,216 @@ def register_admin_routes(
         paged = items[skip : skip + limit]
 
         return {"total": total, "items": paged, "sort_by": sort_by, "sort_dir": sort_dir}
+
+    # ---- CSV exports (Group B6 of the AppSumo launch plan) ----
+    # Both files use the agreed filename format:
+    #   F2F48-{kind}-{YYYY-MM-DD}-export.csv
+    # which sorts cleanly by date in any file manager. UTF-8 + BOM so Excel
+    # opens it correctly without manual import config. Rows are streamed via
+    # a generator to keep memory flat even when the buyer list grows.
+    def _csv_escape(value: Any) -> str:
+        """Render any cell value as a CSV-safe string. Lists become
+        pipe-separated. Dicts/None become empty strings (admin can drill down
+        in the UI; the CSV is for at-a-glance snapshots, not nested data)."""
+        if value is None:
+            return ""
+        if isinstance(value, list):
+            value = "|".join(str(v) for v in value)
+        elif isinstance(value, dict):
+            value = ""
+        s = str(value)
+        if any(ch in s for ch in (",", '"', "\n", "\r")):
+            s = '"' + s.replace('"', '""') + '"'
+        return s
+
+    def _csv_row(values: list) -> str:
+        return ",".join(_csv_escape(v) for v in values) + "\n"
+
+    def _csv_filename(kind: str) -> str:
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        return f"F2F48-{kind}-{today}-export.csv"
+
+    @api.get("/admin/buyers/export")
+    async def admin_export_buyers(_admin=Depends(require_admin)):
+        """Stream every buyer row as CSV. Columns are flat (no nested JSON)
+        so accountants and customer-success folks can open it in Excel/Sheets
+        without preprocessing. Filename: F2F48-buyers-YYYY-MM-DD-export.csv."""
+        headers = [
+            "email",
+            "tier",
+            "founder",
+            "entitlements",
+            "total_spend_cents",
+            "renders_this_cycle",
+            "render_quota_monthly",
+            "avatar_renders_this_cycle",
+            "avatar_sub_cap",
+            "monthly_cost_cents",
+            "cycle_started_at",
+            "cycle_resets_at",
+            "last_login_at",
+            "login_count",
+            "script_count",
+            "shorts_count",
+            "first_use_at",
+            "added_at",
+            "source",
+            "order_id",
+        ]
+
+        async def _stream():
+            # BOM so Excel auto-detects UTF-8.
+            yield "\ufeff" + _csv_row(headers)
+            async for b in db.buyers.find({}).sort([("addedAt", -1)]):
+                row = [
+                    b.get("email"),
+                    b.get("tier"),
+                    bool(b.get("founders")),
+                    b.get("entitlements") or [],
+                    b.get("totalSpendCents") or 0,
+                    b.get("rendersThisCycle") or 0,
+                    b.get("renderQuotaMonthly") or 0,
+                    b.get("avatarRendersThisCycle") or 0,
+                    b.get("avatarSubCap") or 0,
+                    b.get("monthlyCostCents") or 0,
+                    b.get("cycleStartedAt"),
+                    b.get("cycleResetsAt"),
+                    b.get("lastLoginAt"),
+                    b.get("loginCount") or 0,
+                    b.get("scriptCount") or 0,
+                    b.get("shortsCount") or 0,
+                    b.get("firstUseAt"),
+                    b.get("addedAt"),
+                    b.get("source"),
+                    b.get("orderId"),
+                ]
+                yield _csv_row(row)
+
+        return StreamingResponse(
+            _stream(),
+            media_type="text/csv; charset=utf-8",
+            headers={
+                "Content-Disposition": f'attachment; filename="{_csv_filename("buyers")}"',
+            },
+        )
+
+    @api.get("/admin/usage/export")
+    async def admin_export_usage(_admin=Depends(require_admin)):
+        """Stream the per-customer usage leaderboard as CSV. Mirrors the
+        columns of GET /admin/usage but flattened (scripts.long → scripts_long
+        etc) so the CSV is one row per buyer. Filename:
+        F2F48-usage-YYYY-MM-DD-export.csv."""
+        from tier_config import tier_for_entitlements  # local import
+
+        headers = [
+            "email",
+            "tier",
+            "founder",
+            "entitlements",
+            "scripts_total",
+            "scripts_long",
+            "scripts_shorts",
+            "scripts_sprint",
+            "scripts_last_at",
+            "renders_total",
+            "renders_faceless",
+            "renders_avatar",
+            "renders_complete",
+            "renders_failed",
+            "renders_last_at",
+            "spend_cents",
+            "buyer_total_spend_cents",
+            "login_count",
+            "last_seen",
+            "added_at",
+        ]
+
+        # Pre-fetch the buyer base + email set in one pass; reuse the same
+        # $group aggregations the /admin/usage endpoint uses so the CSV
+        # numbers match the UI table 1:1.
+        buyer_docs: list[dict] = []
+        async for b in db.buyers.find({}, {
+            "email": 1, "entitlements": 1, "tier": 1, "founders": 1,
+            "lastLoginAt": 1, "loginCount": 1, "addedAt": 1, "totalSpendCents": 1,
+        }).sort([("email", 1)]):
+            buyer_docs.append(b)
+        emails = [b["email"] for b in buyer_docs if b.get("email")]
+
+        async def _agg(coll, group: dict) -> dict[str, dict]:
+            out: dict[str, dict] = {}
+            if not emails:
+                return out
+            pipeline = [{"$match": {"user_email": {"$in": emails}}}, {"$group": group}]
+            async for row in coll.aggregate(pipeline):
+                key = row.pop("_id", None)
+                if isinstance(key, str):
+                    out[key] = row
+            return out
+
+        scripts_by_email = await _agg(db.scripts, {
+            "_id": "$user_email",
+            "total":  {"$sum": 1},
+            "long":   {"$sum": {"$cond": [{"$eq": ["$mode", "long"]},   1, 0]}},
+            "shorts": {"$sum": {"$cond": [{"$eq": ["$mode", "shorts"]}, 1, 0]}},
+            "sprint": {"$sum": {"$cond": [{"$eq": ["$mode", "sprint"]}, 1, 0]}},
+            "last_script_at": {"$max": "$created_at"},
+        })
+        renders_by_email = await _agg(db.renders, {
+            "_id": "$user_email",
+            "total":    {"$sum": 1},
+            "faceless": {"$sum": {"$cond": [{"$eq": ["$mode", "faceless"]}, 1, 0]}},
+            "avatar":   {"$sum": {"$cond": [{"$eq": ["$mode", "avatar"]},   1, 0]}},
+            "complete": {"$sum": {"$cond": [{"$eq": ["$status", "complete"]}, 1, 0]}},
+            "failed":   {"$sum": {"$cond": [{"$eq": ["$status", "failed"]},   1, 0]}},
+            "spend_cents": {"$sum": {"$ifNull": ["$actual_cost_cents", 0]}},
+            "last_render_at": {"$max": "$created_at"},
+        })
+
+        async def _stream():
+            yield "\ufeff" + _csv_row(headers)
+            for b in buyer_docs:
+                email = b.get("email") or ""
+                ents = list(b.get("entitlements") or [])
+                tier_id = (b.get("tier") or "").strip().lower()
+                if not tier_id:
+                    tier_id = tier_for_entitlements(ents).id
+                s = scripts_by_email.get(email, {})
+                r = renders_by_email.get(email, {})
+                last_seen = _iso_max(b.get("lastLoginAt"), s.get("last_script_at"))
+                last_seen = _iso_max(last_seen, r.get("last_render_at"))
+                if not last_seen:
+                    last_seen = b.get("addedAt")
+                row = [
+                    email,
+                    tier_id,
+                    bool(b.get("founders")),
+                    ents,
+                    int(s.get("total")  or 0),
+                    int(s.get("long")   or 0),
+                    int(s.get("shorts") or 0),
+                    int(s.get("sprint") or 0),
+                    s.get("last_script_at"),
+                    int(r.get("total")    or 0),
+                    int(r.get("faceless") or 0),
+                    int(r.get("avatar")   or 0),
+                    int(r.get("complete") or 0),
+                    int(r.get("failed")   or 0),
+                    r.get("last_render_at"),
+                    int(r.get("spend_cents") or 0),
+                    int(b.get("totalSpendCents") or 0),
+                    int(b.get("loginCount") or 0),
+                    last_seen,
+                    b.get("addedAt"),
+                ]
+                yield _csv_row(row)
+
+        return StreamingResponse(
+            _stream(),
+            media_type="text/csv; charset=utf-8",
+            headers={
+                "Content-Disposition": f'attachment; filename="{_csv_filename("usage")}"',
+            },
+        )
 
     # ---- Pinball webhook (Phase C) ----
     async def _process_pinball_event(*, product: str, body: dict, source: str) -> dict:

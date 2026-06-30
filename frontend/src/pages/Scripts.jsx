@@ -707,6 +707,13 @@ export default function Scripts() {
         ? "Copied — paste into Google Docs to keep headings + colors."
         : "Copy failed — try selecting & copying manually."
     );
+    if (copied) {
+      // Soft engagement log — fire-and-forget, never block the UI.
+      apiClient.post("/activity/log", {
+        type: "script_copied",
+        detail: { script_id: output.id, mode: output.mode, platform: output.platform },
+      }).catch(() => {});
+    }
   };
 
   // ---- Copy all sprint shorts as a single blob (v1.8.0) ----
@@ -723,6 +730,12 @@ export default function Scripts() {
         ? `Copied all ${sprintVariants.length} Shorts.`
         : "Copy failed — try selecting & copying manually."
     );
+    if (ok) {
+      apiClient.post("/activity/log", {
+        type: "script_copied",
+        detail: { mode: "sprint", variant_count: sprintVariants.length },
+      }).catch(() => {});
+    }
   };
 
   const useInStudio = () => {
@@ -748,6 +761,15 @@ export default function Scripts() {
     try {
       localStorage.setItem("f48_handoff_script", JSON.stringify(handoff));
     } catch {}
+    apiClient.post("/activity/log", {
+      type: "script_sent_to_studio",
+      detail: {
+        script_id: jobOutput.id,
+        mode: jobOutput.mode,
+        platform: jobOutput.platform,
+        broll_prompts: brollPrompts.length,
+      },
+    }).catch(() => {});
     nav("/studio");
   };
 
@@ -758,6 +780,10 @@ export default function Scripts() {
       setMultiJobs([]);
       setCompareAll(false);
       setStep(STEPS.RESULT);
+      apiClient.post("/activity/log", {
+        type: "script_opened_from_history",
+        detail: { script_id: id, mode: r.data?.mode },
+      }).catch(() => {});
       setTimeout(
         () =>
           document.getElementById("scripts-output")?.scrollIntoView({

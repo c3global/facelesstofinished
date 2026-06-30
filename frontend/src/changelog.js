@@ -14,9 +14,18 @@
 //    See PRD.md → "Workflow rule: changelog must move with every deploy."
 // 4. Most recent on top. Each entry has version + date + bullet list.
 
-export const APP_VERSION = "1.8.1";
+export const APP_VERSION = "1.9.0";
 
 export const CHANGELOG = [
+  {
+    version: "1.9.0",
+    date: "2026-06-30",
+    changes: [
+      "New render-budget pill in the Studio header — see how many renders you've used this cycle and when your next batch unlocks at a glance",
+      "Click the pill for the full breakdown: total renders, Avatar sub-cap (Studio Pro+), and your exact cycle reset date",
+      "Friendlier message when you've used your last render — no more cryptic 402s",
+    ],
+  },
   {
     version: "1.8.1",
     date: "2026-06-29",

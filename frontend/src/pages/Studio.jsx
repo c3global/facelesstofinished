@@ -13,6 +13,7 @@ import {
 import ModePicker, { COMPOSITE_TOAST } from "../components/ModePicker";
 import MediaLibrary from "../components/MediaLibrary";
 import Toast from "../components/Toast";
+import StudioQuotaPill from "../components/StudioQuotaPill";
 
 const MODES = { AVATAR: "avatar", FACELESS: "faceless" };
 const MAX_SCENES = 12;
@@ -35,7 +36,16 @@ const modeChipLabel = (m) => (m === MODES.AVATAR ? "Avatar" : "Faceless");
 // We surface script-length issues as a script suggestion (no vendor names,
 // no cost language).
 function friendlyRenderError(e) {
-  const raw = (e?.response?.data?.detail || e?.message || "").toString();
+  // Quota / cost-cap rejections come back as 402 with a structured detail
+  // dict. Surface the friendly `message` field so the user sees the
+  // unified "You've used all X renders this cycle. Resets in N days." copy
+  // the backend builds (which intentionally hides the silent cost cap).
+  const status = e?.response?.status;
+  const detail = e?.response?.data?.detail;
+  if (status === 402 && detail && typeof detail === "object" && detail.message) {
+    return detail.message;
+  }
+  const raw = (typeof detail === "string" ? detail : detail?.message) || e?.message || "";
   const lower = raw.toLowerCase();
   if (lower.includes("script") && (lower.includes("too long") || lower.includes("character") || lower.includes("length") || lower.includes("limit"))) {
     return "Your script is too long for an avatar video — try shortening it or splitting it into two parts.";
@@ -78,6 +88,12 @@ function SourcePills({ idx, current, onPick }) {
 export default function Studio() {
   // Mode
   const [mode, setMode] = useState(MODES.AVATAR);
+
+  // Quota pill refresh counter — incremented after each successful render
+  // submission so the StudioQuotaPill re-fetches /me/quota and shows the
+  // freshly-decremented count without a manual reload.
+  const [quotaBump, setQuotaBump] = useState(0);
+  const bumpQuota = () => setQuotaBump((n) => n + 1);
 
   // Mode-picker landing card — shown on first visit, persisted to localStorage
   // so returning users skip straight to the chip form. A "Change mode" link
@@ -399,6 +415,7 @@ export default function Studio() {
       setToast("Render started…");
       scrollToRenderCard();
       pollStatus(r.data.id);
+      bumpQuota();
     } catch (e) {
       setRenderErr(friendlyRenderError(e));
     }
@@ -429,6 +446,7 @@ export default function Studio() {
       setToast(`Two renders queued — 9:16 + 16:9.`);
       scrollToRenderCard();
       pollStatus(focus.id);
+      bumpQuota();
     } catch (e) {
       setRenderErr(friendlyRenderError(e));
     }
@@ -468,6 +486,7 @@ export default function Studio() {
       setToast("Regenerating — scroll up to watch.");
       scrollToRenderCard();
       pollStatus(r.data.id);
+      bumpQuota();
     } catch (e) {
       setRenderErr(friendlyRenderError(e));
     }
@@ -763,9 +782,12 @@ export default function Studio() {
     <main className="studio-main" data-mode={mode} data-testid="studio-page">
       {/* Hero */}
       <div className="studio-hero">
-        <p className="studio-eyebrow" data-testid="studio-eyebrow">
-          Faceless to Finished · Video Engine
-        </p>
+        <div className="studio-hero-top">
+          <p className="studio-eyebrow" data-testid="studio-eyebrow">
+            Faceless to Finished · Video Engine
+          </p>
+          <StudioQuotaPill bump={quotaBump} />
+        </div>
         <h1 className="studio-title">Turn your script into a finished video.</h1>
         <p className="studio-sub">
           Paste your script, pick your look in two clicks, and we&rsquo;ll render the final cut — captions, voice, footage and all.
@@ -1248,6 +1270,20 @@ export default function Studio() {
                     src={terminalCurrent.result_url}
                     controls
                     playsInline
+                    onPlay={() => {
+                      // Fire only once per render id to avoid duplicate
+                      // logs on play/pause/seek. Tracks the rendered id on
+                      // the element itself via a data attribute.
+                      apiClient.post("/activity/log", {
+                        type: "video_played",
+                        detail: {
+                          render_id: terminalCurrent.id,
+                          mode: terminalCurrent.mode,
+                          aspect: terminalCurrent.aspect,
+                          context: "inline-card",
+                        },
+                      }).catch(() => {});
+                    }}
                   />
                 )}
                 {terminalCurrent.status === "failed" && (
@@ -1375,7 +1411,13 @@ export default function Studio() {
                   {r.status === "complete" && r.result_url && (
                     <button
                       className="icon-btn"
-                      onClick={() => setPlayerModal({ url: r.result_url, aspect: r.aspect })}
+                      onClick={() => {
+                        setPlayerModal({ url: r.result_url, aspect: r.aspect });
+                        apiClient.post("/activity/log", {
+                          type: "video_played",
+                          detail: { render_id: r.id, mode: r.mode, aspect: r.aspect },
+                        }).catch(() => {});
+                      }}
                       data-testid={`history-play-${r.id}`}
                       aria-label="Play"
                       title="Play"

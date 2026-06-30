@@ -12,6 +12,16 @@ first. Plain English — if you're a customer reading this, this is for you.
 
 ---
 
+## v1.9.0 — June 30, 2026
+
+- New render-budget pill in the Studio header — see how many renders you've
+  used this cycle and when your next batch unlocks at a glance.
+- Click the pill for the full breakdown: total renders, Avatar sub-cap
+  (Studio Pro+), and your exact cycle reset date.
+- Friendlier message when you've used your last render — no more cryptic 402s.
+
+---
+
 ## v1.8.1 — June 29, 2026
 
 - **What's New popup** now nudges you with a subtle amber dot when there's a
