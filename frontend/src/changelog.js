@@ -14,9 +14,23 @@
 //    See PRD.md → "Workflow rule: changelog must move with every deploy."
 // 4. Most recent on top. Each entry has version + date + bullet list.
 
-export const APP_VERSION = "1.18.0";
+export const APP_VERSION = "1.18.1";
 
 export const CHANGELOG = [
+  {
+    version: "1.18.1",
+    date: "2026-06-30",
+    changes: [
+      "Fixed: thumbnail prompt copy-over was truncating to the `[matches \"...\"]` label (~57 chars) instead of the full 500-700 char prompt body. Now the entire cover concept lands in the textarea when you click a chip",
+      "Roadmap is now editable — admins can add, edit, reorder, and delete items inline directly on /roadmap. Buyers see the polished read-only version",
+      "Added Script Revision Tools (TOP REQUEST), Brand Voice Profiles, Authority Content Templates, Content Series Builder to Planned",
+      "Added Approval Workflow, Multilingual Scripts, and Agency / White-label to Considering",
+      "Added the positioning subhead: \"the AI studio for off-camera authority content — built for consultants, coaches, experts, and speakers\"",
+      "Landing page now has a top-right nav (Roadmap · Changelog · Sign in) so reviewers can browse before signing up",
+      "New public /changelog page with a timeline view of every shipped version",
+      "Scripts page shows a one-shot release banner pointing to the roadmap — dismisses per version",
+    ],
+  },
   {
     version: "1.18.0",
     date: "2026-06-30",

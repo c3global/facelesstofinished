@@ -4034,6 +4034,17 @@ register_byok_routes(
     studio_grant_emails=STUDIO_GRANT_EMAILS,
 )
 
+# Roadmap routes — public GET /api/roadmap, admin-gated write endpoints.
+# Seeds default items on first read so the /roadmap page never renders blank.
+from roadmap_routes import register_roadmap_routes  # noqa: E402
+
+register_roadmap_routes(
+    api=api,
+    db=db,
+    current_user=current_user,
+    ADMIN_EMAILS=ADMIN_EMAILS,
+)
+
 
 # ---------------------------------------------------------------------------
 # Mount

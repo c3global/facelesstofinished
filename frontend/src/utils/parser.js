@@ -178,31 +178,77 @@ export function extractCoverPrompts(raw, maxCount = 3) {
   const sections = parseSections(raw);
   const body = sections.coverPrompts?.body || "";
   if (!body) return [];
-  const out = [];
-  // Strategy: strip ALL markdown bold markers from the line, THEN apply a
-  // single permissive regex. Markdown `**` is decoration only — removing it
-  // before parsing is far more robust than trying to anchor `**` optionality
-  // at every position in the pattern.
-  const re = /^\s*(\d{1,2})\s*[.)]\s*(?:\[\s*([^\]]+?)\s*\])?\s*[—–\-:]?\s*(.+)$/;
-  for (const rawLine of body.split(/\r?\n/)) {
-    const cleaned = rawLine.replace(/\*\*/g, "").trim();
-    if (!cleaned) continue;
-    const m = cleaned.match(re);
-    if (!m) continue;
-    const idx = parseInt(m[1], 10);
-    const label = (m[2] || "").trim();
-    // Strip trailing `--ar X:Y --no text` flags — those help with Midjourney
-    // but get embedded directly into our gpt-image prompt and confuse it.
-    // Aspect ratio is already chosen via the UI picker.
-    let prompt = m[3]
+
+  // Strategy: split the body into "entries" first (each starts with a
+  // numbered header like `1.` or `**1.**`), then for each entry capture
+  // the header line separately from the body paragraph(s) that follow.
+  //
+  // Why this rewrite (bug fix v1.18.1):
+  //   The earlier single-line regex `^N. [label] ... — prompt$` assumed the
+  //   prompt body lived on the SAME line as the number. But Claude's current
+  //   template emits the label on line 1 (`1. [matches "..."]`) and the
+  //   500-700 char prompt on lines 2-6. The old regex would backtrack out of
+  //   the bracket-label capture and grab the bracketed label itself as the
+  //   "prompt" — putting `[matches "..."]` (~57 chars) into the textarea
+  //   instead of the full prompt body. Live-demo killer.
+  //
+  // Formats now handled (numbered header on its own line OR with prompt
+  // trailing on same line):
+  //   "1. [matches \"Title\"]\nVivid prompt paragraph(s)..."
+  //   "**1.** [Curiosity] — Vivid prompt..."   (single-line legacy)
+  //   "1) Vivid prompt..."                     (no label at all)
+  const headerRe = /^\s*(?:\*\*)?\s*(\d{1,2})\s*[.)]\s*(?:\*\*)?\s*(?:\[\s*([^\]]+?)\s*\])?\s*[—–\-:]?\s*(.*)$/;
+  const lines = body.split(/\r?\n/);
+  const entries = [];
+  let cur = null;
+
+  const finalize = (e) => {
+    if (!e) return;
+    // Concatenate: same-line tail (if any) + the paragraph body that
+    // followed on subsequent lines. Strip Midjourney flags from the joined
+    // text since aspect ratio is chosen via the UI picker.
+    let prompt = [e.tail, e.bodyLines.join(" ").trim()]
+      .filter(Boolean)
+      .join(" ")
       .replace(/--ar\s+\d+:\d+/gi, "")
       .replace(/--no\s+[a-z]+(\s+[a-z]+)*/gi, "")
+      .replace(/\s+/g, " ")
       .trim();
-    if (!prompt) continue;
-    out.push({ index: idx, label, prompt });
-    if (out.length >= maxCount) break;
+    if (!prompt) return;
+    entries.push({ index: e.index, label: e.label, prompt });
+  };
+
+  for (const rawLine of lines) {
+    const cleaned = rawLine.replace(/\*\*/g, "").trim();
+    if (!cleaned) {
+      // Blank line — paragraph break inside the current entry. Keep going;
+      // we'll re-join all paragraph lines into one prompt string at finalize.
+      continue;
+    }
+    const m = cleaned.match(headerRe);
+    // Accept as a header ONLY if (a) it actually matches AND (b) the next
+    // entry index makes sense (i.e. we don't false-positive on a sentence
+    // that happens to start with a digit). Header index must be 1–9.
+    const looksLikeHeader =
+      m && parseInt(m[1], 10) >= 1 && parseInt(m[1], 10) <= 9;
+    if (looksLikeHeader) {
+      finalize(cur);
+      cur = {
+        index: parseInt(m[1], 10),
+        label: (m[2] || "").trim(),
+        tail: (m[3] || "").trim(),
+        bodyLines: [],
+      };
+      if (entries.length + (cur ? 1 : 0) > maxCount) {
+        // Stop collecting after we have enough headers in flight.
+        // The current `cur` will finalize at end of loop.
+      }
+    } else if (cur) {
+      cur.bodyLines.push(cleaned);
+    }
   }
-  return out;
+  finalize(cur);
+  return entries.slice(0, maxCount);
 }
 
 /**

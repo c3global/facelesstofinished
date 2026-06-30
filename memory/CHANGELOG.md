@@ -12,6 +12,40 @@ first. Plain English — if you're a customer reading this, this is for you.
 
 ---
 
+## v1.18.1 — June 30, 2026 (P0 bug fix + admin-editable roadmap)
+
+- **Fixed (P0):** The "Make thumbnail" handoff was truncating the cover
+  concept prompt to just the `[matches "..."]` label (~57 chars) instead
+  of passing the full 500-700 char prompt body. The parser was using a
+  single-line regex while Claude's current template puts the prompt
+  body on the lines BELOW the label. Now the parser splits the section
+  into numbered entries first, then captures each entry's full
+  multi-line body. Backwards compatible with the legacy single-line
+  format.
+- **Admin can edit the Roadmap inline.** Pencil + trash + reorder
+  arrows appear on every card when you're signed in as
+  drcharitycampbell@gmail.com. "+ Add item" button at the bottom of
+  each column. Every save goes to a Mongo-backed `roadmap_items`
+  collection — survives redeploys, can be backed up. Buyers see the
+  read-only version exactly as before.
+- **Roadmap content expansion:** added 4 new items to Planned (Script
+  Revision Tools as TOP REQUEST, Brand Voice Profiles, Authority
+  Content Templates, Content Series Builder) + 3 to Considering
+  (Approval Workflow, Multilingual Scripts, Agency / White-label).
+- **Positioning subhead** on the roadmap: *"The AI studio for
+  off-camera authority content — built for consultants, coaches,
+  experts, and speakers who need a video presence without being on
+  camera every day."*
+- **Landing-page nav** (top-right of /login): Roadmap · Changelog ·
+  Sign in. Reviewers can browse before signing up.
+- **New public /changelog page** — timeline view of every shipped
+  version, reads from the same source as the in-app footer popup.
+- **Release banner** on Scripts page pointing to the roadmap.
+  Dismisses per version: bump APP_VERSION and every buyer sees one
+  fresh banner.
+
+---
+
 ## v1.18.0 — June 30, 2026 (Public Roadmap page)
 
 - **New `/roadmap` page** linked from the footer. No login required —

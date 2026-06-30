@@ -33,6 +33,7 @@ import ScriptHistoryList from "../components/scripts/ScriptHistoryList";
 import GenProgress from "../components/scripts/GenProgress";
 import SprintResult, { sprintAllToClipboardText } from "../components/scripts/SprintResult";
 import ResultsNavBar from "../components/scripts/ResultsNavBar";
+import RoadmapBanner from "../components/scripts/RoadmapBanner";
 // v1.15.0 — constants + the platform-accent side-effect hook moved out
 // of this file so the page focuses on flow orchestration. Same exported
 // names: MODES, STEPS, LENGTHS, PLATFORMS, TAGLINES, angleKey,
@@ -872,6 +873,7 @@ export default function Scripts() {
       data-testid="scripts-page"
     >
       <Toast message={toast} onDismiss={() => setToast("")} />
+      <RoadmapBanner />
 
       {/* v1.8.0 — Sticky results nav: appears whenever there's output, mirrors
           the Netlify Script Engine update so users see the same toolbar on both

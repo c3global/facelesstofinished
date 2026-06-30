@@ -20,6 +20,112 @@ back to it for entitlement verification.
 
 ## 🔁 Workflow rule: Changelog moves with every change (set 2026-06-29 by user)
 
+### Iteration 45 (2026-06-30) — P0 bug fix + admin-editable roadmap (v1.18.1)
+
+**This iteration combined a P0 bug fix from a live client demo with a
+content + UX expansion. Five distinct things landed in one push.**
+
+**1. P0 bug fix — Thumbnail prompt truncation** (live-demo killer)
+- Symptom: clicking a cover concept chip on the Thumbnails page loaded
+  `[matches "Why Your Conference Room..."]` (57 chars) instead of the
+  full ~770 char prompt body.
+- Root cause: `extractCoverPrompts` in `/app/frontend/src/utils/parser.js`
+  used a single-line regex `^N. [label] ... — prompt$` that assumed the
+  prompt body was on the SAME line as the number. Claude's current
+  template puts label on line 1 and body on lines 2-N. The regex
+  backtracked out of the bracket-label capture group and grabbed the
+  `[matches "..."]` line itself as the "prompt."
+- Fix: split the section into numbered entries first (using a header
+  regex per line), then for each entry concatenate any same-line tail +
+  every line below it into the prompt body. Backwards compatible with
+  the legacy single-line format. Unit test confirms 57 → 773 chars on
+  the exact text from Charity's failing screenshot.
+
+**2. Admin-editable Roadmap (Mongo-backed)**
+- NEW `/app/backend/roadmap_routes.py`:
+  - `GET  /api/roadmap` — public, returns 4 columns grouped by status.
+    Seeds defaults on first call so the page never renders blank.
+  - `POST /api/admin/roadmap/items` — admin-gated create
+  - `PATCH /api/admin/roadmap/items/{id}` — admin-gated edit
+  - `DELETE /api/admin/roadmap/items/{id}` — admin-gated delete
+  - `POST /api/admin/roadmap/reorder` — admin-gated within-column
+    reorder (ids[] array, server writes order=0..N)
+  - `POST /api/admin/roadmap/reseed` — emergency nuke + reseed
+- Every write goes through `require_admin` dependency — not just UI
+  hiding. Verified via curl: 401 without token, 200 with admin token,
+  full CRUD round-trip works.
+- Mongo collection `roadmap_items`. Item shape: `{id, column, title,
+  blurb, tag?, order, created_at, updated_at}`.
+- Frontend `Roadmap.jsx` rewritten to fetch from API. Admin mode shows
+  inline edit/delete + up/down reorder arrows on every card + "+ Add
+  item" button at the bottom of each column. Read-only for buyers.
+
+**3. Roadmap content expansion** (per GPT brain-dump triage)
+- Added to Planned: **Script Revision Tools (TOP REQUEST)**, Brand
+  Voice Profiles, Authority Content Templates, Content Series Builder.
+- Added to Considering: Approval Workflow, Multilingual Scripts,
+  Agency / White-label.
+- Skipped from GPT's list: items already shipped (Avatar/Faceless),
+  duplicates (Media Library = Brand Kits), too-vague items
+  (Voiceover Planning, Content Brief Intake).
+
+**4. Positioning subhead**
+- *"The AI studio for off-camera authority content — built for
+  consultants, coaches, experts, and speakers who need a video
+  presence without being on camera every day."*
+- Rendered as italic subhead on the roadmap hero, between H1 and
+  support email line. Reframes the product positioning for AppSumo
+  reviewers + new buyers.
+
+**5. Landing-page nav + public Changelog page + Scripts banner**
+- Added top-right nav on `/login`: Roadmap · Changelog · Sign in.
+  Position absolute so it sits above the centered hero stack without
+  breaking the existing layout.
+- NEW `frontend/src/pages/Changelog.jsx` (public, no auth) — timeline
+  view that reads from the same `changelog.js` the footer popup uses.
+- NEW `frontend/src/components/scripts/RoadmapBanner.jsx` — one-shot
+  "v1.18.1 just shipped" banner on the Scripts page with View Roadmap
+  CTA. Dismisses per version (localStorage key includes APP_VERSION),
+  so bumping the version makes every buyer see it fresh.
+
+**Files touched:**
+- NEW `/app/backend/roadmap_routes.py` (~250 lines)
+- NEW `/app/frontend/src/pages/Roadmap.jsx` (rewrote — was static
+  import, now API-fetched + admin UI)
+- NEW `/app/frontend/src/pages/Changelog.jsx`
+- NEW `/app/frontend/src/components/scripts/RoadmapBanner.jsx`
+- `/app/backend/server.py` (+ register_roadmap_routes wiring)
+- `/app/frontend/src/utils/parser.js` (extractCoverPrompts rewrite)
+- `/app/frontend/src/pages/Scripts.jsx` (+ banner mount + import)
+- `/app/frontend/src/pages/Login.jsx` (+ landing nav)
+- `/app/frontend/src/App.js` (+ /changelog route, + Changelog + Roadmap
+  page imports)
+- `/app/frontend/src/App.css` (+ ~390 lines for all of above, dark +
+  light)
+- `/app/frontend/src/changelog.js` (APP_VERSION bumped to 1.18.1)
+- `/app/memory/CHANGELOG.md` (synced)
+
+**Verification:**
+- Backend: curl-tested all 5 admin endpoints — 401 unauth, 200 with
+  admin token, full CRUD round-trip clean.
+- Parser: unit test on the exact text from Charity's failing
+  screenshot — concept #2 grew from 57 chars (bug) to 773 chars (fix).
+  Legacy single-line format still parses correctly.
+- UI: 3 smoke screenshots — login nav at top-right (y=65), admin
+  roadmap (banner + edit controls + add buttons + 13 Planned items),
+  public roadmap (no admin controls + 13 Planned items). Scripts
+  banner shows for v1.18.1, dismisses, persists across reload.
+- Lint: all new JS files pass eslint, roadmap_routes.py passes ruff.
+
+**Future / Backlog (unchanged):**
+- Cinematic Faceless (Veo) — parked
+- server.py (~4060 lines) + Scripts.jsx (~1550 lines) refactor pass 2
+- One real captioned Faceless QA render
+
+---
+
+
+
 ### Iteration 44 (2026-06-30) — Public Roadmap page (/roadmap) v1.18.0
 
 **Why:** AppSumo reviewers vet apps by clicking around the live product, and a credible "what we've shipped + what's next" page signals serious momentum (not abandonware). User wanted it native to the app instead of an external Notion/Canny link.

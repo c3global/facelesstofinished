@@ -79,6 +79,35 @@ export default function Login() {
 
   return (
     <div className="login-wrap" data-testid="login-page">
+      {/* Minimal landing nav — visible to non-signed-in visitors and
+          AppSumo reviewers so they can browse the roadmap + changelog
+          before committing to an account. Three links only; pricing /
+          features intentionally NOT here (the login hero handles that). */}
+      <nav className="login-topnav" data-testid="login-topnav" aria-label="Public navigation">
+        <span className="login-topnav-brand" data-testid="login-topnav-brand">
+          Faceless to Finished
+        </span>
+        <div className="login-topnav-links">
+          <Link to="/roadmap" className="login-topnav-link" data-testid="login-topnav-roadmap">
+            Roadmap
+          </Link>
+          <Link to="/changelog" className="login-topnav-link" data-testid="login-topnav-changelog">
+            Changelog
+          </Link>
+          <a
+            className="login-topnav-link"
+            href="#login"
+            data-testid="login-topnav-signin"
+            onClick={(e) => {
+              e.preventDefault();
+              document.querySelector("[data-testid='login-form']")?.scrollIntoView({ behavior: "smooth" });
+              document.querySelector("[data-testid='login-email-input']")?.focus();
+            }}
+          >
+            Sign in
+          </a>
+        </div>
+      </nav>
       <div className="login-stack">
         {/* Top: full-width centered hero image. Sits ABOVE the 2-col grid
             so it visually anchors the page; the text + sign-in form sit
