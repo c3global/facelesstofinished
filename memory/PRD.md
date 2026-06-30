@@ -30,6 +30,48 @@ back to it for entitlement verification.
 6. Internal-only changes (admin panel, webhooks, refactors, env config, test infrastructure) still get documented — but here in `PRD.md`, NOT in the public changelog.
 
 
+## 2026-06-30 — Group D (AppSumo License Redemption + Tier Rename + Founder Treatment) SHIPPED
+**Status:** SHIPPED. Iter 34: 27/27 backend pytest GREEN + 100% frontend Playwright GREEN. Zero bugs found.
+
+### Customer-facing surface (the part the user obsessed over)
+**AppSumo is INVISIBLE in-app.** Three redemption entry points (footer link, login toggle, Profile dropdown) all land on a generic `/redeem` page that says nothing about AppSumo. Tier names are pricing-style: **Starter / Creator / Pro / Pro Plus**. The word "Founder" is hard-reserved for the legacy `founders: true` flag — NEVER an AppSumo-redeemable tier (enforced via `REDEEMABLE_TIER_IDS` frozenset at both the bulk-create AND redeem code paths).
+
+When the AppSumo 60-day campaign ends, nothing in the in-app UI changes. The `/api/me/upgrade-target` endpoint auto-flips from `APPSUMO_STACK_URL` → `OWN_PRICING_URL` based on the `APPSUMO_CAMPAIGN_END_AT` env var. With all three env vars blank, the Upgrade button quietly hides instead of pointing somewhere broken.
+
+### What's in
+1. **`licenses_routes.py`** (~545 LOC, self-contained) — endpoints:
+   - `POST /api/licenses/redeem` (customer) — atomic find_one_and_update on `{_id, status: "available"}` is the race lock; same-user re-redeem returns `{ok, already_redeemed: true}`; different-user 409; voided 410; nonexistent 404; protected users (dev_bypass / studio_grant / founders=true) burn the code WITHOUT being demoted; T3+ buyer redeeming a T1 code burns the code WITHOUT downgrade
+   - `GET /api/me/upgrade-target` (customer) — auto-flips between AppSumo stack URL and own pricing URL based on `APPSUMO_CAMPAIGN_END_AT`. Hides for dev_bypass / founders / T4 / no_url_configured
+   - `POST /api/admin/licenses/bulk-create` — accepts EITHER `{codes: [...]}` or `{csv: "..."}`. Idempotent on duplicate codes (skipped not errored). Rejects 'founder' tier with `reason: "tier"`
+   - `GET /api/admin/licenses?status=&tier=&source=&batch_id=&q=` — list with totals aggregation
+   - `POST /api/admin/licenses/{code}/void`
+   - `POST /api/admin/buyers/{email}/upgrade-tier` — manual fallback for Stripe/direct buyers
+2. **`tier_config.py` rename** — T1 → "Starter", T2 → "Creator", T3 → "Pro", T4 → "Pro Plus". `REDEEMABLE_TIER_IDS = frozenset({"t1","t2","t3","t4"})` excludes founder. Top-level `require_admin` dep extracted to `server.py:325-340` (shared by admin_routes + licenses_routes)
+3. **`/redeem` standalone page** (`Redeem.jsx`) — copper KeyRound icon, monospace input, success state w/ "Open dashboard" CTA. Pre-auth: stashes code in localStorage + bounces to `/login?redeem=…`
+4. **`ProfileMenu.jsx`** — replaces flat header email + sign-out button. Email + tier label chip + conditional copper Founder badge. Items: Upgrade plan (only when visible from backend), Redeem code, Sign out. Click-outside dismiss. Also stamps `document.body.dataset.founder` for the theme accent
+5. **Three entry points wired** — footer "Have a redemption code?" link, login toggle "I have a redemption code instead", Profile dropdown "Redeem code"
+6. **Login deep-link replay** — `/login?redeem=<code>` shows pending-redeem chip + "Sign in to redeem." title + "Sign in & redeem" CTA. After successful auth, auto-replays POST /api/licenses/redeem and lands on /redeem with the success/error state already populated
+7. **Quota popover upgrade button** — `StudioQuotaPill` now fetches `/me/upgrade-target` alongside `/me/quota`. Button renders ONLY when `(isLow || isExhausted) && upgrade.visible` — quiet by default
+8. **Founder copper theme accent** — `body[data-founder="true"]` CSS overrides swap purple `--accent` to copper (#C9956C / #F5D9B6) for nav active state, quota pill border, header buttons, focus rings. Subtle, exclusive, no shouting
+9. **Admin Licenses tab** (`LicensesTab.jsx`) — between Usage and Activity. Search + status/tier filters + batch tracking. Bulk-create panel accepts either CSV or comma-separated lines (auto-detected). Void button per row with confirm()
+10. **3 new env vars** in `/app/backend/.env`: `APPSUMO_STACK_URL`, `OWN_PRICING_URL`, `APPSUMO_CAMPAIGN_END_AT` (all blank by default)
+11. **Changelog v1.11.0** — customer-friendly copy. No mention of AppSumo
+
+### Files touched / new
+- NEW: `/app/backend/licenses_routes.py` (545 LOC)
+- NEW: `/app/frontend/src/pages/Redeem.jsx` (~115 LOC)
+- NEW: `/app/frontend/src/components/ProfileMenu.jsx` (~140 LOC)
+- NEW: `/app/frontend/src/components/admin/LicensesTab.jsx` (~230 LOC)
+- NEW: `/app/backend/tests/test_iter34_licenses.py` (27 pytest cases)
+- MODIFIED: `tier_config.py` (label rename + REDEEMABLE_TIER_IDS), `server.py` (require_admin extract + register_license_routes), `Header.jsx` (use ProfileMenu), `Footer.jsx` (redemption link), `Login.jsx` (pending-redeem deep-link replay + toggle), `StudioQuotaPill.jsx` (upgrade button), `Admin.jsx` (Licenses tab), `App.js` (Redeem route), `App.css` (~300 LOC new for ProfileMenu / Redeem / Founder theme / Quota upgrade button / Licenses tab styling)
+- `changelog.js` + `/app/memory/CHANGELOG.md` v1.11.0
+
+### Open follow-ups
+- When AppSumo deal goes live, set `APPSUMO_STACK_URL` + `APPSUMO_CAMPAIGN_END_AT` in `.env` and restart backend. To launch direct sales, set `OWN_PRICING_URL`.
+- gpt-image-2 still pending Emergent Universal LLM key support — earmarked for Group E (BYOK) when buyers bring their own OpenAI keys.
+
+---
+
 ## 2026-06-30 — Iter 33: Cover-prompt picker for long-form + Viral-style suffix
 **Status:** SHIPPED. Iter 33 backend 6/6 GREEN (frontend code-review GREEN — Playwright auth was WAF-blocked but iter 32 had already verified base picker infra + I smoke-tested the new UI manually).
 
