@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, createContext, useContext } from "react";
-import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import axios from "axios";
 import Studio from "./pages/Studio";
 import Scripts from "./pages/Scripts";
@@ -208,12 +208,11 @@ export default function App() {
   );
 }
 
-// Footer is hidden on /login (the login page already shows the full landing
-// hero — a footer below it would just add clutter). On every other route,
-// the Footer mounts at the bottom of the viewport. Mirrors the Header's
-// `showNav` pattern in components/Header.jsx.
+// Footer mounts at the bottom of every route. Was previously hidden on
+// /login (the assumption being the hero already filled the page), but
+// Charity wants a real footer everywhere so visitors landing on /login,
+// /roadmap, or /changelog see the same shipping-velocity signal
+// (version pill + "What's New" amber dot) the authenticated app carries.
 function FooterGate() {
-  const loc = useLocation();
-  if (loc.pathname === "/login") return null;
   return <Footer />;
 }

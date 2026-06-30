@@ -32,7 +32,7 @@ export default function Login() {
   useEffect(() => {
     const urlCode = params.get("redeem");
     let stash = "";
-    try { stash = localStorage.getItem("f48_pending_redeem") || ""; } catch {}
+    try { stash = localStorage.getItem("f48_pending_redeem") || ""; } catch { /* storage blocked */ }
     const code = (urlCode || stash || "").trim();
     if (code) setPendingRedeem(code);
   }, [params]);
@@ -50,7 +50,7 @@ export default function Login() {
       if (welcome) {
         try {
           sessionStorage.setItem("f48_pending_welcome", JSON.stringify(welcome));
-        } catch {}
+        } catch { /* storage blocked — welcome toast just won't fire */ }
       }
 
       // Replay a deferred redemption now that auth is established. If it
@@ -61,7 +61,7 @@ export default function Login() {
         try {
           await apiClient.post("/licenses/redeem", { code: pendingRedeem });
         } catch { /* surface on /redeem */ }
-        try { localStorage.removeItem("f48_pending_redeem"); } catch {}
+        try { localStorage.removeItem("f48_pending_redeem"); } catch { /* storage blocked */ }
         nav(`/redeem?code=${encodeURIComponent(pendingRedeem)}`);
         return;
       }
@@ -79,35 +79,6 @@ export default function Login() {
 
   return (
     <div className="login-wrap" data-testid="login-page">
-      {/* Minimal landing nav — visible to non-signed-in visitors and
-          AppSumo reviewers so they can browse the roadmap + changelog
-          before committing to an account. Three links only; pricing /
-          features intentionally NOT here (the login hero handles that). */}
-      <nav className="login-topnav" data-testid="login-topnav" aria-label="Public navigation">
-        <span className="login-topnav-brand" data-testid="login-topnav-brand">
-          Faceless to Finished
-        </span>
-        <div className="login-topnav-links">
-          <Link to="/roadmap" className="login-topnav-link" data-testid="login-topnav-roadmap">
-            Roadmap
-          </Link>
-          <Link to="/changelog" className="login-topnav-link" data-testid="login-topnav-changelog">
-            Changelog
-          </Link>
-          <a
-            className="login-topnav-link"
-            href="#login"
-            data-testid="login-topnav-signin"
-            onClick={(e) => {
-              e.preventDefault();
-              document.querySelector("[data-testid='login-form']")?.scrollIntoView({ behavior: "smooth" });
-              document.querySelector("[data-testid='login-email-input']")?.focus();
-            }}
-          >
-            Sign in
-          </a>
-        </div>
-      </nav>
       <div className="login-stack">
         {/* Top: full-width centered hero image. Sits ABOVE the 2-col grid
             so it visually anchors the page; the text + sign-in form sit

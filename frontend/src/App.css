@@ -7336,48 +7336,48 @@ body[data-founder="true"] .settings-key-save-btn {
   background: color-mix(in srgb, var(--text) 8%, transparent);
 }
 
-/* --- Public landing nav --------------------------------------------- */
-.login-wrap { position: relative; } /* anchor the absolute nav */
-.login-topnav {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
+/* --- Public landing nav (lives in Header.jsx for non-signed-in users) -- */
+.site-public-nav {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 18px 28px;
-  z-index: 5;
+  gap: 4px;
+  margin-right: 4px;
 }
-.login-topnav-brand {
-  font-size: 14px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  color: var(--text);
-}
-.login-topnav-links { display: flex; align-items: center; gap: 6px; }
-.login-topnav-link {
+.public-nav-link {
   font-size: 13px;
   font-weight: 500;
   color: var(--muted);
   text-decoration: none;
-  padding: 7px 14px;
+  padding: 6px 12px;
   border-radius: 999px;
   border: 1px solid transparent;
   transition: color 120ms, border-color 120ms, background 120ms;
 }
-.login-topnav-link:hover {
+.public-nav-link:hover {
   color: var(--text);
   border-color: var(--border);
   background: color-mix(in srgb, var(--text) 4%, transparent);
 }
+.public-nav-cta {
+  font-size: 13px;
+  font-weight: 600;
+  color: #ffffff;
+  text-decoration: none;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: var(--accent);
+  border: 1px solid transparent;
+  transition: filter 120ms, transform 80ms;
+}
+.public-nav-cta:hover { filter: brightness(1.08); }
+.public-nav-cta:active { transform: translateY(1px); }
 @media (max-width: 640px) {
-  .login-topnav {
-    flex-direction: column;
-    gap: 10px;
-    padding: 14px 16px 0;
-  }
-  .login-topnav-brand { font-size: 13px; }
+  .site-public-nav { gap: 2px; }
+  .public-nav-link { padding: 5px 9px; font-size: 12px; }
+  .public-nav-cta { padding: 5px 11px; font-size: 12px; }
+}
+[data-theme="light"] .public-nav-link:hover {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
 }
 
 /* --- Public /changelog page ----------------------------------------- */

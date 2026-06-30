@@ -20,6 +20,88 @@ back to it for entitlement verification.
 
 ## 🔁 Workflow rule: Changelog moves with every change (set 2026-06-29 by user)
 
+### Iteration 47 (2026-06-30) — Audience-neutral roadmap + unified public header
+
+**User feedback that drove this iteration:** Charity called out that
+the roadmap was leading with "AppSumo buyers locked in the lifetime
+price" — but the product is meant for every customer (Founders,
+lifetime-deal holders, organic visitors, post-AppSumo signups). Also
+called out two layout issues: the public nav was sitting BELOW the
+hero image (separate row), and the login page had no footer.
+
+**What landed:**
+1. **Public nav consolidated into the existing Header** (`Header.jsx`).
+   Roadmap · Changelog · Sign in now render on the same row as the
+   logo and theme toggle when `!user`. Sign-in is auto-hidden on the
+   /login route itself (linking to the page you're on is silly).
+2. **Login-specific `.login-topnav` deleted** (along with its CSS).
+   The old nav was using `position: absolute` over the hero — a hack
+   I never should have needed. Putting it in the main Header was the
+   right move all along.
+3. **FooterGate now always renders Footer** — including on /login.
+   Removed the `if (loc.pathname === "/login") return null` early-out
+   + the now-unused `useLocation` import.
+4. **De-AppSumo'd customer-visible copy:**
+   - Roadmap footnote rewritten: "Every customer on this page —
+     Founders, lifetime-deal holders, and everyone who joins us
+     later — is locked in for everything we ship here."
+   - Shipped item renamed: "AppSumo redemption flow" → "Redemption
+     codes" (no tag).
+   - In Progress renamed: "Production deploy + AppSumo launch" →
+     "Production launch".
+   - Admin Dashboard blurb: "For Charity + team only" → "For the
+     team only".
+   - Multilingual Scripts: removed "AppSumo market" reference.
+   - `changelog.js` v1.17.0 and earlier entries had two stray
+     AppSumo mentions in v1.18.0 + v1.14.0 — both rewritten.
+5. **Removed orphan `/app/frontend/src/data/roadmap.js`** — that
+   static seed file was replaced by API-fetched data in iter 45 but
+   left behind. Deleted; no imports referenced it.
+
+**Internal-only AppSumo references that REMAIN (intentional):**
+- `LicensesTab.jsx` — admin-only "Source" field default is still
+  "appsumo" because that IS the v1 launch channel. This component
+  is gated behind the admin role and never shown to customers.
+- `ProfileMenu.jsx` source comments — internal documentation.
+- `App.css` — comment + an orphan `[data-tag="appsumo"]` selector
+  that no longer matches anything since the reseed (harmless).
+
+**APP_VERSION bumped to 1.18.2.** Every existing buyer's footer pill
+will pulse amber "What's New" on their next visit and clicking it
+will show them the new copy.
+
+**Files touched:**
+- `/app/frontend/src/components/Header.jsx` — added public nav,
+  Link import
+- `/app/frontend/src/pages/Login.jsx` — removed old nav, fixed 3
+  pre-existing empty-catch lint issues
+- `/app/frontend/src/App.js` — FooterGate always renders, removed
+  useLocation import
+- `/app/frontend/src/pages/Roadmap.jsx` — footnote copy rewrite
+- `/app/backend/roadmap_routes.py` — seed defaults rewritten +
+  reseeded
+- `/app/frontend/src/changelog.js` — APP_VERSION 1.18.2 + new entry
+  + 2 historical entries scrubbed
+- `/app/frontend/src/App.css` — removed `.login-topnav-*`, added
+  `.site-public-nav` / `.public-nav-link` / `.public-nav-cta`
+- DELETED `/app/frontend/src/data/roadmap.js`
+
+**Verified:**
+- Screenshot of `/login` (logged-out): logo, Roadmap, Changelog,
+  theme-toggle all at y=14-15 — same row, no overlap. Footer at
+  y=999. Sign-in CTA correctly hidden on /login.
+- Screenshot of `/roadmap` (logged-out): all 3 public nav items
+  show (Roadmap | Changelog | Sign-in CTA pill). Roadmap copy
+  cleaned: "Already live and working for every buyer", "Production
+  launch", no AppSumo leakage.
+- POST /api/admin/roadmap/reseed flushed + reinserted 31 items
+  with the new copy. Confirmed via curl: zero "AppSumo" strings
+  in any title/blurb/tag.
+
+---
+
+
+
 ### Iteration 46 (2026-06-30) — Pre-launch financial hardening: AppSumo refund-leak fix
 
 **Why this matters:** AppSumo's refund window is 60 days. Lifetime-deal

@@ -12,6 +12,25 @@ first. Plain English — if you're a customer reading this, this is for you.
 
 ---
 
+## v1.18.2 — June 30, 2026 (Audience-neutral roadmap + cleaner header)
+
+- The public nav (Roadmap · Changelog · Sign in) now sits on the same
+  row as the logo and the theme toggle, instead of below the hero
+  image. One clean header row, no awkward duplicate links.
+- The Sign-in button is automatically hidden when you&rsquo;re already
+  on the login page (no point linking to the page you&rsquo;re on).
+- The footer now renders on the login page too — so the version pill
+  + "What&rsquo;s New" amber dot are visible from your very first
+  visit, not just after you sign in.
+- The roadmap copy is now audience-neutral. It used to lead with
+  "AppSumo buyers" — but this product is for every customer, not
+  just one launch partner. Founders, lifetime-deal holders, and
+  everyone who joins us later all see the same forward-looking page.
+- Renamed Shipped &ldquo;Redemption flow&rdquo; and In Progress
+  &ldquo;Production launch&rdquo; for the same reason.
+
+---
+
 ## v1.18.1 — June 30, 2026 (P0 bug fix + admin-editable roadmap)
 
 - **Fixed (P0):** The "Make thumbnail" handoff was truncating the cover

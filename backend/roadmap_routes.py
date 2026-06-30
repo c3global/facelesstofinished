@@ -77,19 +77,18 @@ def _default_items() -> list[dict]:
         "Pro Plus + Founders can plug in their own Anthropic, OpenAI, Google, ElevenLabs, HeyGen, and fal.ai keys. Encrypted at rest.",
         tag="Pro Plus")
     add("shipped", "Admin Dashboard",
-        "Usage leaderboard, buyer drilldown, activity feed, license management, CSV exports. For Charity + team only.")
+        "Usage leaderboard, customer drilldown, activity feed, license management, CSV exports. For the team only.")
     add("shipped", "Light + Dark themes",
         "Switch in the header. Every page, every card, every chip — polished to readable contrast in both modes.")
-    add("shipped", "AppSumo redemption flow",
-        "Paste your code, instantly unlock your tier. Works from the footer, the login screen, or your profile dropdown.",
-        tag="AppSumo")
+    add("shipped", "Redemption codes",
+        "Paste your code, instantly unlock your tier. Works from the footer, the login screen, or your profile dropdown.")
 
     # ---- In Progress (2) ----
-    add("inProgress", "Production deploy + AppSumo launch",
+    add("inProgress", "Production launch",
         "Final pre-launch hardening — Fernet-encrypted BYOK vault, deploy health checks, last QA pass on captioned Faceless renders.",
         tag="This week")
     add("inProgress", "GoHighLevel CRM sync",
-        "Auto-push every new buyer + redemption to your GHL pipeline so onboarding sequences fire the moment someone joins.")
+        "Auto-push every new customer + redemption to your GHL pipeline so onboarding sequences fire the moment someone joins.")
 
     # ---- Planned (13) — Canva first (TOP REQUEST), then GPT additions ----
     add("planned", "Canva integration",
@@ -130,7 +129,7 @@ def _default_items() -> list[dict]:
     add("considering", "Approval Workflow",
         "Review notes, approval status, and version history for consultants and agencies producing on behalf of clients.")
     add("considering", "Multilingual Scripts",
-        "Generate or translate scripts in 10+ languages — opens the international AppSumo market for global professionals.")
+        "Generate or translate scripts in 10+ languages — opens up international markets for global professionals.")
     add("considering", "Agency / White-label",
         "Client portals, your-branding-instead-of-ours, multi-brand dashboards. Built for the consultants who resell this to their book.")
     add("considering", "Webhook + Zapier outbound",

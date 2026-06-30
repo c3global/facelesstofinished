@@ -439,10 +439,11 @@ export default function Roadmap() {
 
       <div className="roadmap-footnote">
         <p>
-          Building a video engine is a marathon, not a sprint. AppSumo
-          buyers locked in the lifetime price for everything on this page —
+          Building a video engine is a marathon, not a sprint. Every customer
+          on this page — Founders, lifetime-deal holders, and everyone who
+          joins us later — is locked in for everything we ship here:
           shipped, in progress, planned. We&rsquo;re building it because
-          you bought it.
+          you&rsquo;re here.
         </p>
       </div>
     </main>

@@ -14,9 +14,19 @@
 //    See PRD.md → "Workflow rule: changelog must move with every deploy."
 // 4. Most recent on top. Each entry has version + date + bullet list.
 
-export const APP_VERSION = "1.18.1";
+export const APP_VERSION = "1.18.2";
 
 export const CHANGELOG = [
+  {
+    version: "1.18.2",
+    date: "2026-06-30",
+    changes: [
+      "Public nav (Roadmap · Changelog · Sign in) now lives in the main header on the same row as the logo and theme toggle — no more separate row of links below the hero",
+      "Footer now renders on the login page too, so the version pill and 'What's New' dot are visible from your very first visit",
+      "Refreshed the roadmap copy — it now reads for every customer (Founders, lifetime-deal holders, and everyone who joins us later), not just one launch partner",
+      "Renamed Shipped 'Redemption flow' → 'Redemption codes' and In Progress 'Production launch' so the language stays audience-neutral",
+    ],
+  },
   {
     version: "1.18.1",
     date: "2026-06-30",
@@ -36,7 +46,7 @@ export const CHANGELOG = [
     date: "2026-06-30",
     changes: [
       "New public Roadmap page — see what we've shipped, what we're building now, and what's coming next. Linked from the footer (no login required)",
-      "Shipped column highlights Script Engine, Studio Avatar + Faceless, Thumbnail Engine, BYOK vault, and AppSumo redemption",
+      "Shipped column highlights Script Engine, Studio Avatar + Faceless, Thumbnail Engine, BYOK vault, and redemption codes",
       "Tell us which Considering item matters most — top requests get fast-tracked into Planned",
     ],
   },
@@ -80,7 +90,7 @@ export const CHANGELOG = [
     version: "1.13.0",
     date: "2026-06-30",
     changes: [
-      "GoHighLevel integration — every new buyer (Pinball purchase) and every AppSumo code redemption now pushes a tagged contact to your GHL workspace automatically, with tier + source + founder tags",
+      "GoHighLevel integration — every new customer (purchase webhook) and every code redemption now pushes a tagged contact to your GHL workspace automatically, with tier + source + founder tags",
       "Admin Buyers tab: GHL connection pill (green when wired, amber when off), Test GHL button to verify the webhook live, per-buyer Push to GHL replay button for legacy buyers / outage recovery",
       "Failures land in the activity log as ghl_push_failed so nothing slips silently",
     ],
