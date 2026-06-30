@@ -30,6 +30,56 @@ back to it for entitlement verification.
 6. Internal-only changes (admin panel, webhooks, refactors, env config, test infrastructure) still get documented — but here in `PRD.md`, NOT in the public changelog.
 
 
+## 2026-06-30 — Group B (Quota Infrastructure) COMPLETED + Group C (Usage tab + Studio Quota Pill + Activity logging) SHIPPED
+**Status:** SHIPPED on preview, testing-agent iter 31 ALL PASS (15/15 backend, 14/15 frontend — the one un-exercised frontend path is the Scripts copy→activity log which simply lacks a seeded script in the dev DB; backend allow-list + persistence verified directly).
+
+### What's in
+1. **Both-aspects quota gate + refund** — `studio_render_both_aspects` now gates EACH aspect through `_quota_gate_or_402`. Tracks slot consumption in a `gated_aspects: list[tuple[str, int]]`. If the second gate-call raises (e.g. user has 1 render left + clicks "Render both"), the first slot is refunded via `_refund_quota_slot` so the user isn't silently charged for an un-fired render. Same refund happens on the circuit-breaker trip mid-batch.
+2. **`GET /api/me/quota`** — drives the Studio header pill. Returns `unlimited: true` for dev-bypass + studio-grant emails + buyers with `founders: true`. For regular buyers returns `{tier_id, tier_label, renders_used, renders_total, renders_remaining, avatar_used, avatar_cap, avatar_remaining, cycle_started_at, cycle_resets_at, byok_allowed}`. The silent cost-cap kill switch is NEVER exposed in this payload.
+3. **`POST /api/activity/log`** — lightweight engagement tracker with hard allow-list: `script_copied`, `script_sent_to_studio`, `video_played`, `script_opened_from_history`. Unknown types are quietly dropped (`{ok: false}` rather than 4xx). Detail dict is trimmed to 8 keys max. Frontend wires from Scripts.jsx (copyAll, copyAllShorts, sendToStudio, loadFromHistory) + Studio.jsx (history play button + inline render-card video onPlay).
+4. **`GET /api/admin/buyers/export` + `GET /api/admin/usage/export`** — admin-gated CSV streams. Filename format `F2F48-buyers-YYYY-MM-DD-export.csv` / `F2F48-usage-YYYY-MM-DD-export.csv` (ISO date, sorts cleanly). Bodies start with UTF-8 BOM so Excel auto-detects encoding. Lists are pipe-joined, nested fields are flat. Usage export reuses the same `$group` aggregations as `/admin/usage` so CSV numbers match the UI 1:1.
+5. **`StudioQuotaPill.jsx`** (new component) — anchored top-right of the Studio hero (new `.studio-hero-top` flex container). Three states: `unlimited` (Crown icon + "Owner/Founder · unlimited renders", non-clickable), normal (Zap icon + "X of Y renders · resets Mon Day"), low/exhausted (amber/red variants). Click opens an inline popover (data-testid='studio-quota-pop') with: renders bar, optional avatar sub-cap bar, exact reset date + days-until, and an exhaustion CTA when remaining=0. Refreshes on mount, every 60s, and after each render via a `quotaBump` counter the parent increments in `fireRender` / `renderBothAspects` / regenerate.
+6. **`UsageTab.jsx`** (new) — fourth admin tab between Buyers and Activity. Sortable columns (Email / Scripts / Renders / Spend / Last seen / Joined), Tier chips (T1=teal, T2=blue, T3=copper, T4=gold, Founder=purple), per-row drilldown with 4 cards (Scripts breakdown by mode, Renders breakdown by status/mode, Spend breakdown with buyer total + login count, Entitlements list).
+7. **CSV export buttons** in Buyers tab + Usage tab — call /admin/{kind}/export with `responseType: 'blob'`, render via `<a download>` trick so files land in Downloads folder directly (not a JSON blob in the network tab).
+8. **402 friendly copy** in `friendlyRenderError` — detects `status === 402 && detail.message` from the backend quota gate and surfaces it directly. No more raw 402 strings shown to users.
+
+### Files touched
+- `/app/backend/server.py` — `studio_render_both_aspects` (added per-aspect quota gate + refund), new `/me/quota` endpoint, new `/activity/log` endpoint + `UserActivityRequest` model + `_USER_ACTIVITY_TYPES` allow-list
+- `/app/backend/admin_routes.py` — added `StreamingResponse` import, `_csv_escape` / `_csv_row` / `_csv_filename` helpers, `admin_export_buyers` + `admin_export_usage` endpoints
+- `/app/frontend/src/components/StudioQuotaPill.jsx` — NEW (full component, ~160 lines)
+- `/app/frontend/src/components/admin/UsageTab.jsx` — NEW (full component, ~260 lines)
+- `/app/frontend/src/pages/Studio.jsx` — wired `StudioQuotaPill`, `quotaBump` state, `bumpQuota()` calls after render dispatches, video play activity logs, friendly 402 copy
+- `/app/frontend/src/pages/Scripts.jsx` — activity log fire-and-forget on copyAll / copyAllShorts / sendToStudio / loadFromHistory
+- `/app/frontend/src/pages/Admin.jsx` — added Usage tab + UsageTab import (4 tabs total now)
+- `/app/frontend/src/components/admin/BuyersTab.jsx` — added Download icon import, `downloadBuyersCSV` handler + `exporting` state, Export CSV button
+- `/app/frontend/src/App.css` — new sections for `.studio-hero-top`, `.quota-pill*` (incl. unlimited / is-low / is-exhausted variants), `.quota-pop*` (popover + bars), `.ent-chip-t{1,2,3,4}` + `.ent-chip-founder`, `.usage-table`, `.usage-drilldown*`
+- `/app/frontend/src/changelog.js` — bumped APP_VERSION to 1.9.0 with customer-facing copy about the new pill
+- `/app/memory/CHANGELOG.md` — mirrored v1.9.0 entry
+
+### Verified by testing agent (iter 31)
+- `/api/me/quota` returns correct unlimited payload for dev_bypass (`drcharitycampbell@gmail.com`) and full quota snapshot for seeded T3 buyer
+- `/api/activity/log` accepts all 4 allow-listed types, rejects others with `{ok: false}`, persists rows in `db.activity`
+- Both-aspects quota gate: with `renderQuotaMonthly=2 / rendersThisCycle=1`, first aspect succeeds, second 402s, `rendersThisCycle` correctly refunds back to 1 after the failed batch
+- Both CSV endpoints return 200 with correct `Content-Disposition` filename + UTF-8 BOM + expected header rows
+- Non-admin (`directkynections@gmail.com`, STUDIO_GRANT but not ADMIN) receives 403 on `/admin/buyers/export` + `/admin/usage/export`
+- Studio header renders `data-testid='studio-quota-pill'` correctly for owner ("Owner · unlimited renders" + Crown)
+- Admin tabs render in order: Buyers → Usage → Activity → Stats. Usage drilldown opens 4 cards on row click. Sort indicators flip ↓/↑.
+- CSV downloads triggered via Playwright download event API land with exact ISO filename
+- Test file: `/app/backend/tests/test_iter31_group_b_c.py` (15 tests, 100% pass)
+
+### What this unblocks
+- AppSumo launch P0 is now de-risked on the cost front. Buyers will hit a soft quota cap, not a silent cost ceiling, and admins have CSV exports for accounting + customer-success workflows.
+- Group C UI (quota visibility) is live — buyers can self-serve "how many renders do I have left?" without contacting support.
+
+### Still open (Group C2 onward, P0 for AppSumo)
+- **Thumbnail Engine** — OpenAI "Premium" + Gemini "Fast" image gen (Scripts page generator, Studio parallel pipeline, standalone top-nav tool).
+- License code redemption flow (Group D, P1).
+- BYOK Fernet-encrypted key vault (Group E, P1).
+- GHL webhook handoff (Group F, P2).
+- Scene regen soft cap (Quality Safety Net, P2).
+
+---
+
 ## 2026-06-29 — Group A foundation shipped + What's New amber dot
 **Status:** SHIPPED on preview, ready for testing-agent verification + deploy.
 
