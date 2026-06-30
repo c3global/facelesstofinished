@@ -63,6 +63,23 @@ DB_NAME = os.environ["DB_NAME"]
 EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
 HEYGEN_API_KEY = os.environ.get("HEYGEN_API_KEY", "")
 FAL_API_KEY = os.environ.get("FAL_API_KEY", "")
+
+# BYOK runtime overrides — set at the top of each render path when the
+# buyer has saved a customer API key. Helpers read via the
+# `_effective_*_key()` accessors so platform defaults stay in place for
+# everything outside the active render coroutine (avatar listings, TTS
+# preloads, storage uploads, etc).
+import contextvars  # noqa: E402  – kept beside the env reads for grouping
+_override_heygen_key_ctx: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("override_heygen_key", default=None)
+_override_fal_key_ctx: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("override_fal_key", default=None)
+
+
+def _effective_heygen_key() -> str:
+    return _override_heygen_key_ctx.get() or HEYGEN_API_KEY
+
+
+def _effective_fal_key() -> str:
+    return _override_fal_key_ctx.get() or FAL_API_KEY
 PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY", "")
 PIXABAY_API_KEY = os.environ.get("PIXABAY_API_KEY", "")
 JWT_SECRET = os.environ.get("JWT_SECRET", "dev-secret-change-me")
@@ -1231,9 +1248,10 @@ async def _fal_t2v_generate(engine: str, prompt: str, aspect: str, duration_ms: 
     failure. Per-scene; the caller is expected to trim/scale/loop the result
     to the exact duration via `_trim_stock_video`."""
     cfg = T2V_ENGINES.get(engine)
-    if not cfg or not FAL_API_KEY:
+    fal_key = _effective_fal_key()
+    if not cfg or not fal_key:
         return None
-    fal_headers = {"Authorization": f"Key {FAL_API_KEY}"}
+    fal_headers = {"Authorization": f"Key {fal_key}"}
     payload = cfg["build_payload"](prompt, aspect, max(1.0, duration_ms / 1000.0))
     model_id = cfg["model"]
     max_wait_s = cfg["max_wait_s"]
@@ -1379,9 +1397,10 @@ async def _fal_kling_i2v_generate(
     the resulting MP4. Returns the raw MP4 URL or None on any failure.
     Same queue/poll pattern as `_fal_t2v_generate` — kept separate so the
     duration buckets + the cost telemetry stay clean per engine."""
-    if not FAL_API_KEY or not image_url:
+    fal_key = _effective_fal_key()
+    if not fal_key or not image_url:
         return None
-    fal_headers = {"Authorization": f"Key {FAL_API_KEY}"}
+    fal_headers = {"Authorization": f"Key {fal_key}"}
     # Kling supports 5 or 10 seconds only; round up so we always have at least
     # `duration_ms` of source material to trim from.
     duration_s_str = "10" if (duration_ms / 1000.0) > 5.5 else "5"
@@ -1575,14 +1594,15 @@ async def _burn_in_captions(video_url: str, style_key: str, position_key: str = 
     uncaptioned video). Style is one of `CAPTION_STYLE_PRESETS` — unknown
     keys silently fall back to `"boxed"`. Position overrides the preset's
     vertical placement (top/bottom/center)."""
-    if not FAL_API_KEY or not video_url:
+    fal_key = _effective_fal_key()
+    if not fal_key or not video_url:
         return None
     style = dict(CAPTION_STYLE_PRESETS.get(style_key) or CAPTION_STYLE_PRESETS["boxed"])
     pos_override = CAPTION_POSITION_OVERRIDES.get(position_key)
     if pos_override:
         style.update(pos_override)
     payload = {"video_url": video_url, "language": "en", **style}
-    fal_headers = {"Authorization": f"Key {FAL_API_KEY}"}
+    fal_headers = {"Authorization": f"Key {fal_key}"}
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             sub = await client.post(
@@ -2012,7 +2032,20 @@ async def _run_render_avatar(job: dict):
     job_id = job["id"]
     actual_cost_cents = 0
 
-    if not HEYGEN_API_KEY:
+    # BYOK — if the buyer has saved their own HeyGen key, use it for THIS
+    # render only. Lookup failures fall back to the platform key silently
+    # so a stale/rotated user key never breaks the pipeline mid-flight.
+    try:
+        user_email = (job.get("user_email") or "").strip().lower()
+        if user_email:
+            user_heygen = await get_byok_key(db, user_email, "heygen")
+            if user_heygen:
+                _override_heygen_key_ctx.set(user_heygen)
+    except Exception as exc:
+        logger.warning(f"[byok] avatar key lookup failed: {type(exc).__name__}: {exc}")
+    heygen_key = _effective_heygen_key()
+
+    if not heygen_key:
         await _finalize(job_id, ok=False, url=None, actual_cost_cents=0)
         return
 
@@ -2047,7 +2080,7 @@ async def _run_render_avatar(job: dict):
         }
         r = await client.post(
             "https://api.heygen.com/v3/videos",
-            headers={"X-Api-Key": HEYGEN_API_KEY, "Accept": "application/json"},
+            headers={"X-Api-Key": heygen_key, "Accept": "application/json"},
             json=v3_body,
         )
         if r.status_code == 200:
@@ -2078,7 +2111,7 @@ async def _run_render_avatar(job: dict):
             }
             r2 = await client.post(
                 "https://api.heygen.com/v2/video/generate",
-                headers={"X-Api-Key": HEYGEN_API_KEY, "Accept": "application/json"},
+                headers={"X-Api-Key": heygen_key, "Accept": "application/json"},
                 json=v2_body,
             )
             if r2.status_code != 200:
@@ -2131,7 +2164,7 @@ async def _run_render_avatar(job: dict):
             if used_endpoint == "v3":
                 s = await client.get(
                     f"https://api.heygen.com/v3/videos/{video_id}",
-                    headers={"X-Api-Key": HEYGEN_API_KEY},
+                    headers={"X-Api-Key": heygen_key},
                 )
                 d = (s.json() or {}).get("data") or {}
                 if d.get("failure_code"):
@@ -2153,7 +2186,7 @@ async def _run_render_avatar(job: dict):
             else:  # v2 polling
                 s = await client.get(
                     f"https://api.heygen.com/v1/video_status.get?video_id={video_id}",
-                    headers={"X-Api-Key": HEYGEN_API_KEY},
+                    headers={"X-Api-Key": heygen_key},
                 )
                 d = (s.json() or {}).get("data") or {}
                 if d.get("status") == "completed":
@@ -2223,11 +2256,24 @@ async def _run_render_faceless(job: dict):
     )
     await asyncio.sleep(0.8)
 
-    if not FAL_API_KEY:
+    # BYOK — Faceless pipeline: customer's fal.ai key takes precedence when
+    # saved. Also flows into nested t2v / i2v / captions helpers via the
+    # _override_fal_key contextvar (set once here, inherited by tasks).
+    try:
+        user_email = (job.get("user_email") or "").strip().lower()
+        if user_email:
+            user_fal = await get_byok_key(db, user_email, "fal")
+            if user_fal:
+                _override_fal_key_ctx.set(user_fal)
+    except Exception as exc:
+        logger.warning(f"[byok] faceless key lookup failed: {type(exc).__name__}: {exc}")
+    fal_key = _effective_fal_key()
+
+    if not fal_key:
         await _finalize(job_id, ok=False, url=None, actual_cost_cents=0)
         return
 
-    fal_headers = {"Authorization": f"Key {FAL_API_KEY}", "Content-Type": "application/json"}
+    fal_headers = {"Authorization": f"Key {fal_key}", "Content-Type": "application/json"}
 
     async def _set_progress(progress: int, label: str, status: Optional[str] = None):
         update = {"progress": progress, "progress_label": label}

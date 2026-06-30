@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { ChevronDown, Crown, KeyRound, ArrowUpCircle, LogOut } from "lucide-react";
+import { ChevronDown, Crown, KeyRound, ShieldCheck, ArrowUpCircle, LogOut } from "lucide-react";
 import { apiClient, useAuth } from "../App";
 
 /**
@@ -129,6 +129,19 @@ export default function ProfileMenu() {
             <KeyRound size={14} />
             <span>Redeem code</span>
           </Link>
+
+          {quota?.byok_allowed && (
+            <Link
+              to="/settings/keys"
+              className="profile-menu-item"
+              role="menuitem"
+              data-testid="profile-menu-keys"
+              onClick={() => setOpen(false)}
+            >
+              <ShieldCheck size={14} />
+              <span>API keys</span>
+            </Link>
+          )}
 
           <button
             type="button"

@@ -14,9 +14,18 @@
 //    See PRD.md → "Workflow rule: changelog must move with every deploy."
 // 4. Most recent on top. Each entry has version + date + bullet list.
 
-export const APP_VERSION = "1.11.0";
+export const APP_VERSION = "1.12.0";
 
 export const CHANGELOG = [
+  {
+    version: "1.12.0",
+    date: "2026-06-30",
+    changes: [
+      "New API Keys settings page (Pro Plus + Founder) — plug in your own OpenAI, HeyGen, and fal.ai keys and your renders draw from your own provider quotas instead of ours",
+      "Keys are encrypted at rest and never displayed once saved — only a safe preview like 'sk-…0abc'",
+      "Find it in your Profile menu → API keys",
+    ],
+  },
   {
     version: "1.11.0",
     date: "2026-06-30",

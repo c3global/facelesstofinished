@@ -12,6 +12,20 @@ first. Plain English — if you're a customer reading this, this is for you.
 
 ---
 
+## v1.12.0 — June 30, 2026
+
+- **NEW: API Keys settings page** for Pro Plus + Founder members — plug in
+  your own OpenAI, HeyGen, and fal.ai keys and your video / thumbnail renders
+  draw from your own provider quotas instead of ours.
+- Keys are **encrypted at rest** (Fernet symmetric AES-128 + HMAC) and never
+  displayed back to the dashboard after save — you only see a safe preview
+  like `sk-…0abc`.
+- Find it in your **Profile menu → API keys**. Each key can be replaced or
+  removed at any time; renders silently fall back to platform keys when no
+  customer key is saved.
+
+---
+
 ## v1.11.0 — June 30, 2026
 
 - **Profile dropdown menu** in the header — quick access to your tier label,

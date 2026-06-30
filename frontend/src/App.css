@@ -6137,3 +6137,227 @@ body[data-founder="true"] textarea:focus-visible {
   outline-color: rgba(201,149,108,0.7);
 }
 
+
+
+/* ============================================================
+   BYOK Settings page (/settings/keys)
+   ============================================================ */
+.settings-keys-main {
+  min-height: calc(100vh - 120px);
+  padding: 48px 24px 80px;
+  display: flex;
+  justify-content: center;
+}
+.settings-keys-shell {
+  width: 100%;
+  max-width: 760px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+.settings-keys-loading {
+  margin: 80px auto;
+  color: rgba(216,210,234,0.6);
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.settings-keys-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: rgba(216,210,234,0.7);
+  text-decoration: none;
+  font-size: 13px;
+  width: fit-content;
+  padding: 4px 0;
+}
+.settings-keys-back:hover { color: var(--accent); }
+
+.settings-keys-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 28px 28px 32px;
+  border-radius: 20px;
+  background: linear-gradient(135deg, rgba(127,119,221,0.10), rgba(201,149,108,0.08));
+  border: 1px solid rgba(127,119,221,0.20);
+}
+.settings-keys-hero-icon { color: #C9956C; }
+.settings-keys-title {
+  font-size: 30px;
+  font-weight: 700;
+  margin: 0;
+  color: #F0EBFF;
+  letter-spacing: -0.01em;
+}
+.settings-keys-sub {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.55;
+  color: rgba(216,210,234,0.78);
+  max-width: 560px;
+}
+.settings-keys-sub strong { color: #F5D9B6; font-weight: 600; }
+.settings-keys-trust {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 4px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(15,10,30,0.5);
+  border: 1px solid rgba(127,119,221,0.22);
+  color: rgba(216,210,234,0.7);
+  font-size: 11.5px;
+}
+.settings-keys-trust svg { color: #7C5CF0; }
+
+.settings-keys-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.settings-key-card {
+  padding: 22px 24px 24px;
+  border-radius: 16px;
+  background: rgba(15,10,30,0.55);
+  border: 1px solid rgba(127,119,221,0.22);
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+.settings-key-card.is-saved {
+  border-color: rgba(201,149,108,0.42);
+  background: rgba(20,14,38,0.65);
+}
+.settings-key-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.settings-key-card-title {
+  margin: 0 0 4px;
+  font-size: 16px;
+  font-weight: 600;
+  color: #F0EBFF;
+}
+.settings-key-card-purpose {
+  margin: 0;
+  font-size: 13px;
+  color: rgba(216,210,234,0.65);
+}
+.settings-key-card-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: rgba(201,149,108,0.14);
+  border: 1px solid rgba(201,149,108,0.42);
+  color: #F5D9B6;
+  font-size: 11.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.settings-key-card-body { display: flex; flex-direction: column; gap: 8px; }
+.settings-key-label {
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #C9956C;
+  font-weight: 700;
+}
+.settings-key-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+.settings-key-input {
+  flex: 1 1 auto;
+  padding: 11px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(127,119,221,0.28);
+  background: rgba(8,5,20,0.65);
+  color: #F0EBFF;
+  font-size: 13.5px;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  letter-spacing: 0.02em;
+}
+.settings-key-input:focus {
+  outline: none;
+  border-color: rgba(201,149,108,0.65);
+  background: rgba(8,5,20,0.85);
+}
+.settings-key-save-btn {
+  padding: 10px 18px;
+  border-radius: 10px;
+  border: 1px solid rgba(201,149,108,0.55);
+  background: rgba(201,149,108,0.18);
+  color: #F5D9B6;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.15s ease, transform 0.1s ease;
+  white-space: nowrap;
+}
+.settings-key-save-btn:hover:not(:disabled) {
+  background: rgba(201,149,108,0.28);
+  transform: translateY(-1px);
+}
+.settings-key-save-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.settings-key-delete-btn {
+  width: 40px;
+  border-radius: 10px;
+  border: 1px solid rgba(220,80,80,0.32);
+  background: rgba(220,80,80,0.10);
+  color: #FF9E9E;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.15s ease;
+}
+.settings-key-delete-btn:hover:not(:disabled) {
+  background: rgba(220,80,80,0.22);
+}
+.settings-key-ok {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #7BD994;
+  margin-top: 4px;
+}
+.settings-key-err {
+  font-size: 12.5px;
+  color: #FF9E9E;
+  margin-top: 4px;
+}
+
+.settings-keys-foot {
+  margin-top: 8px;
+  font-size: 12.5px;
+  color: rgba(216,210,234,0.55);
+  text-align: center;
+}
+.settings-keys-foot a {
+  color: var(--accent);
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.settings-keys-foot a:hover { text-decoration: underline; }
+
+/* Founder copper accent */
+body[data-founder="true"] .settings-key-save-btn {
+  background: rgba(201,149,108,0.22);
+  border-color: rgba(201,149,108,0.65);
+}
