@@ -1532,4 +1532,432 @@ def register_admin_routes(
             "auth_header_set": bool((os.environ.get("GHL_WEBHOOK_AUTH_HEADER") or "").strip()),
         }
 
-    return {"process_pinball_event": _process_pinball_event}
+    # -----------------------------------------------------------------
+    # AppSumo lifecycle webhook — refund / deactivate / downgrade / migrate
+    # -----------------------------------------------------------------
+    # AppSumo Plus webhooks ship 6 event types (per their integration docs):
+    #   activate    — license redeemed (we treat as no-op; /api/licenses/redeem
+    #                 already handles this customer-facing path).
+    #   deactivate  — license revoked. Refund + manual deactivation both
+    #                 funnel here. WE MUST REVOKE ENTITLEMENT or buyer keeps
+    #                 lifetime access after AppSumo's 60-day refund window.
+    #   refund      — explicit refund. Same effect as deactivate.
+    #   downgrade   — buyer moved to a lower tier (rare on lifetime deals
+    #                 but possible during tier consolidation events).
+    #   upgrade     — buyer moved to a higher tier (tier stack purchase).
+    #                 Mirrors the existing redeem flow but server-initiated.
+    #   migrate     — plan migration. We treat this as a tier-swap if a new
+    #                 tier is specified, otherwise as a no-op + log entry.
+    #
+    # Why we need this BEFORE AppSumo launch: AppSumo's refund window is
+    # 60 days. Refund rates on lifetime deals run 5-15%. Without this
+    # endpoint, every refunded buyer keeps using HeyGen + fal.ai forever
+    # on Charity's wallet. Net: roughly $0.15-$2 per render, indefinitely.
+    #
+    # Endpoint: POST /api/appsumo-webhook?token=<APPSUMO_WEBHOOK_TOKEN>
+    # Body shape (lenient — accepts several common variants):
+    #   { "event": "deactivate" | "refund" | "downgrade" | "upgrade" |
+    #              "migrate"   | "activate",
+    #     "email": "buyer@example.com",
+    #     "license_key":  "<optional - dedupe key>",
+    #     "tier":         "t1" | "t2" | "t3" | "t4"  (required for
+    #                                                 upgrade/downgrade/migrate),
+    #     "reason":       "<optional human-readable>",
+    #   }
+
+    APPSUMO_WEBHOOK_TOKEN = os.environ.get("APPSUMO_WEBHOOK_TOKEN", "").strip()
+
+    def _extract_event_type(p: dict) -> str:
+        """Find the event-type field across AppSumo's several payload shapes.
+        AppSumo Plus uses `event` at top-level; legacy AppSumo Black uses
+        `action`. GHL forwarding wraps as `data.event`. Be tolerant."""
+        for path in [
+            ("event",), ("action",), ("type",), ("event_type",),
+            ("data", "event"), ("data", "action"), ("data", "type"),
+            ("payload", "event"),
+        ]:
+            node: object = p
+            for k in path:
+                if not isinstance(node, dict):
+                    node = None
+                    break
+                node = node.get(k)
+            if isinstance(node, str) and node.strip():
+                return node.strip().lower()
+        return ""
+
+    def _extract_tier(p: dict) -> str:
+        """Locate the target tier id for upgrade/downgrade/migrate events.
+        AppSumo ships it as `plan_id`, `tier`, or `new_plan` depending on
+        the integration spec version + which event."""
+        for path in [
+            ("tier",), ("plan_id",), ("plan",), ("new_plan",), ("new_tier",),
+            ("data", "tier"), ("data", "plan_id"), ("data", "new_plan"),
+        ]:
+            node: object = p
+            for k in path:
+                if not isinstance(node, dict):
+                    node = None
+                    break
+                node = node.get(k)
+            if isinstance(node, str) and node.strip():
+                return node.strip().lower()
+        return ""
+
+    def _extract_license_key(p: dict) -> str:
+        for path in [
+            ("license_key",), ("license",), ("licenseKey",),
+            ("data", "license_key"), ("data", "license"),
+            ("order_id",), ("data", "order_id"),
+        ]:
+            node: object = p
+            for k in path:
+                if not isinstance(node, dict):
+                    node = None
+                    break
+                node = node.get(k)
+            if node and isinstance(node, (str, int)):
+                return str(node).strip()
+        return ""
+
+    async def _process_appsumo_event(*, event: str, body: dict, source: str) -> dict:
+        """Pure handler shared by the public webhook + the admin Replay
+        action. Idempotent — same license_key + event no-ops the second
+        time. Always logs to db.activity for admin visibility."""
+        email = _extract_email(body)
+        if not email or not EMAIL_RE.match(email):
+            await log_activity(
+                "appsumo_webhook_failed", email,
+                {"reason": "missing or malformed email", "event": event,
+                 "payload": body, "source": source},
+            )
+            raise HTTPException(status_code=400, detail="Missing or malformed email")
+
+        license_key = _extract_license_key(body)
+        # Dedupe: same license_key + same event = no-op return on second hit.
+        # We stamp `appsumo_events: [{event, license_key, ts}]` onto the buyer
+        # doc as the dedupe trail. Empty license_key means no dedupe (the
+        # webhook still processes, but we can't guarantee idempotency).
+        existing = await db.buyers.find_one({"email": email})
+        if license_key and existing:
+            for ev in (existing.get("appsumo_events") or []):
+                if ev.get("event") == event and ev.get("license_key") == license_key:
+                    await log_activity(
+                        "appsumo_webhook", email,
+                        {"status": "duplicate", "event": event,
+                         "license_key": license_key, "source": source,
+                         "payload": body},
+                    )
+                    return {"status": "duplicate", "event": event,
+                            "license_key": license_key}
+
+        from tier_config import assign_buyer_to_tier, tier_for_entitlements  # local import
+
+        # ---- Event dispatch --------------------------------------------
+        now = _now_iso()
+        revoke_events = {"deactivate", "refund", "cancel", "cancelled", "revoke"}
+        upgrade_events = {"upgrade", "stack"}
+        downgrade_events = {"downgrade"}
+        migrate_events = {"migrate", "migration"}
+        activate_events = {"activate", "purchase"}  # no-op — handled by /redeem
+
+        result: dict = {"event": event, "email": email, "license_key": license_key}
+
+        if event in revoke_events:
+            # The actual P0 fix. Refund / deactivate → wipe entitlements,
+            # mark status=refunded, kill any active render-cycle quotas
+            # (set caps to 0 so any in-flight UI calls also reject).
+            if not existing:
+                # Refund webhook for a buyer we don't know about — log + 200.
+                # Some AppSumo flows fire deactivate before activate during
+                # migrations; rejecting would prevent the migrate->activate
+                # arriving moments later.
+                await log_activity(
+                    "appsumo_webhook", email,
+                    {"status": "no_buyer", "event": event, "source": source,
+                     "license_key": license_key, "payload": body},
+                )
+                result["status"] = "no_buyer"
+                return result
+            set_doc = {
+                "entitlements": [],
+                "tier": "",  # clears tier so UI shows "no access"
+                "status": "refunded" if event == "refund" else "deactivated",
+                "deactivatedAt": now,
+                "deactivationReason": (body.get("reason") or event),
+                # Hard-zero the cycle counters so any in-flight check rejects.
+                "renderQuotaMonthly": 0,
+                "avatarSubCap": 0,
+                "thumbnailQuotaMonthly": 0,
+                "monthlyCostCapCents": 0,
+                "updatedAt": now,
+            }
+            push_doc = {}
+            if license_key:
+                push_doc["appsumo_events"] = {
+                    "event": event, "license_key": license_key, "ts": now,
+                }
+            update_op: dict = {"$set": set_doc}
+            if push_doc:
+                update_op["$push"] = push_doc
+            await db.buyers.update_one({"email": email}, update_op)
+            await log_activity(
+                "appsumo_webhook", email,
+                {"status": "ok", "event": event, "source": source,
+                 "license_key": license_key, "reason": body.get("reason"),
+                 "payload": body},
+            )
+            result["status"] = "revoked"
+            return result
+
+        if event in upgrade_events or event in downgrade_events:
+            tier_id = _extract_tier(body)
+            if not tier_id:
+                await log_activity(
+                    "appsumo_webhook_failed", email,
+                    {"reason": "tier required for upgrade/downgrade",
+                     "event": event, "source": source, "payload": body},
+                )
+                raise HTTPException(status_code=400,
+                                    detail="tier required for upgrade/downgrade")
+            from tier_config import REDEEMABLE_TIER_IDS
+            if tier_id not in REDEEMABLE_TIER_IDS:
+                await log_activity(
+                    "appsumo_webhook_failed", email,
+                    {"reason": f"unknown tier {tier_id!r}", "event": event,
+                     "source": source, "payload": body},
+                )
+                raise HTTPException(status_code=400, detail=f"Unknown tier: {tier_id}")
+            # Upgrades preserve cycle clock (mid-cycle bump); downgrades
+            # also preserve cycle (we don't punish them mid-cycle by
+            # resetting their counters higher than the new cap). Both
+            # paths take is_upgrade=True since assign_buyer_to_tier's
+            # `is_upgrade` flag means "keep counters" not literal upgrade.
+            tier_payload = assign_buyer_to_tier(tier_id=tier_id, is_upgrade=True)
+            tier_payload["status"] = "active"
+            push_doc = {}
+            if license_key:
+                push_doc["appsumo_events"] = {
+                    "event": event, "license_key": license_key, "ts": now,
+                }
+            update_op: dict = {"$set": tier_payload}
+            if push_doc:
+                update_op["$push"] = push_doc
+            if not existing:
+                update_op["$setOnInsert"] = {
+                    "email": email, "addedAt": now, "source": "appsumo",
+                    "entitlements": [], "totalSpendCents": 0,
+                }
+            await db.buyers.update_one({"email": email}, update_op, upsert=True)
+            await log_activity(
+                "appsumo_webhook", email,
+                {"status": "ok", "event": event, "tier": tier_id,
+                 "source": source, "license_key": license_key, "payload": body},
+            )
+            result["status"] = "ok"
+            result["tier"] = tier_id
+            return result
+
+        if event in migrate_events:
+            # Migrate: if a new tier is in the payload, treat as tier-swap.
+            # Otherwise just log the event for the audit trail and no-op
+            # (some AppSumo migrations are admin-only plan renames).
+            tier_id = _extract_tier(body)
+            if tier_id:
+                from tier_config import REDEEMABLE_TIER_IDS
+                if tier_id in REDEEMABLE_TIER_IDS:
+                    tier_payload = assign_buyer_to_tier(tier_id=tier_id, is_upgrade=True)
+                    tier_payload["status"] = "active"
+                    push_doc = {}
+                    if license_key:
+                        push_doc["appsumo_events"] = {
+                            "event": event, "license_key": license_key, "ts": now,
+                        }
+                    update_op: dict = {"$set": tier_payload}
+                    if push_doc:
+                        update_op["$push"] = push_doc
+                    if not existing:
+                        update_op["$setOnInsert"] = {
+                            "email": email, "addedAt": now, "source": "appsumo",
+                            "entitlements": [], "totalSpendCents": 0,
+                        }
+                    await db.buyers.update_one({"email": email}, update_op, upsert=True)
+                    await log_activity(
+                        "appsumo_webhook", email,
+                        {"status": "ok", "event": event, "tier": tier_id,
+                         "source": source, "license_key": license_key,
+                         "payload": body},
+                    )
+                    result["status"] = "ok"
+                    result["tier"] = tier_id
+                    return result
+            # No tier => log and return without changing state.
+            await log_activity(
+                "appsumo_webhook", email,
+                {"status": "logged_only", "event": event,
+                 "source": source, "license_key": license_key, "payload": body},
+            )
+            result["status"] = "logged_only"
+            return result
+
+        if event in activate_events:
+            # AppSumo "activate" fires when the buyer redeems on their side.
+            # Our customer-facing /api/licenses/redeem already handles this
+            # path, so the webhook is informational. Log + return.
+            await log_activity(
+                "appsumo_webhook", email,
+                {"status": "logged_only_activate", "event": event,
+                 "source": source, "license_key": license_key, "payload": body},
+            )
+            result["status"] = "logged_only_activate"
+            return result
+
+        # Unknown event — log + 400 so AppSumo retries OR Charity sees it
+        # in the activity stream and can add a handler if needed.
+        await log_activity(
+            "appsumo_webhook_failed", email,
+            {"reason": f"unknown event {event!r}", "source": source,
+             "payload": body},
+        )
+        raise HTTPException(status_code=400, detail=f"Unknown event: {event}")
+
+    @api.post("/appsumo-webhook")
+    async def appsumo_webhook(
+        request: Request,
+        token: str = Query(...),
+    ):
+        """Public AppSumo lifecycle webhook receiver.
+
+        Closes the refund leak: when AppSumo fires `deactivate` or `refund`
+        (during the 60-day refund window or after a partner-initiated
+        revoke), this endpoint wipes the buyer's entitlements + tier so
+        they immediately lose access to renders. Without this, refunded
+        buyers retained lifetime access forever and Charity ate the
+        rendering cost.
+
+        Token-gated via ?token=<APPSUMO_WEBHOOK_TOKEN>. Empty configured
+        token = endpoint disabled (rejects everything with 401). Same
+        token-gate pattern as /pinball-webhook for consistency.
+        """
+        if not APPSUMO_WEBHOOK_TOKEN or token != APPSUMO_WEBHOOK_TOKEN:
+            try:
+                body = await request.json()
+            except Exception:
+                body = {"_raw": (await request.body()).decode("utf-8", "replace")[:1000]}
+            await log_activity(
+                "appsumo_webhook_failed", "",
+                {"reason": "invalid token", "payload": body, "source": "appsumo"},
+            )
+            raise HTTPException(status_code=401, detail="Invalid token")
+
+        try:
+            body = await request.json()
+        except Exception:
+            await log_activity(
+                "appsumo_webhook_failed", "",
+                {"reason": "malformed json", "source": "appsumo"},
+            )
+            raise HTTPException(status_code=400, detail="Malformed JSON")
+
+        event = _extract_event_type(body)
+        if not event:
+            await log_activity(
+                "appsumo_webhook_failed", _extract_email(body),
+                {"reason": "missing event type field",
+                 "top_keys": sorted(list(body.keys()))[:20] if isinstance(body, dict) else [],
+                 "payload": body, "source": "appsumo"},
+            )
+            raise HTTPException(
+                status_code=400,
+                detail="Missing event type. Expected `event`/`action`/`type` field.",
+            )
+
+        return await _process_appsumo_event(event=event, body=body, source="appsumo")
+
+    @api.post("/admin/appsumo/test-webhook")
+    async def admin_appsumo_test_webhook(
+        payload: dict = Body(default_factory=dict),
+        admin=Depends(require_admin),
+    ):
+        """Admin-only synthetic AppSumo webhook trigger — used to verify
+        the lifecycle handlers (deactivate / refund / upgrade / downgrade)
+        without waiting for a real AppSumo event. Defaults to a deactivate
+        event on a freshly-created synthetic buyer so admins can confirm
+        the entitlement is actually wiped end-to-end."""
+        import time  # noqa: PLC0415
+
+        event = (payload.get("event") or "deactivate").strip().lower()
+        ts = int(time.time())
+        email = (payload.get("email") or f"appsumo-test+{ts}@faceless48.test").strip().lower()
+        license_key = (payload.get("license_key") or f"test-license-{ts}").strip()
+
+        # For revoke tests, seed a buyer first so there's something to revoke.
+        if event in {"deactivate", "refund", "cancel"}:
+            await db.buyers.update_one(
+                {"email": email},
+                {
+                    "$setOnInsert": {
+                        "email": email,
+                        "addedAt": _now_iso(),
+                        "source": "admin-test",
+                        "_synthetic": True,
+                        "_test_run_by": admin.email,
+                    },
+                    "$set": {
+                        "entitlements": ["base", "shorts", "studio"],
+                        "tier": "t3",
+                        "renderQuotaMonthly": 50,
+                        "avatarSubCap": 10,
+                        "monthlyCostCapCents": 5000,
+                    },
+                },
+                upsert=True,
+            )
+
+        body = {
+            "event": event,
+            "email": email,
+            "license_key": license_key,
+            "reason": payload.get("reason") or "admin-test",
+        }
+        if payload.get("tier"):
+            body["tier"] = payload["tier"]
+
+        try:
+            result = await _process_appsumo_event(
+                event=event, body=body, source="admin-test",
+            )
+            await db.buyers.update_one(
+                {"email": email},
+                {"$set": {"_synthetic": True, "_test_run_by": admin.email}},
+            )
+            doc = _strip_id(await db.buyers.find_one({"email": email}) or {})
+            return {
+                "ok": True,
+                "result": result,
+                "test_email": email,
+                "test_event": event,
+                "buyer_after": {
+                    "entitlements": doc.get("entitlements"),
+                    "tier": doc.get("tier"),
+                    "status": doc.get("status"),
+                    "renderQuotaMonthly": doc.get("renderQuotaMonthly"),
+                    "deactivatedAt": doc.get("deactivatedAt"),
+                },
+                "message": (
+                    f"Webhook handler is healthy. Test buyer {email} now has "
+                    f"status={doc.get('status', 'unchanged')!r}. Click 'Delete' "
+                    "on that buyer to clean up the test data."
+                ),
+            }
+        except HTTPException as exc:
+            return {
+                "ok": False,
+                "status_code": exc.status_code,
+                "detail": exc.detail,
+                "test_email": email,
+                "test_event": event,
+            }
+
+    return {"process_pinball_event": _process_pinball_event,
+            "process_appsumo_event": _process_appsumo_event}

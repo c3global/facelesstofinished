@@ -20,6 +20,88 @@ back to it for entitlement verification.
 
 ## 🔁 Workflow rule: Changelog moves with every change (set 2026-06-29 by user)
 
+### Iteration 46 (2026-06-30) — Pre-launch financial hardening: AppSumo refund-leak fix
+
+**Why this matters:** AppSumo's refund window is 60 days. Lifetime-deal
+refund rates run 5-15%. Before this iteration, refunded buyers retained
+their entitlements forever — and every faceless render they fired hit
+Charity's HeyGen + fal.ai wallet indefinitely. Closing this leak was a
+P0 launch blocker.
+
+**Gap 2 — Render quota enforcement: AUDIT-ONLY, ALREADY BULLETPROOF.**
+Read of `server.py` lines 2900-3050 confirmed the existing render-gate
+already has:
+- Pre-check on `rendersThisCycle >= quota_total` (line 2972) → 402
+  with friendly "You've used all renders this cycle" message.
+- Avatar sub-cap check (line 2980).
+- Silent cost-cap circuit breaker (line 2991).
+- **Atomic findOneAndUpdate with $expr race-guard** (line 3011) —
+  prevents two concurrent renders both passing the pre-check.
+- Auto-refund quota slot on render failure (line 3028).
+No code changes needed.
+
+**Gap 1 — AppSumo lifecycle webhooks: NEW.** Added
+`POST /api/appsumo-webhook?token=<APPSUMO_WEBHOOK_TOKEN>` that handles
+all 6 AppSumo Plus event types:
+
+| Event | Action |
+|---|---|
+| `deactivate` | wipes entitlements + tier, sets status=deactivated, **zeros renderQuotaMonthly / avatarSubCap / thumbnailQuotaMonthly / monthlyCostCapCents** so any in-flight render gate rejects |
+| `refund` | same as deactivate but status=refunded |
+| `upgrade` | assigns new tier (with quotas), preserves cycle clock |
+| `downgrade` | same as upgrade but to a lower tier |
+| `migrate` | tier-swap if `tier` field present; otherwise log-only |
+| `activate` | log-only (the customer-facing /api/licenses/redeem flow already handles this path) |
+
+Lenient payload extraction — accepts `event` / `action` / `type` /
+`event_type` and nested `data.event` shapes. Same tolerance pattern
+as `_extract_email` / `_extract_items` to match AppSumo Plus + AppSumo
+Black + GHL-forwarded shapes without per-vendor config.
+
+Idempotency via `appsumo_events: [{event, license_key, ts}]` array on
+buyer doc. Duplicate (event, license_key) returns
+`{status: "duplicate"}` without re-processing.
+
+Token gate: `APPSUMO_WEBHOOK_TOKEN` env var, generated as
+`as_<32 hex>` (independent from PINBALL_WEBHOOK_TOKEN). Empty token =
+endpoint disabled (rejects all with 401).
+
+**Admin test endpoint:** `POST /api/admin/appsumo/test-webhook` —
+synthetic webhook trigger gated by `require_admin`. Used by tests +
+the upcoming admin UI "Test AppSumo webhook" button. Seeds a synthetic
+buyer for revoke tests so the wipe is observable end-to-end.
+
+**Files touched:**
+- `/app/backend/admin_routes.py` — added `_process_appsumo_event`,
+  `_extract_event_type`, `_extract_tier`, `_extract_license_key`,
+  `/api/appsumo-webhook` route, `/api/admin/appsumo/test-webhook`
+  route. ~280 lines.
+- `/app/backend/.env` — added `APPSUMO_WEBHOOK_TOKEN` (fresh hex).
+
+**Verified end-to-end (curl):**
+1. Deactivate test buyer (seeded with t3+studio+50 renders/mo) →
+   entitlements=[], tier="", status=deactivated, renderQuotaMonthly=0
+2. Refund same buyer → status=refunded, quotas still zeroed
+3. Upgrade refunded buyer to t4 → tier=t4, renderQuotaMonthly=40,
+   status=active, cycle clock preserved
+4. Wrong token → 401
+5. Unknown-buyer deactivate → graceful `no_buyer` response (handles
+   AppSumo's "deactivate-before-activate" race during migrations)
+
+**Charity's launch checklist (env-var side):**
+- `APPSUMO_WEBHOOK_TOKEN` — SET (fresh hex generated). Paste the
+  webhook URL `https://<your-app>/api/appsumo-webhook?token=as_b6...`
+  into your AppSumo partner dashboard's "Lifecycle Webhook" field.
+
+**What this NEVER promises buyers:** the public roadmap still uses
+"Native publishing" / "Cinematic Faceless" (no "unlimited" language).
+The webhook is purely cost-protection plumbing — no customer-facing
+copy changes.
+
+---
+
+
+
 ### Iteration 45 (2026-06-30) — P0 bug fix + admin-editable roadmap (v1.18.1)
 
 **This iteration combined a P0 bug fix from a live client demo with a
