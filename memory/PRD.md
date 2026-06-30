@@ -30,6 +30,39 @@ back to it for entitlement verification.
 6. Internal-only changes (admin panel, webhooks, refactors, env config, test infrastructure) still get documented — but here in `PRD.md`, NOT in the public changelog.
 
 
+## 2026-06-30 — Iter 33: Cover-prompt picker for long-form + Viral-style suffix
+**Status:** SHIPPED. Iter 33 backend 6/6 GREEN (frontend code-review GREEN — Playwright auth was WAF-blocked but iter 32 had already verified base picker infra + I smoke-tested the new UI manually).
+
+### Problem
+User reported two real issues with v1.10.0 Thumbnail Engine:
+1. **Long-form scripts had NO cover prompts.** Only Shorts/Sprint emitted `### 🖼️ TITLE / THUMBNAIL VARIANTS` + `### 🎨 COVER IMAGE PROMPTS`. So "Make thumbnail" from a long script handoff fell back to chopping the first 280 chars of narration mid-sentence — bad UX.
+2. **gpt-image-1 output looked "not viral at all".** User asked about gpt-image-2 (released April 21, 2026) — but Emergent's Universal LLM key only supports gpt-image-1 + dall-e-3 today. gpt-image-2 access is deferred to Group E (BYOK).
+
+### Fixes shipped
+1. **Long-form template now emits cover prompts** — added `### 🖼️ TITLE / THUMBNAIL VARIANTS` + `### 🎨 COVER IMAGE PROMPTS` sections to `build_long_system_prompt` in `prompts.py`. Each cover prompt is 60-120 words and ends with `--ar 16:9 --no text` (frontend strips those flags before sending to image model).
+2. **Parser updated** — `LONG_SECTION_ORDER` now includes `titleVariants` + `coverPrompts` so they render in the bento grid. New helpers `extractCoverPrompts` + `extractTitleVariants` in `parser.js` — tolerate multiple Claude format drifts (`1.` / `1)`, `**[label]**` / `[label]`, em-dash / colon).
+3. **Cover-prompt picker UI** — new `.thumb-picker` panel on the Thumbnails page renders when handoff `choices.length > 0`. Three cards (one per concept) show `index → label → title → prompt preview`. Auto-selects first option. Clicking another card swaps the prompt textarea. Aspect auto-defaults to 16:9 for long-mode, 9:16 for shorts/sprint.
+4. **"Generate all 3" batch flow** — fires 3 sequential renders (gpt-image-1 has rate limits, so no parallel). Shows live progress ("Generating 2 of 3…"). 402 mid-batch short-circuits remaining calls (avoids wasted attempts). Partial success surfaces as "X of 3 succeeded".
+5. **Cost-confirmation modal** — `data-testid='thumb-confirm-modal'` opens for non-unlimited tiers when "Generate all" is clicked. Shows projected remaining quota ("you'll have N left after"). Founders/owner/grant SKIP this entirely.
+6. **Massively upgraded rewriter system prompt** (`thumbnails_routes.py`) — explicit `MUST INCLUDE` block: expressive human focal subject (with named facial expression), bold high-saturation color palette, dramatic cinematic lighting (rim/godrays/key-light), curiosity gap visual element, explicit negative space side, "top YouTube creator" production quality. `MUST AVOID` block: no on-image typography, no generic stock-photo phrasing, no neutral compositions, no cluttered backgrounds. Word count bumped from 60-120 → 90-160. Live test produced 91-word prompt hitting 6/10 viral keywords on a 5-word input.
+7. **VIRAL_STYLE_SUFFIX** — non-negotiable style anchor appended to every final image prompt before it hits gpt-image-1/Gemini. 3-layer composition: `{user_prompt}\n\n{aspect_hint}\n\n{viral_suffix}`. Suffix verified to land at the end of every persisted prompt via end-to-end test.
+8. **Backwards compat** — legacy long-form scripts (generated before this update) have no cover prompts. `extractCoverPrompts` returns `[]` for them, `sendToThumbnails` falls through to the seed-based handoff (narration hook), and Thumbnails.jsx Path B handles it with the same "Pre-filled from your script" UX as before.
+
+### Files touched
+- `/app/backend/prompts.py` — added TITLE/THUMBNAIL VARIANTS + COVER IMAGE PROMPTS to long-form template
+- `/app/backend/thumbnails_routes.py` — `VIRAL_STYLE_SUFFIX` const; upgraded `ASPECT_HINTS` with negative-space cue; massively expanded rewriter system prompt; 3-layer composed_prompt assembly
+- `/app/frontend/src/utils/parser.js` — `LONG_SECTION_ORDER` update; `extractCoverPrompts` + `extractTitleVariants` helpers
+- `/app/frontend/src/pages/Scripts.jsx` — `sendToThumbnails` rewritten to stitch coverPrompts + titleVariants by index into a `choices` array
+- `/app/frontend/src/pages/Thumbnails.jsx` — new state (coverChoices, selectedChoiceIndex, batchStatus, confirmBatch); handoff consumer Path A (picker) + Path B (legacy seed); `generateAll` sequential handler; cover-prompt picker JSX + cost-confirmation modal
+- `/app/frontend/src/App.css` — `.thumb-picker`, `.thumb-choice`, `.thumb-genall-btn`, `.thumb-modal*` styles
+- `/app/frontend/src/changelog.js` + `/app/memory/CHANGELOG.md` — v1.10.1 entry with customer-facing copy
+
+### Open follow-up
+- **gpt-image-2 → Group E (BYOK)** — when Emergent adds gpt-image-2 to the Universal key, swap with a one-line `model="gpt-image-2"` change. Until then, T4/Founder users who bring their own OpenAI key in Group E will get a "Premium 2" engine option that routes directly through their key.
+- **Auto-backfill cover prompts on legacy long scripts** — user chose Option B (only fix going forward), so legacy scripts stay as-is. The legacy fallback handoff (narration hook) covers them gracefully.
+
+---
+
 ## 2026-06-30 — Group C2 (Thumbnail Engine) SHIPPED
 **Status:** SHIPPED on preview, iter 32 ALL GREEN (17/17 backend, 100% frontend).
 
