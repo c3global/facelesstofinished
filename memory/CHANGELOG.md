@@ -27,6 +27,10 @@ first. Plain English — if you're a customer reading this, this is for you.
 - **Thumbnails — click any image in your gallery** to open a full-screen
   preview with Download + Copy prompt actions right there (no more right-
   clicking to save).
+- **Admin Usage tab** now tracks thumbnails alongside scripts and renders:
+  new sortable Thumbnails column, Premium/Fast split in the per-buyer
+  drilldown, footer totals, CSV export columns, and a new "Thumbnails
+  generated" tile on the Stats tab.
 - Find the API Keys page in your **Profile menu → API keys**. Each key can
   be replaced or removed at any time; renders silently fall back to
   platform keys when no customer key is saved.

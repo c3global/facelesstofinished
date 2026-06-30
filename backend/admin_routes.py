@@ -672,6 +672,7 @@ def register_admin_routes(
         # Engagement
         total_renders = await db.renders.count_documents({})
         total_scripts = await db.scripts.count_documents({})
+        total_thumbnails = await db.thumbnails.count_documents({"deleted": {"$ne": True}})
 
         # Revenue sum (cents)
         revenue_cents = 0
@@ -688,6 +689,7 @@ def register_admin_routes(
             "active_30d": active_30d,
             "total_renders": total_renders,
             "total_scripts": total_scripts,
+            "total_thumbnails": total_thumbnails,
             "revenue_cents": revenue_cents,
             "entitlement_breakdown": ent_breakdown,
             "signups_series": signups_series,
@@ -749,10 +751,17 @@ def register_admin_routes(
 
         # One aggregate per source collection, all keyed by user_email so we
         # can stitch back to buyers in O(1). Mongo handles the heavy lifting.
-        async def _agg(coll, group: dict) -> dict[str, dict]:
+        # `owner_field` defaults to "user_email" but thumbnails store ownership
+        # under `owner` — pass owner_field="owner" for that collection.
+        # `extra_match` lets callers (e.g. thumbnails) filter out soft-deleted
+        # rows in the same pipeline.
+        async def _agg(coll, group: dict, owner_field: str = "user_email", extra_match: dict | None = None) -> dict[str, dict]:
             out: dict[str, dict] = {}
+            match_stage: dict = {owner_field: {"$in": emails}}
+            if extra_match:
+                match_stage.update(extra_match)
             pipeline = [
-                {"$match": {"user_email": {"$in": emails}}},
+                {"$match": match_stage},
                 {"$group": group},
             ]
             async for row in coll.aggregate(pipeline):
@@ -785,6 +794,22 @@ def register_admin_routes(
                 "last_render_at": {"$max": "$created_at"},
             },
         )
+        # Thumbnails — collection is `thumbnails`, ownership lives on `owner`
+        # (not user_email like scripts/renders). Soft-deleted rows are excluded
+        # so admins see actual current-usage counts. Premium = OpenAI engine;
+        # Fast = Gemini Nano Banana.
+        thumbs_by_email = await _agg(
+            db.thumbnails,
+            {
+                "_id": "$owner",
+                "total":   {"$sum": 1},
+                "premium": {"$sum": {"$cond": [{"$eq": ["$engine", "premium"]}, 1, 0]}},
+                "fast":    {"$sum": {"$cond": [{"$eq": ["$engine", "fast"]},    1, 0]}},
+                "last_thumb_at": {"$max": "$created_at"},
+            },
+            owner_field="owner",
+            extra_match={"deleted": {"$ne": True}},
+        )
 
         # Stitch buyers + aggregations. Tier resolution: prefer the explicit
         # `tier` field if migrated; otherwise derive from entitlements via
@@ -798,11 +823,13 @@ def register_admin_routes(
                 tier_id = tier_for_entitlements(ents).id
             scripts_row = scripts_by_email.get(email, {})
             renders_row = renders_by_email.get(email, {})
-            # last_seen = the latest of (lastLoginAt, last_script_at, last_render_at).
-            # Buyers with no activity at all fall back to addedAt so the row
-            # still sorts sanely.
+            thumbs_row  = thumbs_by_email.get(email, {})
+            # last_seen = the latest of (lastLoginAt, last_script_at,
+            # last_render_at, last_thumb_at). Buyers with no activity at all
+            # fall back to addedAt so the row still sorts sanely.
             last_seen = _iso_max(b.get("lastLoginAt"), scripts_row.get("last_script_at"))
             last_seen = _iso_max(last_seen, renders_row.get("last_render_at"))
+            last_seen = _iso_max(last_seen, thumbs_row.get("last_thumb_at"))
             if not last_seen:
                 last_seen = b.get("addedAt")
             items.append({
@@ -828,6 +855,12 @@ def register_admin_routes(
                     "failed":   int(renders_row.get("failed")   or 0),
                     "last_at":  renders_row.get("last_render_at"),
                 },
+                "thumbnails": {
+                    "total":   int(thumbs_row.get("total")   or 0),
+                    "premium": int(thumbs_row.get("premium") or 0),
+                    "fast":    int(thumbs_row.get("fast")    or 0),
+                    "last_at": thumbs_row.get("last_thumb_at"),
+                },
                 "spend_cents": int(renders_row.get("spend_cents") or 0),
                 "buyer_total_spend_cents": int(b.get("totalSpendCents") or 0),
             })
@@ -836,12 +869,13 @@ def register_admin_routes(
         # derived columns (scripts_total, renders_total, spend_cents,
         # last_seen) that don't exist on any single source collection.
         sort_key_map = {
-            "email":          lambda r: (r.get("email") or "").lower(),
-            "scripts_total":  lambda r: r["scripts"]["total"],
-            "renders_total":  lambda r: r["renders"]["total"],
-            "spend_cents":    lambda r: r["spend_cents"],
-            "last_seen":      lambda r: r.get("last_seen") or "",
-            "added_at":       lambda r: r.get("added_at") or "",
+            "email":            lambda r: (r.get("email") or "").lower(),
+            "scripts_total":    lambda r: r["scripts"]["total"],
+            "renders_total":    lambda r: r["renders"]["total"],
+            "thumbnails_total": lambda r: r["thumbnails"]["total"],
+            "spend_cents":      lambda r: r["spend_cents"],
+            "last_seen":        lambda r: r.get("last_seen") or "",
+            "added_at":         lambda r: r.get("added_at") or "",
         }
         items.sort(key=sort_key_map[sort_by], reverse=(sort_dir == "desc"))
         paged = items[skip : skip + limit]
@@ -964,6 +998,10 @@ def register_admin_routes(
             "renders_complete",
             "renders_failed",
             "renders_last_at",
+            "thumbnails_total",
+            "thumbnails_premium",
+            "thumbnails_fast",
+            "thumbnails_last_at",
             "spend_cents",
             "buyer_total_spend_cents",
             "login_count",
@@ -982,11 +1020,14 @@ def register_admin_routes(
             buyer_docs.append(b)
         emails = [b["email"] for b in buyer_docs if b.get("email")]
 
-        async def _agg(coll, group: dict) -> dict[str, dict]:
+        async def _agg(coll, group: dict, owner_field: str = "user_email", extra_match: dict | None = None) -> dict[str, dict]:
             out: dict[str, dict] = {}
             if not emails:
                 return out
-            pipeline = [{"$match": {"user_email": {"$in": emails}}}, {"$group": group}]
+            match_stage: dict = {owner_field: {"$in": emails}}
+            if extra_match:
+                match_stage.update(extra_match)
+            pipeline = [{"$match": match_stage}, {"$group": group}]
             async for row in coll.aggregate(pipeline):
                 key = row.pop("_id", None)
                 if isinstance(key, str):
@@ -1011,6 +1052,13 @@ def register_admin_routes(
             "spend_cents": {"$sum": {"$ifNull": ["$actual_cost_cents", 0]}},
             "last_render_at": {"$max": "$created_at"},
         })
+        thumbs_by_email = await _agg(db.thumbnails, {
+            "_id": "$owner",
+            "total":   {"$sum": 1},
+            "premium": {"$sum": {"$cond": [{"$eq": ["$engine", "premium"]}, 1, 0]}},
+            "fast":    {"$sum": {"$cond": [{"$eq": ["$engine", "fast"]},    1, 0]}},
+            "last_thumb_at": {"$max": "$created_at"},
+        }, owner_field="owner", extra_match={"deleted": {"$ne": True}})
 
         async def _stream():
             yield "\ufeff" + _csv_row(headers)
@@ -1022,8 +1070,10 @@ def register_admin_routes(
                     tier_id = tier_for_entitlements(ents).id
                 s = scripts_by_email.get(email, {})
                 r = renders_by_email.get(email, {})
+                t = thumbs_by_email.get(email, {})
                 last_seen = _iso_max(b.get("lastLoginAt"), s.get("last_script_at"))
                 last_seen = _iso_max(last_seen, r.get("last_render_at"))
+                last_seen = _iso_max(last_seen, t.get("last_thumb_at"))
                 if not last_seen:
                     last_seen = b.get("addedAt")
                 row = [
@@ -1042,6 +1092,10 @@ def register_admin_routes(
                     int(r.get("complete") or 0),
                     int(r.get("failed")   or 0),
                     r.get("last_render_at"),
+                    int(t.get("total")   or 0),
+                    int(t.get("premium") or 0),
+                    int(t.get("fast")    or 0),
+                    t.get("last_thumb_at"),
                     int(r.get("spend_cents") or 0),
                     int(b.get("totalSpendCents") or 0),
                     int(b.get("loginCount") or 0),

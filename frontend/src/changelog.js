@@ -26,6 +26,7 @@ export const CHANGELOG = [
       "Keys are encrypted at rest and never displayed once saved — only a safe preview like 'sk-…0abc'",
       "Find it in your Profile menu → API keys",
       "Thumbnails — click any thumbnail in your gallery to open a full-screen preview, with Download + Copy prompt actions right there",
+      "Admin Usage tab — thumbnails now show up alongside scripts & renders, with Premium/Fast split in the drilldown + a new Thumbnails sort column and total tile in Stats",
     ],
   },
   {

@@ -38,6 +38,7 @@ const SORT_COLS = [
   { key: "email", label: "Email" },
   { key: "scripts_total", label: "Scripts" },
   { key: "renders_total", label: "Renders" },
+  { key: "thumbnails_total", label: "Thumbnails" },
   { key: "spend_cents", label: "Spend" },
   { key: "last_seen", label: "Last seen" },
   { key: "added_at", label: "Joined" },
@@ -113,14 +114,15 @@ export default function UsageTab() {
   };
 
   const totals = useMemo(() => {
-    let scripts = 0, renders = 0, spend = 0, founders = 0;
+    let scripts = 0, renders = 0, thumbnails = 0, spend = 0, founders = 0;
     for (const r of items) {
-      scripts += r.scripts?.total || 0;
-      renders += r.renders?.total || 0;
-      spend   += r.spend_cents || 0;
+      scripts    += r.scripts?.total    || 0;
+      renders    += r.renders?.total    || 0;
+      thumbnails += r.thumbnails?.total || 0;
+      spend      += r.spend_cents       || 0;
       if (r.founder) founders++;
     }
-    return { scripts, renders, spend, founders };
+    return { scripts, renders, thumbnails, spend, founders };
   }, [items]);
 
   const toggleSort = (col) => {
@@ -160,7 +162,8 @@ export default function UsageTab() {
         </button>
         <span className="admin-meta" data-testid="usage-total">
           {total} customers · {totals.scripts.toLocaleString()} scripts ·{" "}
-          {totals.renders.toLocaleString()} renders · {fmtCents(totals.spend)} infra
+          {totals.renders.toLocaleString()} renders ·{" "}
+          {totals.thumbnails.toLocaleString()} thumbnails · {fmtCents(totals.spend)} infra
         </span>
       </div>
 
@@ -209,6 +212,7 @@ export default function UsageTab() {
                     </td>
                     <td>{row.scripts?.total ?? 0}</td>
                     <td>{row.renders?.total ?? 0}</td>
+                    <td data-testid={`usage-thumbs-${row.email}`}>{row.thumbnails?.total ?? 0}</td>
                     <td>{fmtCents(row.spend_cents)}</td>
                     <td>{fmtDate(row.last_seen)}</td>
                     <td>{fmtDate(row.added_at)}</td>
@@ -220,7 +224,7 @@ export default function UsageTab() {
                   </tr>
                   {open && (
                     <tr className="usage-drilldown-row" data-testid={`usage-drilldown-${row.email}`}>
-                      <td colSpan={8}>
+                      <td colSpan={9}>
                         <div className="usage-drilldown">
                           <div className="usage-drilldown-grid">
                             <div className="usage-card">
@@ -243,6 +247,15 @@ export default function UsageTab() {
                                 <span>Failed: <b>{row.renders?.failed ?? 0}</b></span>
                               </div>
                               <div className="usage-mute">Last: {fmtDateTime(row.renders?.last_at)}</div>
+                            </div>
+                            <div className="usage-card" data-testid={`usage-drilldown-thumbs-${row.email}`}>
+                              <h4>Thumbnails</h4>
+                              <div className="usage-num">{row.thumbnails?.total ?? 0}</div>
+                              <div className="usage-breakdown">
+                                <span>Premium: <b>{row.thumbnails?.premium ?? 0}</b></span>
+                                <span>Fast: <b>{row.thumbnails?.fast ?? 0}</b></span>
+                              </div>
+                              <div className="usage-mute">Last: {fmtDateTime(row.thumbnails?.last_at)}</div>
                             </div>
                             <div className="usage-card">
                               <h4>Spend</h4>

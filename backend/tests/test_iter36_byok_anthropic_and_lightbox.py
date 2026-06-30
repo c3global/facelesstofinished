@@ -164,12 +164,13 @@ class TestByokAnthropicWiringStatic:
 
     # 4a) _claude_complete signature has user_email + does BYOK lookup
     def test_claude_complete_has_user_email_and_byok(self):
-        # Locate the function header (anchor) — supports multi-line signatures.
+        # Locate the function header (anchor) — supports multi-line signatures
+        # AND a `) -> str:` return-type annotation.
         idx = self.server_src.find("async def _claude_complete(")
         assert idx >= 0, "_claude_complete not defined"
-        # Grab the signature up to the closing `):`.
-        sig_end = self.server_src.find("):", idx)
-        assert sig_end > idx
+        m = re.search(r"\)\s*(->\s*[^:]+)?:", self.server_src[idx:])
+        assert m, "Could not find end of _claude_complete signature"
+        sig_end = idx + m.end()
         sig = self.server_src[idx:sig_end]
         assert "user_email" in sig, f"user_email missing from signature: {sig}"
         # Grab function body (up to next top-level async def / def / class).
