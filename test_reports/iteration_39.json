@@ -1,0 +1,35 @@
+{
+  "summary": "Iteration 39 — refactor pass (caption_burn_in module extraction + Scripts.jsx scriptsConstants + usePlatformAccent hook) + CORS overhaul. ALL 13 review items PASS. Zero regressions detected. Caption burn-in pytest 7/7 green (~0.5s). Backend boots cleanly. CORS preflight on /api/auth/me from a random cross-origin returns 204 with ACAO:*, ACAH:*, ACAM including GET. Cross-origin GET /api/auth/me with Bearer JWT returns 200 + valid CORS headers + correct user JSON body ({email, entitlements, isAdmin}). caption_burn_in direct import returns ['boxed','tiktok','minimal']. server.py compat shim (_burn_in_captions + CAPTION_STYLE_PRESETS + CAPTION_POSITION_OVERRIDES re-export) imports cleanly. Frontend Scripts page: initial data-platform=null, click Shorts → TikTok → data-platform='tiktok' (+ --platform-accent #25F4EE), CTA 'Show me 5 angles' computed color = rgb(11,26,26) (contrast fix intact post-refactor), click Long-form → data-platform cleans up to null. Topic textarea editable. Saved Angles shows '(7)'. No console.error / pageerror on /scripts mount. Studio + Settings/Keys (all 6 BYOK cards: Anthropic/OpenAI/Google AI Studio/ElevenLabs/HeyGen/fal.ai) + Admin (ghl-status-pill='GHL: off') render cleanly. Footer shows v1.15.0. Lint: scriptsConstants.js + usePlatformAccent.js are 0-issue. Scripts.jsx has only the 10 pre-existing empty-catch{} warnings (no new). Backend sanity: rewrite-prompt 200 in 11.5s (demo@c3global.co); thumbnails/generate 200 in 42.8s (admin/premium engine). No Cloudflare 502.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/thumbnails/generate", "issue": "Premium engine took 42.8s (above spec's <30s soft target). No error, no 502 — fal.ai natural latency. Demo starter tier correctly 402s on premium-style request."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_caption_burn_in.py",
+    "/app/test_reports/pytest/iter39_caption_burn_in.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "caption_burn_in.py extraction is clean (158 lines, single public surface, soft-fails to None, fal_key_provider injected as callable so the BYOK ContextVar resolution stays inside the active coroutine). server.py compat shim at L1556-1573 correctly re-exports CAPTION_STYLE_PRESETS / CAPTION_POSITION_OVERRIDES / _burn_in_captions. ✓",
+    "CORS overhaul (server.py L113-148) correctly drops the spec-illegal wildcard+credentials combo. allow_credentials=False is right because the frontend uses Authorization: Bearer JWT, not cookies. Falls back to allow_origin_regex='.*' when FRONTEND_ORIGINS is unset — safe because the auth boundary is the JWT, not the Origin header. ✓",
+    "scriptsConstants.js + usePlatformAccent.js extraction is well-scoped. usePlatformAccent correctly cleans up data-platform attribute when leaving Shorts mode (verified live). currentStreamingPhase helper is pure + easy to test. ✓",
+    "Minor: server.py is still 4046 lines — well past the 700-line guideline. The caption extraction shaved ~100 lines; consider extracting render pipelines (faceless/avatar/composite) next.",
+    "Minor: server.py uses deprecated @app.on_event('startup') — emits pytest deprecation warnings. Migration to lifespan handlers is overdue but non-blocking.",
+    "Minor: admin_routes.py L715-720 uses deprecated `regex=` Query argument — should switch to `pattern=` to silence Pydantic v2 deprecation warnings."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (7/7 caption tests + CORS preflight + CORS actual + auth/me + rewrite-prompt + thumbnails/generate)", "frontend": "100% (Scripts mode toggle + platform pill + CTA color + cleanup + Studio + Keys/6 BYOK + Admin/GHL pill + Footer v1.15.0)"},
+  "test_credentials": "drcharitycampbell@gmail.com (DEV_BYPASS admin); demo@c3global.co (starter tier, base entitlement)",
+  "seed_data_creation": "None — used existing DEV_BYPASS accounts.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "v1.15.0 shipped clean. Caption burn-in regression suite: `python3 -m pytest backend/tests/test_caption_burn_in.py -v` (~0.5s, monkey-patched httpx, no fal.ai charges). CORS regression: `curl -i -X OPTIONS $BU/api/auth/me -H 'Origin: https://x.test' -H 'Access-Control-Request-Method: GET'` should return 204 with ACAO + ACAM including GET. Scripts.jsx platform-color regression: navigate /scripts → click Shorts → TikTok → assert document.documentElement.getAttribute('data-platform')==='tiktok' AND .cta-btn.is-platform computed color === rgb(11,26,26). Switch back to Long-form → assert data-platform === null. Frontend hot-reload sometimes serves stale Scripts.jsx for 2-3s after edit — wait for networkidle then 2s before asserting data-platform.",
+  "rca of the issue": "N/A — this iteration was a pure refactor + a CORS spec compliance fix. The CORS bug was a silent client-side rejection of /api/auth/me responses that combined Access-Control-Allow-Origin: * with Access-Control-Allow-Credentials: true (spec violation per W3C CORS — browsers MUST ignore the response on credentialed requests). Fix: drop allow_credentials=True (frontend doesn't use cookies; auth is via Authorization: Bearer JWT) AND keep wildcard for the dev preview while supporting an explicit FRONTEND_ORIGINS env var for production. Verified: cross-origin GET /api/auth/me now returns 200 with correct headers, body matches user object."
+}

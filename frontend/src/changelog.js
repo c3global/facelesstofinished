@@ -14,9 +14,18 @@
 //    See PRD.md → "Workflow rule: changelog must move with every deploy."
 // 4. Most recent on top. Each entry has version + date + bullet list.
 
-export const APP_VERSION = "1.14.0";
+export const APP_VERSION = "1.15.0";
 
 export const CHANGELOG = [
+  {
+    version: "1.15.0",
+    date: "2026-06-30",
+    changes: [
+      "Cross-origin auth fixed — the deployed app now correctly authenticates regardless of which subdomain the frontend is served from (CORS spec fix, the previous wildcard-with-credentials combination was silently broken)",
+      "Behind the scenes: server.py is leaner — the caption burn-in pipeline moved to its own module with its own regression test suite; Scripts page extracts script-engine constants and the platform-accent side effect into clean reusable modules",
+      "No user-facing behaviour change — just faster builds, tighter codebase, fewer bugs going forward",
+    ],
+  },
   {
     version: "1.14.0",
     date: "2026-06-30",

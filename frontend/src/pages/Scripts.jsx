@@ -33,76 +33,17 @@ import ScriptHistoryList from "../components/scripts/ScriptHistoryList";
 import GenProgress from "../components/scripts/GenProgress";
 import SprintResult, { sprintAllToClipboardText } from "../components/scripts/SprintResult";
 import ResultsNavBar from "../components/scripts/ResultsNavBar";
+// v1.15.0 — constants + the platform-accent side-effect hook moved out
+// of this file so the page focuses on flow orchestration. Same exported
+// names: MODES, STEPS, LENGTHS, PLATFORMS, TAGLINES, angleKey,
+// currentStreamingPhase.
+import {
+  MODES, STEPS, LENGTHS, PLATFORMS, TAGLINES,
+  angleKey, currentStreamingPhase,
+} from "../components/scripts/scriptsConstants";
+import { usePlatformAccent } from "../hooks/usePlatformAccent";
 
-const MODES = { LONG: "long", SHORTS: "shorts" };
-const STEPS = {
-  TOPIC: "topic",
-  ANGLES: "angles",
-  GENERATING: "generating",
-  RESULT: "result",
-};
-
-const LENGTHS = [
-  { id: "short", label: "Short", desc: "5–8 min · 800–1,200 words" },
-  { id: "medium", label: "Medium", desc: "10–15 min · 1,500–2,200 words" },
-  { id: "long", label: "Long", desc: "18–25 min · 2,700–3,800 words" },
-];
-const PLATFORMS = [
-  { id: "youtube", label: "YouTube Shorts", accent: "#FF0033" },
-  { id: "reels", label: "Instagram Reels", accent: "#E1306C" },
-  { id: "tiktok", label: "TikTok", accent: "#25F4EE" },
-];
-
-const TAGLINES = [
-  "Write a script that gets watched.",
-  "Type a topic. Get a complete script.",
-  "From blank page to ready-to-record — in seconds.",
-];
-
-const angleKey = (a) =>
-  `${(a?.name || "").toLowerCase()}::${(a?.framing || "").toLowerCase()}`;
-
-// Ordered map of section headers Claude emits → friendly status text.
-// Used by the drip-banner to show "Writing hook variations…" etc. while
-// streaming. The LATEST header found in the partial text wins.
-const LONG_PHASES = [
-  ["VIDEO CONCEPT", "Drafting video concept…"],
-  ["HOOK VARIATIONS", "Writing hook variations…"],
-  ["OUTLINE", "Building outline…"],
-  ["FULL NARRATION SCRIPT", "Writing narration…"],
-  ["TRANSITIONS", "Composing transitions…"],
-  ["B-ROLL SHOT LIST", "Compiling B-roll shot list…"],
-  ["PRODUCTION NOTES", "Adding production notes…"],
-];
-const SHORTS_PHASES = [
-  ["HOOK", "Drafting hook…"],
-  ["SCRIPT", "Writing the short…"],
-  ["CAPTION", "Generating caption…"],
-  ["HASHTAGS", "Picking hashtags…"],
-  ["B-ROLL", "Listing B-roll…"],
-  ["PRODUCTION NOTES", "Adding production notes…"],
-];
-const SPRINT_PHASES = [
-  ["VARIANT 1", "Drafting variant 1 of 5…"],
-  ["VARIANT 2", "Drafting variant 2 of 5…"],
-  ["VARIANT 3", "Drafting variant 3 of 5…"],
-  ["VARIANT 4", "Drafting variant 4 of 5…"],
-  ["VARIANT 5", "Drafting variant 5 of 5…"],
-];
-
-function currentStreamingPhase(text, mode) {
-  if (!text) return "Thinking…";
-  const phases =
-    mode === "sprint" ? SPRINT_PHASES :
-    mode === "shorts" ? SHORTS_PHASES :
-    LONG_PHASES;
-  let lastMatch = phases[0][1];
-  const upper = text.toUpperCase();
-  for (const [header, label] of phases) {
-    if (upper.includes(header)) lastMatch = label;
-  }
-  return lastMatch;
-}
+/* — script-engine constants now live in components/scripts/scriptsConstants.js (v1.15.0) — */
 
 export default function Scripts() {
   const { user } = useAuth();
@@ -151,24 +92,8 @@ export default function Scripts() {
   // history-loaded short rendered with whatever rim the user last picked
   // (which is why YouTube history was showing up red regardless of the
   // platform the script was actually written for).
-  useEffect(() => {
-    const root = document.documentElement;
-    if (mode === MODES.SHORTS) {
-      const activePlatformId = output?.platform || platform;
-      const p = PLATFORMS.find((x) => x.id === activePlatformId);
-      if (p) {
-        root.style.setProperty("--platform-accent", p.accent);
-        // v1.14.0 — mirror the platform on data-platform so global CTAs
-        // like .cta-btn.is-platform inherit the correct foreground ink
-        // from the [data-platform="tiktok"] override. Without this, the
-        // "SHOW ME 5 ANGLES" button stays white on the cyan TikTok bg.
-        root.setAttribute("data-platform", activePlatformId);
-      }
-    } else {
-      root.style.removeProperty("--platform-accent");
-      root.removeAttribute("data-platform");
-    }
-  }, [mode, platform, output?.platform]);
+  // v1.15.0 — extracted to hooks/usePlatformAccent (same behaviour).
+  usePlatformAccent(mode, platform, output?.platform);
 
   const [history, setHistory] = useState([]);
   const [savedAngles, setSavedAngles] = useState([]);

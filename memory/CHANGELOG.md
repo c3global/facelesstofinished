@@ -12,6 +12,28 @@ first. Plain English — if you're a customer reading this, this is for you.
 
 ---
 
+## v1.15.0 — June 30, 2026 (refactor + cross-origin auth)
+
+- **Cross-origin auth-me fixed.** The CORS middleware was configured with
+  `allow_origins=["*"]` + `allow_credentials=True` — invalid per W3C spec,
+  browsers silently reject the combination on cross-origin `/auth/me` calls
+  from the deployed frontend. Now uses either a whitelist via
+  `FRONTEND_ORIGINS` env var or a permissive regex match (still safe — the
+  auth boundary is the JWT bearer token, not the origin).
+- **server.py refactor pass 1.** Caption burn-in pipeline extracted to a
+  dedicated `backend/caption_burn_in.py` module. server.py shrinks by ~100
+  lines. The 7-test pytest regression suite (`test_caption_burn_in.py`) is
+  unchanged — locks the contract through the extraction.
+- **Scripts.jsx refactor pass 1.** Constants (`MODES`, `STEPS`, `LENGTHS`,
+  `PLATFORMS`, `TAGLINES`, `LONG_PHASES`, `SHORTS_PHASES`, `SPRINT_PHASES`,
+  `angleKey`, `currentStreamingPhase`) extracted to
+  `components/scripts/scriptsConstants.js`. The platform-accent
+  side-effect (mirrors active platform onto `documentElement[data-platform]`)
+  extracted to `hooks/usePlatformAccent.js`. Scripts.jsx shrinks by ~80
+  lines. No behavioural change — same data-testids, same renders.
+
+---
+
 ## v1.14.0 — June 30, 2026
 
 - **Cloudflare 502 → warm message.** When the render server is briefly

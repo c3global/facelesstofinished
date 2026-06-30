@@ -114,13 +114,38 @@ mongo = AsyncIOMotorClient(MONGO_URL)
 db = mongo[DB_NAME]
 
 app = FastAPI(title="F2F48 Studio API", version="0.1.0")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS — v1.15.0 — switched from `allow_origins=["*"] + allow_credentials=True`
+# (which is invalid per the W3C CORS spec — browsers silently reject the
+# combination on cross-origin /auth/me calls from the deployed frontend)
+# to either:
+#   - an explicit whitelist via FRONTEND_ORIGINS env var, OR
+#   - a regex wildcard when no whitelist is set (still safe because our
+#     auth boundary is the bearer JWT, not the origin).
+# `allow_credentials=False` because the frontend ships JWT in the
+# Authorization header, not in cookies. This fixes the previously-broken
+# cross-origin /api/auth/me + /api/me/quota path when frontend is served
+# from a different host than the backend (e.g. on the production domain
+# vs the kubernetes preview URL).
+_frontend_origins = (os.environ.get("FRONTEND_ORIGINS") or "").strip()
+if _frontend_origins:
+    _origins_list = [o.strip() for o in _frontend_origins.split(",") if o.strip()]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_origins_list,
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+        expose_headers=["Content-Disposition"],
+    )
+else:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=".*",
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+        expose_headers=["Content-Disposition"],
+    )
 
 api = FastAPI()  # mounted at /api below
 
@@ -1525,124 +1550,27 @@ AUTO_SUBTITLE_MODEL = "fal-ai/workflow-utilities/auto-subtitle"
 CAPTION_BURN_COST_CENTS = 10  # ~$0.10/render
 CAPTION_BURN_MAX_WAIT_S = 600
 
-CAPTION_STYLE_PRESETS: dict[str, dict] = {
-    # Bold TikTok-ish bottom captions on a translucent box — the safe default.
-    "boxed": {
-        "font_name": "Montserrat",
-        "font_size": 92,
-        "font_weight": "bold",
-        "font_color": "white",
-        "highlight_color": "yellow",
-        "stroke_width": 2,
-        "stroke_color": "black",
-        "background_color": "black",
-        "background_opacity": 0.55,
-        "position": "bottom",
-        "y_offset": 90,
-        "words_per_subtitle": 4,
-        "enable_animation": True,
-    },
-    # Bold-ish karaoke style but smaller and at the user-chosen vertical slot.
-    # Three words at a time — fewer than "boxed" so it stays readable in
-    # the center where it overlaps the subject.
-    "tiktok": {
-        "font_name": "Poppins",
-        "font_size": 96,
-        "font_weight": "black",
-        "font_color": "white",
-        "highlight_color": "purple",
-        "stroke_width": 4,
-        "stroke_color": "black",
-        "background_color": "none",
-        "background_opacity": 0.0,
-        "position": "bottom",   # overridden by caption_position request field
-        "y_offset": 90,
-        "words_per_subtitle": 3,
-        "enable_animation": True,
-    },
-    # Minimal documentary-style captions — small, clean, no animation.
-    "minimal": {
-        "font_name": "Inter",
-        "font_size": 64,
-        "font_weight": "normal",
-        "font_color": "white",
-        "highlight_color": "white",
-        "stroke_width": 1,
-        "stroke_color": "black",
-        "background_color": "none",
-        "background_opacity": 0.0,
-        "position": "bottom",
-        "y_offset": 60,
-        "words_per_subtitle": 6,
-        "enable_animation": False,
-    },
-}
-
-# UI lets the user override the vertical placement of the captions regardless
-# of style. "top" places them near the top edge, "bottom" near the bottom
-# edge (the style default), "center" overlays them on the subject. Maps to
-# the auto-subtitle endpoint's `position` field. y_offset is also reset so
-# the captions sit at a sensible margin from the edge.
-CAPTION_POSITION_OVERRIDES: dict[str, dict] = {
-    "top":    {"position": "top",    "y_offset": 90},
-    "bottom": {"position": "bottom", "y_offset": 90},
-    "center": {"position": "center", "y_offset": 0},
-}
+# v1.15.0 — caption-burn-in pipeline moved into its own module so server.py
+# stays manageable. The presets + helper are re-exported here for any
+# legacy import path that still references them via `server.CAPTION_*` or
+# `server._burn_in_captions`.
+from caption_burn_in import (  # noqa: E402
+    CAPTION_STYLE_PRESETS,
+    CAPTION_POSITION_OVERRIDES,
+    burn_in_captions as _burn_in_captions_impl,
+)
 
 
 async def _burn_in_captions(video_url: str, style_key: str, position_key: str = "bottom") -> Optional[str]:
-    """Second pass through fal.ai's auto-subtitle workflow. Returns the URL
-    of the captioned MP4, or None on any error (caller falls back to the
-    uncaptioned video). Style is one of `CAPTION_STYLE_PRESETS` — unknown
-    keys silently fall back to `"boxed"`. Position overrides the preset's
-    vertical placement (top/bottom/center)."""
-    fal_key = _effective_fal_key()
-    if not fal_key or not video_url:
-        return None
-    style = dict(CAPTION_STYLE_PRESETS.get(style_key) or CAPTION_STYLE_PRESETS["boxed"])
-    pos_override = CAPTION_POSITION_OVERRIDES.get(position_key)
-    if pos_override:
-        style.update(pos_override)
-    payload = {"video_url": video_url, "language": "en", **style}
-    fal_headers = {"Authorization": f"Key {fal_key}"}
-    try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            sub = await client.post(
-                f"https://queue.fal.run/{AUTO_SUBTITLE_MODEL}",
-                headers=fal_headers,
-                json=payload,
-            )
-            if sub.status_code not in (200, 202):
-                logger.warning(f"[captions] submit FAIL {sub.status_code}: {sub.text[:200]}")
-                return None
-            sub_body = sub.json()
-            status_url = sub_body.get("status_url")
-            result_url = sub_body.get("response_url")
-            if not status_url or not result_url:
-                logger.warning(f"[captions] submit malformed: {str(sub_body)[:200]}")
-                return None
-            deadline = asyncio.get_event_loop().time() + CAPTION_BURN_MAX_WAIT_S
-            while asyncio.get_event_loop().time() < deadline:
-                await asyncio.sleep(2)
-                stat = await client.get(status_url, headers=fal_headers)
-                if stat.status_code != 200:
-                    continue
-                st = stat.json().get("status", "")
-                if st == "COMPLETED":
-                    res = await client.get(result_url, headers=fal_headers)
-                    if res.status_code != 200:
-                        return None
-                    out = res.json()
-                    return (out.get("video") or {}).get("url") or out.get("video_url")
-                if st == "FAILED":
-                    logger.warning(f"[captions] FAILED: {stat.text[:200]}")
-                    return None
-            logger.warning(f"[captions] polling timed out after {CAPTION_BURN_MAX_WAIT_S}s")
-            return None
-    except Exception as exc:
-        logger.warning(f"[captions] exception: {type(exc).__name__}: {exc}")
-        return None
-
+    """Compat shim — delegates to caption_burn_in.burn_in_captions, injecting
+    the BYOK-aware fal key resolver so customer keys still take precedence
+    inside the active render coroutine."""
+    return await _burn_in_captions_impl(
+        video_url,
+        style_key,
+        position_key,
+        fal_key_provider=_effective_fal_key,
+    )
 
 # --- Sentence-aware script splitter ----------------------------------------
 # Each "beat" is one natural pause in the voiceover (sentence or em-dash/comma
