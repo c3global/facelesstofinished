@@ -14,9 +14,18 @@
 //    See PRD.md → "Workflow rule: changelog must move with every deploy."
 // 4. Most recent on top. Each entry has version + date + bullet list.
 
-export const APP_VERSION = "1.17.0";
+export const APP_VERSION = "1.18.0";
 
 export const CHANGELOG = [
+  {
+    version: "1.18.0",
+    date: "2026-06-30",
+    changes: [
+      "New public Roadmap page — see what we've shipped, what we're building now, and what's coming next. Linked from the footer (no login required)",
+      "Shipped column highlights Script Engine, Studio Avatar + Faceless, Thumbnail Engine, BYOK vault, and AppSumo redemption",
+      "Tell us which Considering item matters most — top requests get fast-tracked into Planned",
+    ],
+  },
   {
     version: "1.17.0",
     date: "2026-06-30",

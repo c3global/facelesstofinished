@@ -20,6 +20,40 @@ back to it for entitlement verification.
 
 ## 🔁 Workflow rule: Changelog moves with every change (set 2026-06-29 by user)
 
+### Iteration 44 (2026-06-30) — Public Roadmap page (/roadmap) v1.18.0
+
+**Why:** AppSumo reviewers vet apps by clicking around the live product, and a credible "what we've shipped + what's next" page signals serious momentum (not abandonware). User wanted it native to the app instead of an external Notion/Canny link.
+
+**Shape:**
+- 4-column layout: **Shipped (8) / In Progress (2) / Planned (9) / Considering (5)**
+- Public route (no `RequireAuth`) — reviewers can hit it pre-login
+- Display-only — no upvote/comment backend (deferred until post-launch demand justifies)
+- Tone: founder-honest. Customer-facing benefit language, no internal jargon (no "fal.ai", "HeyGen", "GridFS" — describes the result the buyer gets).
+- Tags: `THIS WEEK` (amber), `TOP REQUEST` (amber), `P0` (amber), `APPSUMO` (green), `PRO PLUS` (green).
+- **Canva integration** added per user request — sits at the top of Planned with TOP REQUEST chip.
+
+**Files:**
+- NEW `frontend/src/data/roadmap.js` — single source of truth for the 4 buckets. Edit-here-only pattern, mirrors changelog.js.
+- NEW `frontend/src/pages/Roadmap.jsx` — hero + 4-column grid + footnote. Uses lucide icons (CheckCircle2/Sparkles/ListChecks/Lightbulb) per column.
+- `frontend/src/App.js` — added `/roadmap` route + lazy import. Public (no `RequireAuth`).
+- `frontend/src/components/Footer.jsx` — added "Roadmap" link next to "Have a redemption code?"
+- `frontend/src/App.css` — appended ~210 lines (`.roadmap-*`) with full dark+light theme tokens. Hero gradient (white→lavender→copper) matches `.studio-title` and `.thumb-title`. Light-mode overrides go through `[data-theme="light"]` block — dark mode is byte-for-byte unchanged.
+- `frontend/src/changelog.js` — bumped APP_VERSION to 1.18.0 (Footer auto-pulses amber "What's New" dot for all current buyers).
+
+**Verification (smoke):**
+- Dark mode screenshot — all 4 columns render with proper icon colors (green=Shipped, amber=In Progress, accent=Planned, muted=Considering). Hero gradient renders. Canva TOP REQUEST chip visible.
+- Light mode screenshot — `.roadmap-column` bg = `rgb(255,255,255)` ✓; `.roadmap-eyebrow` color = `color(srgb 0.514 0.343 0.211)` (≈ deep copper rgb(131,87,54)) — exact match to v1.17.0 trilogy ✓.
+- Footer link `data-testid="footer-roadmap-link"` present on every authenticated page.
+- No JS lint warnings on either new file.
+
+**Open follow-ups:**
+- AppSumo launch: still gated on user re-clicking Deploy (iter 43 requirements.txt fix applies).
+- If buyers start emailing support@c3global.co requesting Considering items get promoted, manually move them to Planned in `roadmap.js`.
+
+---
+
+
+
 ### Iteration 43 (2026-06-30) — Production deploy fix: missing requirements.txt entries
 
 **Symptom:** K8s production deploy failed with `deployment failed to become ready: timeout waiting for deployment to be ready`. Preview was 100% healthy.

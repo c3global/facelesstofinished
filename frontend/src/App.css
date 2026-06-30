@@ -6868,3 +6868,244 @@ body[data-founder="true"] .settings-key-save-btn {
 [data-theme="light"] .settings-key-err { color: var(--danger); }
 [data-theme="light"] .settings-keys-foot { color: var(--muted); }
 [data-theme="light"] .settings-keys-foot a { color: var(--accent); }
+
+
+/* =====================================================================
+   Roadmap page (/roadmap) — public, no auth required. Mirrors the studio
+   + thumbnails hero treatment (eyebrow + gradient title) so AppSumo
+   reviewers landing here see a consistent brand language. Four columns
+   on desktop, single column on mobile. Theme tokens auto-switch.
+   ===================================================================== */
+.roadmap-main {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 28px 24px 96px;
+  color: var(--text);
+}
+.roadmap-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: center;
+  text-align: center;
+  padding: 8px 0 28px;
+}
+.roadmap-back {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  margin-bottom: 8px;
+  transition: color 120ms, border-color 120ms, background 120ms;
+}
+.roadmap-back:hover { color: var(--text); border-color: var(--accent); }
+.roadmap-eyebrow {
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  color: var(--warning);
+  margin: 0;
+}
+.roadmap-title {
+  font-weight: 700;
+  font-size: clamp(28px, 4.6vw, 48px);
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  margin: 0;
+  background: linear-gradient(135deg, #FFFFFF 0%, #E8E4FF 35%, #C9956C 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  max-width: 760px;
+}
+.roadmap-sub {
+  color: var(--muted);
+  font-size: 15px;
+  margin: 0;
+  max-width: 600px;
+  line-height: 1.65;
+}
+.roadmap-mail { color: var(--accent); text-decoration: none; font-weight: 500; }
+.roadmap-mail:hover { text-decoration: underline; }
+
+.roadmap-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 18px;
+  margin-top: 24px;
+}
+@media (max-width: 1100px) {
+  .roadmap-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 640px) {
+  .roadmap-grid { grid-template-columns: 1fr; }
+  .roadmap-main { padding: 20px 16px 72px; }
+}
+
+.roadmap-column {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 18px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-shadow: var(--shadow-card, 0 1px 3px rgba(0,0,0,0.06));
+}
+.roadmap-column-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 10px;
+}
+.roadmap-column-head svg { color: var(--accent); flex-shrink: 0; }
+.roadmap-column-shipped     .roadmap-column-head svg { color: var(--success, #1d9e75); }
+.roadmap-column-inProgress  .roadmap-column-head svg { color: var(--warning); }
+.roadmap-column-planned     .roadmap-column-head svg { color: var(--accent); }
+.roadmap-column-considering .roadmap-column-head svg { color: var(--muted); }
+
+.roadmap-column-title {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin: 0;
+  color: var(--text);
+  flex: 1;
+}
+.roadmap-column-count {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 8px;
+  min-width: 24px;
+  text-align: center;
+}
+.roadmap-column-note {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 0;
+  line-height: 1.5;
+}
+.roadmap-list {
+  list-style: none;
+  padding: 0;
+  margin: 6px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.roadmap-item {
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg) 60%, transparent);
+  transition: border-color 140ms, transform 140ms, background 140ms;
+}
+.roadmap-item:hover {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+  transform: translateY(-1px);
+}
+.roadmap-item-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.roadmap-item-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0;
+  color: var(--text);
+  line-height: 1.35;
+}
+.roadmap-item-tag {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.roadmap-item-tag[data-tag="p0"],
+.roadmap-item-tag[data-tag="top-request"] {
+  background: color-mix(in srgb, var(--warning) 22%, transparent);
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 38%, transparent);
+}
+.roadmap-item-tag[data-tag="appsumo"],
+.roadmap-item-tag[data-tag="pro-plus"] {
+  background: color-mix(in srgb, var(--success, #1d9e75) 22%, transparent);
+  color: var(--success, #1d9e75);
+  border-color: color-mix(in srgb, var(--success, #1d9e75) 38%, transparent);
+}
+.roadmap-item-tag[data-tag="this-week"] {
+  background: color-mix(in srgb, var(--warning) 28%, transparent);
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 50%, transparent);
+}
+.roadmap-item-blurb {
+  font-size: 13px;
+  color: var(--muted);
+  margin: 0;
+  line-height: 1.55;
+}
+
+.roadmap-footnote {
+  margin-top: 36px;
+  padding: 20px 24px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--border));
+  text-align: center;
+}
+.roadmap-footnote p {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text);
+  line-height: 1.65;
+  max-width: 720px;
+  margin-inline: auto;
+}
+
+/* Light-mode polish — matches the v1.17.0 trilogy. Goes through design
+   tokens (var(--surface), var(--text), var(--muted), var(--warning),
+   var(--accent), var(--border)) so dark mode stays untouched. */
+[data-theme="light"] .roadmap-eyebrow {
+  color: color-mix(in srgb, var(--warning) 78%, #000 22%);
+}
+[data-theme="light"] .roadmap-title {
+  background: linear-gradient(135deg, #1a1530 0%, #4a3f7a 45%, #a86b45 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+[data-theme="light"] .roadmap-column { background: #ffffff; }
+[data-theme="light"] .roadmap-item { background: var(--bg); }
+[data-theme="light"] .roadmap-column-count { background: #ffffff; }
+[data-theme="light"] .roadmap-footnote {
+  background: linear-gradient(135deg,
+    color-mix(in srgb, var(--accent) 10%, #ffffff),
+    color-mix(in srgb, var(--warning) 8%, #ffffff));
+}

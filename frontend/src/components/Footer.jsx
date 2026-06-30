@@ -83,6 +83,13 @@ export default function Footer() {
           >
             Have a redemption code?
           </Link>
+          <Link
+            to="/roadmap"
+            className="footer-link"
+            data-testid="footer-roadmap-link"
+          >
+            Roadmap
+          </Link>
           <details
             className="footer-changelog"
             data-testid="footer-changelog"

@@ -12,6 +12,27 @@ first. Plain English — if you're a customer reading this, this is for you.
 
 ---
 
+## v1.18.0 — June 30, 2026 (Public Roadmap page)
+
+- **New `/roadmap` page** linked from the footer. No login required —
+  AppSumo reviewers, prospective buyers, and anyone curious can see
+  exactly what's shipped, what we're building right now, what's coming
+  next, and what we're considering.
+- **4 columns:** Shipped (8 items including Script Engine, Studio
+  Avatar + Faceless, Thumbnail Engine, BYOK, AppSumo redemption flow,
+  Admin Dashboard, Light/Dark themes), In Progress (Production deploy +
+  AppSumo launch, GoHighLevel sync), Planned (Canva integration ←
+  TOP REQUEST, Cinematic Faceless, Upload B-roll, Record voiceover,
+  Brand kits, Bulk CSV → video, AI music, Native publishing, Analytics),
+  Considering (Voice cloning, Team seats, Webhook/Zapier, Avatar BG
+  removal, Mobile app).
+- Tone is founder-honest: every blurb describes the *benefit* to the
+  buyer, not the underlying tech. We update this page in the same
+  change as the code itself — no stale promises.
+- Both dark + light themes polished to the v1.17.0 standard.
+
+---
+
 ## v1.17.0 — June 30, 2026 (Light-mode polish round 2)
 
 - **Hero eyebrow** ("FACELESS TO FINISHED · VIDEO ENGINE" /

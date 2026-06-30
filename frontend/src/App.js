@@ -6,6 +6,7 @@ import Scripts from "./pages/Scripts";
 import Resources from "./pages/Resources";
 import Thumbnails from "./pages/Thumbnails";
 import Redeem from "./pages/Redeem";
+import Roadmap from "./pages/Roadmap";
 import SettingsKeys from "./pages/SettingsKeys";
 import Login from "./pages/Login";
 import Admin from "./pages/Admin";
@@ -192,6 +193,7 @@ export default function App() {
             <Route path="/thumbnails" element={<RequireAuth><Thumbnails /></RequireAuth>} />
             <Route path="/resources" element={<RequireAuth><Resources /></RequireAuth>} />
             <Route path="/redeem" element={<Redeem />} />
+            <Route path="/roadmap" element={<Roadmap />} />
             <Route path="/settings/keys" element={<RequireAuth><SettingsKeys /></RequireAuth>} />
             <Route path="/admin" element={<RequireAuth><Admin /></RequireAuth>} />
             <Route path="/" element={<Navigate to="/scripts" replace />} />
