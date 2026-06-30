@@ -3909,6 +3909,19 @@ register_license_routes(
     studio_grant_emails=STUDIO_GRANT_EMAILS,
 )
 
+# BYOK vault — encrypted OpenAI / HeyGen / fal.ai keys for T4 / Founder users.
+# The module also exposes get_byok_key(db, email, service) which the render
+# paths call to decide whether to use a customer's key vs the platform key.
+from byok_routes import register_byok_routes, get_byok_key  # noqa: E402
+
+register_byok_routes(
+    api=api,
+    db=db,
+    current_user_dep=current_user,
+    dev_bypass_email=DEV_BYPASS_EMAIL,
+    studio_grant_emails=STUDIO_GRANT_EMAILS,
+)
+
 
 # ---------------------------------------------------------------------------
 # Mount

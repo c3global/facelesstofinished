@@ -71,6 +71,7 @@ VIRAL_STYLE_SUFFIX = (
 # Model strings are pinned per the integration playbook — only change them
 # after re-confirming with integration_playbook_expert_v2.
 PREMIUM_MODEL = "gpt-image-1"
+PREMIUM2_MODEL = "gpt-image-2"
 FAST_MODEL = "gemini-3.1-flash-image-preview"
 
 
@@ -79,7 +80,8 @@ class ThumbnailGenerateRequest(BaseModel):
     """Final image prompt — already rewritten if the user used the helper."""
 
     engine: str = Field(default="premium")
-    """`premium` (OpenAI gpt-image-1) or `fast` (Gemini Nano Banana)."""
+    """`premium` (gpt-image-1, platform key) | `premium2` (gpt-image-2,
+    requires BYOK OpenAI key) | `fast` (Gemini Nano Banana, platform key)."""
 
     aspect: str = Field(default="16_9")
     """`16_9` | `9_16` | `1_1`. Other values default to 16:9."""
@@ -120,6 +122,7 @@ def register_thumbnail_routes(
     emergent_llm_key: str,
     dev_bypass_email: str,
     studio_grant_emails: set,
+    get_byok_key=None,
 ):
     """Mount thumbnail routes on the given /api router.
 
