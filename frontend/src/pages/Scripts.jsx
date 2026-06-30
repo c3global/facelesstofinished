@@ -156,9 +156,17 @@ export default function Scripts() {
     if (mode === MODES.SHORTS) {
       const activePlatformId = output?.platform || platform;
       const p = PLATFORMS.find((x) => x.id === activePlatformId);
-      if (p) root.style.setProperty("--platform-accent", p.accent);
+      if (p) {
+        root.style.setProperty("--platform-accent", p.accent);
+        // v1.14.0 — mirror the platform on data-platform so global CTAs
+        // like .cta-btn.is-platform inherit the correct foreground ink
+        // from the [data-platform="tiktok"] override. Without this, the
+        // "SHOW ME 5 ANGLES" button stays white on the cyan TikTok bg.
+        root.setAttribute("data-platform", activePlatformId);
+      }
     } else {
       root.style.removeProperty("--platform-accent");
+      root.removeAttribute("data-platform");
     }
   }, [mode, platform, output?.platform]);
 

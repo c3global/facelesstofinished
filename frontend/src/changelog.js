@@ -14,9 +14,19 @@
 //    See PRD.md → "Workflow rule: changelog must move with every deploy."
 // 4. Most recent on top. Each entry has version + date + bullet list.
 
-export const APP_VERSION = "1.13.0";
+export const APP_VERSION = "1.14.0";
 
 export const CHANGELOG = [
+  {
+    version: "1.14.0",
+    date: "2026-06-30",
+    changes: [
+      "Fixed Cloudflare 502 error message — when our render server briefly restarts during a deploy you'll now see 'warming back up, give it ~30 seconds' instead of a scary origin-server error",
+      "Studio renders now have a 5-regenerate soft-cap per script so a tweak session can't accidentally burn through your quota — fresh inputs render better than another retry anyway. Owners and Founders are exempt",
+      "Light mode polish — footer 'Have a redemption code?' link is finally legible, pill hover states actually change on hover, TikTok platform card uses dark ink so 'TikTok' is readable on the bright cyan fill",
+      "Caption burn-in pipeline now covered by a regression test suite (7 tests) — future refactors can't silently disable subtitle burn-in",
+    ],
+  },
   {
     version: "1.13.0",
     date: "2026-06-30",

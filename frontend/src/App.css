@@ -2343,6 +2343,10 @@
 /* ---------- Platform-themed CTA + cards (Shorts only) ---------- */
 .cta-btn.is-platform {
   background: linear-gradient(135deg, var(--platform-accent) 0%, color-mix(in srgb, var(--platform-accent) 70%, #000 30%) 100%);
+  /* v1.14.0 — match platform-card.is-selected: dark ink on TikTok cyan,
+     white on Reels/YouTube. Otherwise "SHOW ME 5 ANGLES" disappears on the
+     bright TikTok bg. */
+  color: var(--platform-fg, #fff);
   box-shadow:
     0 1px 0 rgba(255,255,255,0.12) inset,
     0 18px 40px -10px color-mix(in srgb, var(--platform-accent) 55%, transparent),
@@ -2352,14 +2356,32 @@
 /* v1.8.0 — selected platform pill: full brand-color fill + white text.
    The earlier 12%-transparent fill produced near-white-on-white text in
    light mode. Forcing background to the raw accent and locking the inner
-   .length-name to white guarantees contrast in both themes. */
+   .length-name to white guarantees contrast in both themes.
+
+   v1.14.0 — TikTok's brand cyan #25F4EE is too light for white text. We
+   resolve the foreground per platform via `--platform-fg` (defaults to
+   #fff; overridden to near-black for TikTok and any future light accent).
+   This also covers the description text via --platform-fg-soft. */
 .platform-card.is-selected {
   border-color: var(--platform-accent) !important;
   background: var(--platform-accent) !important;
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--platform-accent) 22%, transparent) !important;
 }
-.platform-card.is-selected .length-name { color: #fff !important; }
-.platform-card.is-selected .length-desc { color: rgba(255,255,255,0.86) !important; }
+.platform-card.is-selected .length-name {
+  color: var(--platform-fg, #fff) !important;
+}
+.platform-card.is-selected .length-desc {
+  color: var(--platform-fg-soft, rgba(255,255,255,0.86)) !important;
+}
+/* Per-platform contrast overrides — set wherever the card sets
+   --platform-accent. Bright accents (TikTok cyan) need dark ink. The
+   [data-platform="tiktok"] selector applies whether it's on the card
+   itself OR on the document root (set globally by Scripts.jsx so any
+   .cta-btn.is-platform inherits the correct foreground). */
+[data-platform="tiktok"] {
+  --platform-fg: #0B1A1A;
+  --platform-fg-soft: rgba(11,26,26,0.78);
+}
 
 /* ---------- Shorts bento layout (Option A) ----------
    Phone hero anchored at top center; auxiliary cards flow underneath in a
@@ -5761,14 +5783,21 @@
 
 /* ---- Footer redemption link ------------------------------------------ */
 .footer-link {
-  color: rgba(216,210,234,0.55);
+  /* v1.14.0 — use the design-token muted color so the link tracks light
+     and dark themes properly. The earlier hardcoded lavender disappeared
+     against the pale lavender light-mode background. */
+  color: var(--muted);
   text-decoration: none;
   font-size: 11px;
   letter-spacing: 0.02em;
   margin: 0 12px;
   transition: color 0.15s ease;
 }
-.footer-link:hover { color: #C9956C; }
+.footer-link:hover { color: var(--accent); }
+[data-theme="light"] .footer-link {
+  color: color-mix(in srgb, var(--text) 60%, var(--bg) 40%);
+}
+[data-theme="light"] .footer-link:hover { color: var(--accent); }
 
 /* ---- Login page: pending redeem banner + redeem toggle --------------- */
 .login-pending-redeem {

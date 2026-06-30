@@ -52,8 +52,27 @@ function fmtDate(iso) {
 function friendlyError(e) {
   const status = e?.response?.status;
   const detail = e?.response?.data?.detail;
+  // 402 = quota / paywall — show the backend's message verbatim.
   if (status === 402 && detail?.message) return detail.message;
-  if (typeof detail === "string") return detail;
+  // 502 / 503 / 504 = upstream gateway hiccup (Cloudflare ↔ origin). The
+  // raw "origin web server returned an invalid response" copy is scary
+  // and inaccurate from the user's perspective — they didn't break
+  // anything. Replace with a warm, retry-positive message. Also handle
+  // the case where Cloudflare returned an HTML error page (no JSON body).
+  if (status === 502 || status === 503 || status === 504) {
+    return "Our render server is warming back up (likely from a deploy). Give it ~30 seconds and try again — your prompt is still here.";
+  }
+  // Network-level error (no response at all, e.g. timeout / DNS / CORS).
+  if (e?.code === "ECONNABORTED" || e?.message?.includes("Network Error") || !e?.response) {
+    return "Couldn't reach the render server. Check your connection and try again — your prompt is preserved.";
+  }
+  if (typeof detail === "string") {
+    // FastAPI sometimes leaks Cloudflare HTML through detail; sniff and swap.
+    if (detail.includes("origin web server") || detail.includes("Cloudflare")) {
+      return "Our render server is warming back up. Give it ~30 seconds and try again.";
+    }
+    return detail;
+  }
   if (detail?.message) return detail.message;
   return e?.message || "Something went wrong. Please try again.";
 }

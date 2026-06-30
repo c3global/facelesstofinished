@@ -95,6 +95,18 @@ export default function Studio() {
   const [quotaBump, setQuotaBump] = useState(0);
   const bumpQuota = () => setQuotaBump((n) => n + 1);
 
+  // v1.14.0 — track unlimited tier (owner / founder) so the regen
+  // soft-cap doesn't fire on accounts that pay no marginal cost. Light
+  // fetch on mount + every quota bump.
+  const [isUnlimited, setIsUnlimited] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    apiClient.get("/me/quota")
+      .then((r) => { if (!cancelled) setIsUnlimited(!!r.data?.unlimited); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [quotaBump]);
+
   // Mode-picker landing card — shown on first visit, persisted to localStorage
   // so returning users skip straight to the chip form. A "Change mode" link
   // re-opens the picker any time. Skipped automatically when a script handoff
@@ -454,9 +466,39 @@ export default function Studio() {
 
   // Re-fire the SAME render payload (same script, avatar, voice, scenes).
   // Smoother UX than rebuilding the form when iterating on a render.
+  //
+  // v1.14.0 — Soft-cap regenerations to 5 per source script so a runaway
+  // tweaking session can't burn $50+ in HeyGen / fal.ai bills. The cap is
+  // tracked per (script, mode) tuple in localStorage so it survives
+  // refreshes; admins (drcharitycampbell / Founders) get unlimited.
+  const REGEN_SOFT_CAP = 5;
+  const regenKey = (doc) => `f48_regen:${doc?.mode || "?"}:${(doc?.script || "").slice(0, 80)}`;
+  const readRegens = (doc) => {
+    try { return parseInt(localStorage.getItem(regenKey(doc)) || "0", 10) || 0; }
+    catch { return 0; }
+  };
+  const bumpRegens = (doc) => {
+    try {
+      const n = readRegens(doc) + 1;
+      localStorage.setItem(regenKey(doc), String(n));
+      return n;
+    } catch { return 0; }
+  };
+
   const regenerate = async (sourceDoc) => {
     if (!sourceDoc) return;
     setRenderErr("");
+
+    // Soft-cap check — unlimited tier (owner/founder) bypasses entirely.
+    const unlimited = isUnlimited;
+    const usedSoFar = readRegens(sourceDoc);
+    if (!unlimited && usedSoFar >= REGEN_SOFT_CAP) {
+      setRenderErr(
+        `You've regenerated this render ${REGEN_SOFT_CAP} times already. Try tweaking the script or avatar choice instead — fresh inputs render better than another retry.`,
+      );
+      return;
+    }
+
     // Visual reset so the click registers immediately.
     setRender({
       ...sourceDoc,
@@ -483,7 +525,13 @@ export default function Studio() {
     try {
       const r = await apiClient.post("/studio/render", body);
       setRender(r.data);
-      setToast("Regenerating — scroll up to watch.");
+      const newCount = bumpRegens(sourceDoc);
+      const remaining = unlimited ? null : Math.max(0, REGEN_SOFT_CAP - newCount);
+      setToast(
+        remaining === null
+          ? "Regenerating — scroll up to watch."
+          : `Regenerating — scroll up to watch. (${remaining} regen${remaining === 1 ? "" : "s"} left for this script)`,
+      );
       scrollToRenderCard();
       pollStatus(r.data.id);
       bumpQuota();

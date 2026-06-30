@@ -1,0 +1,30 @@
+{
+  "summary": "Iteration 38 — All 11 bug-fix + carry-over verification items PASS. ESLint on BuyersTab.jsx is clean (0 errors, Send is correctly imported). Caption burn-in pytest suite is 7/7 green. Backend /api/thumbnails/rewrite-prompt and /api/thumbnails/generate return 200 in 8-11s for BOTH drcharitycampbell (admin/unlimited) AND demo@c3global.co (starter tier) — no Cloudflare 502 observed across multiple invocations. Frontend: TikTok platform pill text color resolves to rgb(11,26,26) on rgb(37,244,238) cyan bg in BOTH dark AND light themes. SHOW ME 5 ANGLES CTA flips correctly per platform (rgb(11,26,26) dark on TikTok; rgb(255,255,255) white on Reels & YouTube Shorts). document.documentElement.data-platform is wired and updates to tiktok/reels/youtube on platform selection. Footer .footer-link 'Have a redemption code?' computes to color(srgb 0.447 0.432 0.507) ≈ rgb(114,110,129) on rgb(246,244,251) light-mode body — legible muted purple-gray as spec'd. Length-card hover bg goes white→rgba(15,10,30,0.09) (perceptible 9% overlay). Footer version pill shows v1.14.0. Regen soft-cap is statically verified in Studio.jsx L470-541 with correct isUnlimited bypass (admin /me/quota returned unlimited:true,tier_id:owner). friendlyError helper in Thumbnails.jsx L52-78 correctly maps 502/503/504, network errors, and detail strings containing 'origin web server'/'Cloudflare' to the warm 'render server is warming back up' copy.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_caption_burn_in.py",
+    "/app/test_reports/pytest/iter38_caption_burn_in.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "friendlyError() in /app/frontend/src/pages/Thumbnails.jsx is well-layered: status-based (402 quota, 502/503/504 gateway), then network-level (ECONNABORTED/!response), then detail string sniffing for 'origin web server'/'Cloudflare'. Defensive and copy-friendly. ✓",
+    "Studio.jsx regen soft-cap uses localStorage key f48_regen:<mode>:<script.slice(0,80)>; admin/founder bypass via /me/quota.unlimited. Clean, testable, no server round-trip required. The remaining-count toast ('5 regens left for this script') is a nice UX touch. ✓",
+    "Scripts.jsx L154-171 useEffect mirrors active platform onto document.documentElement[data-platform] so global .cta-btn.is-platform overrides in App.css can target [data-platform='tiktok'] for the dark-ink-on-cyan fix without prop-drilling. Confirmed working across all 3 platforms. ✓",
+    "Caption burn-in test suite (test_caption_burn_in.py) is a contract/wiring lock — it monkey-patches httpx so it doesn't burn fal.ai credits while still validating: function exists + is async, preset map (boxed/tiktok/minimal) intact, soft-fail on missing fal key, soft-fail on missing url, soft-fail on fal.ai outage. Good regression lock. ✓",
+    "Minor: Studio.jsx is now 1622 lines — past the 700-line guideline. A future split into useRegen, useRender, useQuota hooks would improve maintainability, but not blocking for v1.14.0.",
+    "Minor: server.py still emits FastAPI on_event('startup') deprecation warnings — non-blocking, but the lifespan handler migration is overdue."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (7/7 caption tests + 4/4 endpoint curls)", "frontend": "100% (11/11 UI assertions)"},
+  "test_credentials": "drcharitycampbell@gmail.com (DEV_BYPASS admin); demo@c3global.co (starter tier, base entitlement)",
+  "seed_data_creation": "None — used existing DEV_BYPASS accounts.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "v1.14.0 is shipped and clean. All iter38 bugs resolved. To regression-test caption burn-in: `python3 -m pytest backend/tests/test_caption_burn_in.py -v` (~0.6s, no external calls). To regression-test thumbnail endpoints: curl POST /api/thumbnails/rewrite-prompt and /api/thumbnails/generate with any DEV_BYPASS bearer token; both should return 200 in <15s. For the regen soft-cap, set localStorage['f48_regen:avatar:<first-80-chars-of-script>'] = '5' then click the regenerate button on a render card — toast should say 'You've regenerated this render 5 times already…' UNLESS /me/quota returns unlimited:true. For TikTok platform color: navigate /scripts → click Shorts → click TikTok card → verify document.documentElement.getAttribute('data-platform') === 'tiktok' AND .length-name color === rgb(11, 26, 26).",
+  "rca of the issue": "The Cloudflare 502 from iter37 was transient — root cause was the iter37 GHL test suite restarting backend 4× via supervisorctl. With the suite no longer running, both rewrite-prompt and generate endpoints are stable. The committed fix is the friendlyError helper in Thumbnails.jsx which now masks ANY future 502/503/504 or Cloudflare HTML leak with a warm user-facing message, so even if a transient gateway error recurs, users see 'render server is warming back up' instead of the scary raw Cloudflare copy."
+}

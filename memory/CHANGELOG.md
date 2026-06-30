@@ -12,6 +12,38 @@ first. Plain English — if you're a customer reading this, this is for you.
 
 ---
 
+## v1.14.0 — June 30, 2026
+
+- **Cloudflare 502 → warm message.** When the render server is briefly
+  unavailable (deploy, restart), the UI now says "Our render server is
+  warming back up — give it ~30 seconds and try again, your prompt is
+  preserved" instead of the cryptic Cloudflare default. Network errors
+  get a separate "couldn't reach the server" message. Applies to
+  `friendlyError()` in the Thumbnails page (rewriter + generator +
+  concepts).
+- **Render regen soft-cap (5 per script).** Studio's `regenerate()`
+  tracks regen count per `(mode, script)` tuple in localStorage. After 5,
+  further clicks show "Try tweaking the script or avatar choice instead —
+  fresh inputs render better than another retry." Owners (DEV_BYPASS,
+  studio grants) and Founders are exempt.
+- **Light mode polish:**
+  - Footer "Have a redemption code?" link rewired to use the design-token
+    `--muted` color so it tracks themes (was hardcoded lavender,
+    disappeared against the pale-purple light bg).
+  - `--surface-hover` in light theme bumped 5%→9% so card hover states
+    are visible (the previous 5% was identical to resting state).
+  - TikTok platform card (#25F4EE cyan): foreground swapped to near-black
+    via a new `--platform-fg` variable. Reels/YouTube unchanged (already
+    high contrast on white text).
+- **Caption burn-in regression suite** added at
+  `backend/tests/test_caption_burn_in.py` — 7 tests verify
+  `_burn_in_captions` exists, soft-fails cleanly without a fal.ai key /
+  without a video_url / on fal.ai outages, and that the style/position
+  preset maps remain intact. Locks the contract so a future server.py
+  refactor can't silently disable subtitle burn-in.
+
+---
+
 ## v1.13.0 — June 30, 2026
 
 - **GoHighLevel integration** ships. Every new buyer (Pinball webhook) and
