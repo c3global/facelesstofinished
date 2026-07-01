@@ -804,6 +804,22 @@
 
 /* ---------- Script area ---------- */
 .script-block { display: flex; flex-direction: column; gap: 10px; }
+.script-header-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+.script-limit-hint {
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.01em;
+}
+.script-limit-hint b {
+  color: var(--text);
+  font-weight: 600;
+}
 .script-area {
   width: 100%;
   min-height: 180px;
@@ -817,9 +833,26 @@
 }
 .script-area::placeholder { color: var(--muted); opacity: 0.7; }
 .script-meta {
-  display: flex; justify-content: space-between;
-  font-size: 12px; color: var(--muted);
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  font-size: 12px;
+  color: var(--muted);
 }
+/* Live Avatar-mode 5,000-char counter. Three states escalate as the
+   writer approaches HeyGen's cap so the failure is prevented at the
+   textarea, not at the /45%-progress-bar/red-error moment. */
+.script-chars {
+  margin-left: auto;               /* push to the right edge of the row */
+  font-variant-numeric: tabular-nums;
+  transition: color 160ms;
+}
+.script-chars-ok     { color: var(--muted); }
+.script-chars-warn   { color: var(--warning); font-weight: 600; }
+.script-chars-danger { color: #e26060; font-weight: 700; }
+[data-theme="light"] .script-chars-warn   { color: color-mix(in srgb, var(--warning) 78%, #000 22%); }
+[data-theme="light"] .script-chars-danger { color: #c14040; }
 
 /* ---------- Chip row ---------- */
 .chip-row {

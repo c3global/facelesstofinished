@@ -20,6 +20,44 @@ back to it for entitlement verification.
 
 ## 🔁 Workflow rule: Changelog moves with every change (set 2026-06-29 by user)
 
+### Iteration 48 (2026-06-30) — HeyGen 5,000-char guard: friendly error + live counter + mode hint
+
+**User trigger:** Charity's live client demo failed at 45% with the raw HeyGen JSON: `String should have at most 5000 characters`. Both v3 and v2 rejected the same script. HeyGen's API has a hard 5,000-char cap on `input_text` — long-form scripts routinely exceed this.
+
+**Three layers of protection shipped in v1.18.3:**
+
+1. **Client-side pre-flight** in `Studio.jsx` `fireRender()` + `renderBothAspects()`. If Avatar mode AND `script.length > 5000`, we set a friendly error and return BEFORE calling `/api/studio/render`. No progress-bar-to-red-wall experience anymore.
+2. **Backend friendly error mapping** in `friendlyRenderError()`. The old matcher required the word "script" in the raw text, but HeyGen returns `input_text` and `String should have at most 5000 characters` — no "script" anywhere. Loosened the matcher to catch `5000 character`, `at most 5000`, `input_text ... invalid`.
+3. **Live 5,000-char counter** in the `.script-meta` row (Avatar mode only). Three color states escalate as the writer approaches the cap:
+   - `< 80% (< 4,000 chars)` → muted (`script-chars-ok`)
+   - `80-99% (4,000-4,999)` → amber warning (`script-chars-warn`)
+   - `≥ 100% (5,000+)` → red danger (`script-chars-danger`)
+   Hidden in Faceless mode (no cap = counter would be noise).
+
+**Mode-constraint hint permanently visible** next to the "Script" label in BOTH modes: *"Avatar: 5,000 chars (~750 words) · Faceless: any length"*. So even before typing, writers see which mode fits their script length. Rendered via `.script-header-row` + `.script-limit-hint` (new CSS classes).
+
+**Files touched:**
+- `/app/frontend/src/pages/Studio.jsx` — `AVATAR_SCRIPT_MAX_CHARS = 5000` constant, `friendlyRenderError` widened matcher, `fireRender` pre-flight, `renderBothAspects` pre-flight, `.script-header-row` + hint + counter added to the Script block
+- `/app/frontend/src/App.css` — `.script-header-row`, `.script-limit-hint`, `.script-chars`, `.script-chars-ok/warn/danger` (dark + light overrides), `.script-meta` widened to `flex-wrap` with `margin-left:auto` on the counter so it right-aligns
+- `/app/frontend/src/changelog.js` — APP_VERSION bumped to 1.18.3 + entry added
+
+**Verified (screenshot test — 5 states):**
+- Hint: `Avatar: 5,000 chars (~750 words) · Faceless: any length` ✓
+- 3,000 chars → `script-chars-ok` (muted) ✓
+- 4,200 chars → `script-chars-warn` (amber) ✓
+- 5,500 chars → `script-chars-danger` (red) ✓
+- Faceless mode → counter hidden, hint remains ✓
+- Backend friendly mapping: 4/4 unit tests pass on the exact HeyGen error string from Charity's screenshot ✓
+
+**Note on deployment:** This fix is in preview. Production (`faceless48.c3global.co`) still has the old raw-JSON error UX until Charity redeploys. Preview verification confirmed all states render correctly in both dark + light themes.
+
+**Bigger future improvement (deferred):**
+Auto-chunk long scripts into multiple `video_inputs` scene arrays so a 10,000-char script renders as a single continuous Avatar video by splitting into 2× 5,000-char scenes. Bigger build; not blocking launch since the hint + counter give writers clear guidance to shorten OR switch to Faceless.
+
+---
+
+
+
 ### Iteration 47 (2026-06-30) — Audience-neutral roadmap + unified public header
 
 **User feedback that drove this iteration:** Charity called out that

@@ -977,7 +977,21 @@ export default function Studio() {
 
       {/* Script */}
       <div className="script-block">
-        <span className="script-label">Script</span>
+        <div className="script-header-row">
+          <span className="script-label">Script</span>
+          {/* Always-visible mode-limit hint so writers see the constraint
+              BEFORE they hit render. Avatar 5,000-char cap comes from
+              HeyGen's API — Faceless has no cap because Kokoro TTS
+              chunks voiceover per scene. Copy is intentionally short
+              and appears next to the label. */}
+          <span
+            className="script-limit-hint"
+            data-testid="script-limit-hint"
+            aria-label="Script length limits by mode"
+          >
+            Avatar: <b>5,000 chars</b> (~750 words) · Faceless: <b>any length</b>
+          </span>
+        </div>
         <textarea
           className="script-area"
           data-testid="script-textarea"
@@ -991,6 +1005,34 @@ export default function Studio() {
         <div className="script-meta">
           <span data-testid="script-word-count">{script.trim() ? script.trim().split(/\s+/).length : 0} words</span>
           <span>~{Math.max(15, Math.round(script.split(/\s+/).filter(Boolean).length / 2.5))}s read time</span>
+          {/* Live character counter — only rendered in Avatar mode because
+              that's the mode with the 5,000-char cap. Faceless is unlimited,
+              so a counter would be noise there. Color states:
+                <80%  → muted (default)
+                80-99% → amber warning (approaching cap)
+                ≥100% → red danger (render will be blocked by pre-flight) */}
+          {mode === MODES.AVATAR && (() => {
+            const len = script.length;
+            const pct = len / AVATAR_SCRIPT_MAX_CHARS;
+            const cls = pct >= 1 ? "script-chars-danger"
+                     : pct >= 0.8 ? "script-chars-warn"
+                     : "script-chars-ok";
+            return (
+              <span
+                className={`script-chars ${cls}`}
+                data-testid="script-char-count"
+                title={
+                  pct >= 1
+                    ? "Over the Avatar 5,000-char limit. Shorten or switch to Faceless."
+                    : pct >= 0.8
+                    ? "Approaching the Avatar 5,000-char limit."
+                    : "Well within the Avatar 5,000-char limit."
+                }
+              >
+                {len.toLocaleString()} / {AVATAR_SCRIPT_MAX_CHARS.toLocaleString()} chars
+              </span>
+            );
+          })()}
         </div>
       </div>
 

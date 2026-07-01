@@ -22,7 +22,9 @@ export const CHANGELOG = [
     date: "2026-06-30",
     changes: [
       "Fixed: Avatar renders with long scripts were failing at 45% with a wall of raw HeyGen error JSON. HeyGen's API caps script text at 5,000 characters (about 750 words) — we now catch this BEFORE submitting so you see a clean, friendly hint instead",
-      "The hint now points you to Faceless mode when Avatar is too short for your content — Faceless has no character limit because its voiceover is chunked scene-by-scene",
+      "New: live character counter next to the script textarea in Studio shows exactly how close you are to the 5,000-char cap (muted → amber near limit → red over)",
+      "New: always-visible mode-limit hint next to the 'Script' label — Avatar: 5,000 chars (~750 words) · Faceless: any length",
+      "The friendly-error text and the hint both recommend switching to Faceless mode when Avatar is too short for your content — Faceless has no character limit because its voiceover is chunked scene-by-scene",
       "Both single-aspect and both-aspects renders share the same guard, so long scripts can't break either path",
     ],
   },
