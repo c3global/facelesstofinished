@@ -16,6 +16,17 @@ import Toast from "../components/Toast";
 import StudioQuotaPill from "../components/StudioQuotaPill";
 
 const MODES = { AVATAR: "avatar", FACELESS: "faceless" };
+// HeyGen's API caps script text at exactly 5,000 characters on BOTH v3
+// (/v3/videos → `script`) and v2 (/v2/video/generate → video_inputs[0].
+// voice.input_text). Longer scripts get rejected with a 400
+// `invalid_parameter` before the render can start — which then burns
+// the customer's UX (45% progress bar → red error wall). Enforce the
+// cap client-side BEFORE calling /api/studio/render so long-form
+// scripts hit a friendly inline hint and never make the round-trip.
+// Faceless mode has no such limit (voiceover is chunked scene-by-scene
+// via Kokoro TTS), so we tell the user to switch modes if they need
+// the full script.
+const AVATAR_SCRIPT_MAX_CHARS = 5000;
 const MAX_SCENES = 12;
 const SOURCE_HINT = {
   ai:       "An AI-generated visual will be created from your prompt.",
@@ -47,8 +58,20 @@ function friendlyRenderError(e) {
   }
   const raw = (typeof detail === "string" ? detail : detail?.message) || e?.message || "";
   const lower = raw.toLowerCase();
-  if (lower.includes("script") && (lower.includes("too long") || lower.includes("character") || lower.includes("length") || lower.includes("limit"))) {
-    return "Your script is too long for an avatar video — try shortening it or splitting it into two parts.";
+  // Match the HeyGen 5,000-char-cap error family. HeyGen v3 sends
+  //   `String should have at most 5000 characters` on `param: input_text`
+  // HeyGen v2 sends
+  //   `video_inputs.0.voice.text.input_text is invalid: String should have at most 5000 characters`
+  // Neither string contains the word "script", so the old matcher missed
+  // both. Loosened to catch "5000 characters" / "input_text" / "at most"
+  // regardless of surrounding text.
+  const scriptTooLong = (
+    (lower.includes("5000 character") || lower.includes("at most 5000")) ||
+    (lower.includes("input_text") && lower.includes("invalid")) ||
+    (lower.includes("script") && (lower.includes("too long") || lower.includes("length") || lower.includes("limit")))
+  );
+  if (scriptTooLong) {
+    return "Your script is too long for Avatar mode (5,000 character limit). Shorten it, split into two shorter parts, or switch to Faceless mode — Faceless has no character limit.";
   }
   if (lower.includes("configuration is too large")) {
     return "Render configuration is too large. Please contact support.";
@@ -421,6 +444,21 @@ export default function Studio() {
   // pathological payloads; everything else fires the real pipeline.
   const fireRender = async (body) => {
     setRenderErr("");
+    // Client-side pre-flight for HeyGen's 5,000-char cap on Avatar mode.
+    // Rejecting here means the user sees the friendly hint immediately
+    // without the "45% failed" progress-bar experience Charity hit in
+    // the client demo. Faceless mode is exempt — its voiceover is chunked
+    // by Kokoro TTS per scene, so long scripts are fine there.
+    if (
+      body.mode === MODES.AVATAR &&
+      typeof body.script === "string" &&
+      body.script.length > AVATAR_SCRIPT_MAX_CHARS
+    ) {
+      setRenderErr(
+        `Your script is ${body.script.length.toLocaleString()} characters, but Avatar mode maxes out at ${AVATAR_SCRIPT_MAX_CHARS.toLocaleString()} (about 750 words). Shorten it, split into two shorter parts, or switch to Faceless mode — Faceless has no character limit.`
+      );
+      return;
+    }
     try {
       const r = await apiClient.post("/studio/render", body);
       setRender(r.data);
@@ -440,8 +478,22 @@ export default function Studio() {
   // grid above the History list will show both progress bars side by side.
   const renderBothAspects = async () => {
     setRenderErr("");
+    const bothPayload = buildPayload();
+    // Same 5,000-char pre-flight as fireRender — both-aspects fires TWO
+    // HeyGen jobs, so a too-long script would blow up both progress bars
+    // at 45% instead of one. Guard here saves the double failure.
+    if (
+      bothPayload.mode === MODES.AVATAR &&
+      typeof bothPayload.script === "string" &&
+      bothPayload.script.length > AVATAR_SCRIPT_MAX_CHARS
+    ) {
+      setRenderErr(
+        `Your script is ${bothPayload.script.length.toLocaleString()} characters, but Avatar mode maxes out at ${AVATAR_SCRIPT_MAX_CHARS.toLocaleString()} (about 750 words). Shorten it, split into two shorter parts, or switch to Faceless mode — Faceless has no character limit.`
+      );
+      return;
+    }
     try {
-      const r = await apiClient.post("/studio/render/both-aspects", buildPayload());
+      const r = await apiClient.post("/studio/render/both-aspects", bothPayload);
       const jobs = r.data?.jobs || [];
       if (jobs.length === 0) throw new Error("Empty response");
       // Set the freshly-submitted 9:16 as the focused render (first in the

@@ -12,6 +12,26 @@ first. Plain English — if you're a customer reading this, this is for you.
 
 ---
 
+## v1.18.3 — June 30, 2026 (HeyGen 5,000-char limit friendly error)
+
+- **Fixed:** Avatar Mode renders were failing at 45% with a wall of raw
+  HeyGen JSON (`{"error":{"code":"invalid_parameter","message":"String
+  should have at most 5000 characters"...}}`). Root cause: HeyGen's
+  API caps script text at exactly 5,000 characters on both v3 and v2.
+  Long-form scripts routinely exceed this.
+- Two guards added:
+  1. **Client-side pre-flight:** Studio now rejects too-long scripts
+     BEFORE hitting the backend, so you get an immediate friendly hint
+     ("Your script is 8,214 characters, but Avatar mode maxes out at
+     5,000") instead of waiting 30 seconds to see a red error at 45%.
+  2. **Backend friendly mapping:** if a job somehow still hits HeyGen
+     with a too-long script, the failed-render card now translates the
+     raw HeyGen JSON into plain English.
+- Both messages recommend switching to Faceless mode, which has no
+  character limit (voiceover is chunked scene-by-scene by Kokoro TTS).
+
+---
+
 ## v1.18.2 — June 30, 2026 (Audience-neutral roadmap + cleaner header)
 
 - The public nav (Roadmap · Changelog · Sign in) now sits on the same

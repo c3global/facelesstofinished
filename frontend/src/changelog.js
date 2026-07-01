@@ -14,9 +14,18 @@
 //    See PRD.md → "Workflow rule: changelog must move with every deploy."
 // 4. Most recent on top. Each entry has version + date + bullet list.
 
-export const APP_VERSION = "1.18.2";
+export const APP_VERSION = "1.18.3";
 
 export const CHANGELOG = [
+  {
+    version: "1.18.3",
+    date: "2026-06-30",
+    changes: [
+      "Fixed: Avatar renders with long scripts were failing at 45% with a wall of raw HeyGen error JSON. HeyGen's API caps script text at 5,000 characters (about 750 words) — we now catch this BEFORE submitting so you see a clean, friendly hint instead",
+      "The hint now points you to Faceless mode when Avatar is too short for your content — Faceless has no character limit because its voiceover is chunked scene-by-scene",
+      "Both single-aspect and both-aspects renders share the same guard, so long scripts can't break either path",
+    ],
+  },
   {
     version: "1.18.2",
     date: "2026-06-30",
