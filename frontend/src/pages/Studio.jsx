@@ -29,7 +29,7 @@ const MODES = { AVATAR: "avatar", FACELESS: "faceless" };
 const AVATAR_SCRIPT_MAX_CHARS = 5000;
 const MAX_SCENES = 12;
 const SOURCE_HINT = {
-  ai:       "An AI-generated visual will be created from your prompt.",
+  ai:       "AI still image generated via Gemini Nano Banana — professional photorealistic quality.",
   pexels:   "We'll search the Pexels stock library.",
   pixabay:  "We'll search the Pixabay stock library.",
   uploaded: "We'll use the media file you uploaded for this scene.",
@@ -81,7 +81,7 @@ function friendlyRenderError(e) {
 }
 
 const SOURCE_PILL_OPTS = [
-  { id: "ai", label: "AI" },
+  { id: "ai", label: "AI Still" },
   { id: "pexels", label: "Pexels" },
   { id: "pixabay", label: "Pixabay" },
   { id: "uploaded", label: "Yours" },

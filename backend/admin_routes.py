@@ -271,6 +271,18 @@ class BuyerImportRequest(BaseModel):
     buyers: list[BuyerImportRow] = Field(default_factory=list)
 
 
+
+# Sora 2 test endpoint payload (v1.18.4). Module-level so FastAPI +
+# Pydantic v2 can build a proper TypeAdapter — nested inside the
+# register function it becomes a ForwardRef and FastAPI can't resolve
+# it as a request body.
+class Sora2TestRequest(BaseModel):
+    prompt: str = Field(..., min_length=8, max_length=1000)
+    aspect: str = Field("9_16", description="9_16 (vertical) or 16_9 (horizontal) or 1_1 (square)")
+    duration: int = Field(4, description="4, 8, or 12 seconds")
+    model: str = Field("sora-2", description="sora-2 (fast) or sora-2-pro (higher quality)")
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -1958,6 +1970,126 @@ def register_admin_routes(
                 "test_email": email,
                 "test_event": event,
             }
+
+    # -----------------------------------------------------------------
+    # Sora 2 video generation — ADMIN TEST ONLY (v1.18.4)
+    # -----------------------------------------------------------------
+    # Charity called out that fal.ai/Flux quality wasn't hitting the
+    # professional bar for her audience. Sora 2 is available via the
+    # Emergent Universal LLM Key, meaning generation cost comes off her
+    # key balance instead of fal.ai's per-call bill. This endpoint fires
+    # ONE Sora 2 render from a text prompt and returns a fal.ai storage
+    # URL Charity can play back to evaluate quality. STRICTLY ADMIN GATED
+    # — no customer-facing wiring until she decides whether Sora 2 is good
+    # enough to become the "Cinematic Faceless" engine (Move 3b in her
+    # decision tree) or whether we park motion behind BYOK (Move 3a).
+    #
+    # Cost note: Sora 2 debits from EMERGENT_LLM_KEY balance. Standard
+    # `sora-2` model is much cheaper than `sora-2-pro`. Duration options:
+    # 4, 8, 12 seconds. Larger sizes + `sora-2-pro` = more $ per test.
+
+    @api.post("/admin/studio/test-sora2")
+    async def admin_test_sora2(
+        payload: Sora2TestRequest = Body(...),
+        admin=Depends(require_admin),
+    ):
+        # Map aspect → Sora 2's supported size grid (playbook constraint).
+        size_map = {
+            "9_16": "1024x1792",   # vertical
+            "16_9": "1792x1024",   # widescreen
+            "1_1":  "1024x1024",   # square
+        }
+        size = size_map.get(payload.aspect)
+        if not size:
+            raise HTTPException(status_code=400, detail="aspect must be 9_16, 16_9, or 1_1")
+        if payload.duration not in (4, 8, 12):
+            raise HTTPException(status_code=400, detail="duration must be 4, 8, or 12")
+        if payload.model not in ("sora-2", "sora-2-pro"):
+            raise HTTPException(status_code=400, detail="model must be sora-2 or sora-2-pro")
+
+        emergent_key = os.environ.get("EMERGENT_LLM_KEY")
+        if not emergent_key:
+            raise HTTPException(status_code=503, detail="EMERGENT_LLM_KEY not set — cannot test Sora 2")
+
+        import asyncio  # noqa: PLC0415
+        import tempfile  # noqa: PLC0415
+        import time  # noqa: PLC0415
+        # Delayed import so a missing playbook lib doesn't crash admin_routes
+        # at boot — this endpoint is admin-only + optional.
+        try:
+            from emergentintegrations.llm.openai.video_generation import OpenAIVideoGeneration  # noqa: PLC0415
+        except ImportError as exc:
+            raise HTTPException(status_code=503, detail=f"Sora 2 SDK unavailable: {exc}")
+
+        # Wall-clock timer so Charity sees "45s to render" alongside the
+        # video URL — informs her cost-vs-time decision on Move 3a/3b.
+        t0 = time.time()
+
+        def _gen_sync() -> bytes:
+            # OpenAIVideoGeneration is a sync SDK — run in an executor.
+            video_gen = OpenAIVideoGeneration(api_key=emergent_key)
+            return video_gen.text_to_video(
+                prompt=payload.prompt,
+                model=payload.model,
+                size=size,
+                duration=payload.duration,
+                max_wait_time=900,   # 15 min upper bound for pro/12s combos
+            )
+
+        try:
+            loop = asyncio.get_event_loop()
+            video_bytes = await loop.run_in_executor(None, _gen_sync)
+        except Exception as exc:
+            elapsed = time.time() - t0
+            await log_activity(
+                "sora2_test_failed", admin.email,
+                {"prompt": payload.prompt[:120], "aspect": payload.aspect,
+                 "duration": payload.duration, "model": payload.model,
+                 "elapsed_s": round(elapsed, 1),
+                 "error": f"{type(exc).__name__}: {exc}"},
+            )
+            raise HTTPException(status_code=502, detail=f"Sora 2 gen failed: {type(exc).__name__}: {exc}")
+
+        if not video_bytes:
+            raise HTTPException(status_code=502, detail="Sora 2 returned empty video")
+
+        # Save + upload to fal.ai storage so Charity gets a shareable URL
+        # (same pattern as scene stills). We reuse fal storage rather than
+        # GridFS so playback is instant on the frontend.
+        elapsed = round(time.time() - t0, 1)
+        tmpdir = tempfile.mkdtemp(prefix="sora2_")
+        dst = os.path.join(tmpdir, f"sora2-{uuid.uuid4().hex[:8]}.mp4")
+        try:
+            with open(dst, "wb") as f:
+                f.write(video_bytes)
+            # Delayed import — fal_client is in server.py, we grab from module
+            import fal_client  # noqa: PLC0415
+            fal_url = await loop.run_in_executor(None, fal_client.upload_file, dst)
+        finally:
+            try:
+                if os.path.exists(dst):
+                    os.remove(dst)
+                os.rmdir(tmpdir)
+            except Exception:
+                pass
+
+        result = {
+            "ok": True,
+            "url": fal_url,
+            "prompt": payload.prompt,
+            "aspect": payload.aspect,
+            "size": size,
+            "duration": payload.duration,
+            "model": payload.model,
+            "bytes": len(video_bytes),
+            "elapsed_s": elapsed,
+            "note": "This test debits your Emergent Universal Key balance, not fal.ai.",
+        }
+        await log_activity(
+            "sora2_test", admin.email,
+            {**result, "url": (fal_url or "")[:80]},   # avoid huge activity docs
+        )
+        return result
 
     return {"process_pinball_event": _process_pinball_event,
             "process_appsumo_event": _process_appsumo_event}

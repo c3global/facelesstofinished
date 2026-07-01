@@ -1077,6 +1077,162 @@ async def _trim_stock_video(video_url: str, aspect: str, duration_ms: int, scene
 
 
 # ---------------------------------------------------------------------------
+# Scene still-image generation — Nano Banana primary, Flux fallback.
+# ---------------------------------------------------------------------------
+# Iter 49 (2026-07-01): Charity reported $100+ in fal.ai testing burn with
+# unsatisfactory Flux 1.1 Pro output quality for her professional audience
+# (consultants, coaches, executives). Replaced Flux as the DEFAULT scene
+# still engine with Gemini Nano Banana via the Emergent Universal LLM Key.
+# Advantages:
+#   - Higher photorealistic quality for professional aesthetic (already
+#     proven on the Fast thumbnail engine)
+#   - Cost comes off Universal Key balance (not fal.ai per-call bill)
+#   - Same content-hash cache pattern as before, new "nb:" prefix so we
+#     don't accidentally reuse old Flux outputs
+#   - Silent Flux fallback preserved for reliability — if Nano Banana
+#     returns nothing (rare rate-limit / quota), we don't fail the render
+# ---------------------------------------------------------------------------
+async def _generate_scene_image(
+    *,
+    prompt: str,
+    aspect: str,
+    scene_idx: int = 0,
+    fal_headers: dict | None = None,
+) -> str | None:
+    """Generate a photorealistic still image for one Faceless scene.
+
+    Returns a fal.ai storage URL that downstream ffmpeg-compose can consume.
+    Nano Banana primary → uploads base64 PNG to fal.ai storage → returns URL.
+    Falls back to Flux 1.1 Pro if Nano Banana yields nothing.
+
+    Content-hash cache: identical (prompt, aspect) requests return the
+    previously-generated URL instantly. Cache prefix `nb:` for the new
+    Nano Banana engine; old `flux:` entries stay put but aren't served
+    by this function.
+    """
+    import hashlib  # noqa: PLC0415
+    import base64 as _b64  # noqa: PLC0415
+
+    aspect_tag = "p" if aspect == "9_16" else "l"
+    cache_key = "nb:" + hashlib.sha256(f"{aspect_tag}|{prompt}".encode("utf-8")).hexdigest()[:32]
+    cached = await db.flux_cache.find_one({"_id": cache_key})
+    if cached and cached.get("url"):
+        return cached["url"]
+
+    # ---------- Attempt 1: Nano Banana via Emergent Universal Key ----------
+    nb_prompt = (
+        f"{prompt}. "
+        f"Aspect ratio: {'9:16 vertical portrait' if aspect == '9_16' else '16:9 horizontal landscape'}. "
+        f"Cinematic photograph, 8k, sharp focus, professional lighting, "
+        f"photorealistic, ultra detailed. No visible text or signage — "
+        f"if any text appears it must be clear, legible, perfectly spelled English only."
+    )
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage  # noqa: PLC0415
+
+        emergent_key = os.environ.get("EMERGENT_LLM_KEY")
+        if not emergent_key:
+            raise RuntimeError("EMERGENT_LLM_KEY not set")
+
+        # New chat instance per scene (playbook requirement).
+        chat = (
+            LlmChat(
+                api_key=emergent_key,
+                session_id=f"nb-scene-{scene_idx}-{cache_key[3:15]}",
+                system_message="You are a professional cinematic photographer.",
+            )
+            .with_model("gemini", "gemini-3.1-flash-image-preview")
+            .with_params(modalities=["image", "text"])
+        )
+        _, images = await chat.send_message_multimodal_response(
+            UserMessage(text=nb_prompt),
+        )
+        if images:
+            # Playbook: images[0]["data"] is base64-encoded PNG.
+            png_bytes = _b64.b64decode(images[0]["data"])
+            tmpdir = tempfile.mkdtemp(prefix="nb_")
+            dst = os.path.join(tmpdir, "scene.png")
+            try:
+                with open(dst, "wb") as f:
+                    f.write(png_bytes)
+                loop = asyncio.get_event_loop()
+                url = await loop.run_in_executor(None, fal_client.upload_file, dst)
+                if url:
+                    await db.flux_cache.update_one(
+                        {"_id": cache_key},
+                        {"$set": {
+                            "url": url,
+                            "prompt": prompt,
+                            "aspect": aspect,
+                            "engine": "nano-banana",
+                            "cached_at": datetime.now(timezone.utc).isoformat(),
+                        }},
+                        upsert=True,
+                    )
+                    logger.info(f"[nano-banana] scene={scene_idx} generated + cached ok")
+                    return url
+            finally:
+                try:
+                    if os.path.exists(dst):
+                        os.remove(dst)
+                    os.rmdir(tmpdir)
+                except Exception:
+                    pass
+        # else: fall through to Flux fallback
+        logger.warning(f"[nano-banana] scene={scene_idx} returned no images — falling back to Flux")
+    except Exception as exc:
+        # Rate limit, quota, network — any Nano Banana failure falls back to
+        # Flux so the render doesn't crash mid-pipeline. Logged so Charity
+        # can see when the primary engine is misbehaving.
+        logger.warning(f"[nano-banana] scene={scene_idx} exception: {type(exc).__name__}: {exc} — falling back to Flux")
+
+    # ---------- Attempt 2: Flux fallback (legacy path) ----------
+    if fal_headers is None:
+        # Callers that don't pass fal_headers can't use the Flux fallback.
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=120) as client:
+            ir = await client.post(
+                "https://fal.run/fal-ai/flux-pro/v1.1",
+                headers=fal_headers,
+                json={
+                    "prompt": (
+                        f"{prompt}. Cinematic photograph, 8k, sharp focus, "
+                        f"professional lighting, photorealistic, ultra detailed. "
+                        f"No visible text or signage — if any text appears it "
+                        f"must be clear, legible, perfectly spelled English only."
+                    ),
+                    "image_size": "portrait_16_9" if aspect == "9_16" else "landscape_16_9",
+                    "num_inference_steps": 32,
+                    "guidance_scale": 4.0,
+                    "output_format": "png",
+                },
+            )
+            if ir.status_code != 200:
+                return None
+            data = ir.json()
+            url = (data.get("images") or [{}])[0].get("url")
+            if url:
+                await db.flux_cache.update_one(
+                    {"_id": cache_key},
+                    {"$set": {
+                        "url": url,
+                        "prompt": prompt,
+                        "aspect": aspect,
+                        "engine": "flux-fallback",
+                        "cached_at": datetime.now(timezone.utc).isoformat(),
+                    }},
+                    upsert=True,
+                )
+                logger.info(f"[flux-fallback] scene={scene_idx} used as backup — check Nano Banana health")
+            return url
+    except Exception as exc:
+        logger.warning(f"[flux-fallback] scene={scene_idx} exception: {type(exc).__name__}: {exc}")
+        return None
+
+
+
+# ---------------------------------------------------------------------------
 # Stock-search query refinement.
 # Cinematic prompts (full sentences like "Wide overhead shot of hands chopping
 # vegetables on a wooden board, soft kitchen daylight, slow camera drift right")
@@ -2350,61 +2506,18 @@ async def _run_render_faceless(job: dict):
         image_urls: list = [None] * len(scenes)
 
         async def gen_image(idx: int, prompt: str):
-            # Content-hash cache: identical (prompt, aspect) renders return
-            # the previously-generated Flux URL instantly. Re-renders with
-            # the same script/aspect become near-instant — Flux dominates
-            # the visuals phase, so this saves 20-60s on regen flows.
-            import hashlib  # noqa: PLC0415
-            aspect_tag = "p" if job["aspect"] == "9_16" else "l"
-            cache_key = "flux:" + hashlib.sha256(
-                f"{aspect_tag}|{prompt}".encode("utf-8")
-            ).hexdigest()[:32]
-            cached = await db.flux_cache.find_one({"_id": cache_key})
-            if cached and cached.get("url"):
-                return cached["url"]
-            ir = await client.post(
-                "https://fal.run/fal-ai/flux-pro/v1.1",
-                headers=fal_headers,
-                json={
-                    # Hardened prompt: anchors the cinematic style + forbids
-                    # the failure modes Charity flagged on 2026-02-23 — non-
-                    # English garbled signage, blurry/AI-generated giveaways.
-                    # `enable_safety_checker` stays default. `output_format`
-                    # PNG ensures we get crisp downstream feed-into-Kling.
-                    "prompt": (
-                        f"{prompt}. Cinematic photograph, 8k, sharp focus, "
-                        f"professional lighting, photorealistic, ultra detailed. "
-                        f"No visible text or signage — if any text appears it "
-                        f"must be clear, legible, perfectly spelled English only."
-                    ),
-                    "image_size": "portrait_16_9" if job["aspect"] == "9_16" else "landscape_16_9",
-                    "num_inference_steps": 32,         # vs default 28 — sharper outputs
-                    "guidance_scale": 4.0,             # tighter prompt adherence
-                    "output_format": "png",
-                },
+            # v1.18.4: delegates to _generate_scene_image which uses Nano
+            # Banana (via Emergent Universal Key) with a silent Flux 1.1
+            # Pro fallback. Content-hash cache and fal.ai storage upload
+            # happen inside the helper. Old cache prefix was `flux:`; the
+            # helper uses `nb:` so we don't accidentally serve old Flux
+            # outputs when the user regenerates a Faceless render.
+            return await _generate_scene_image(
+                prompt=prompt,
+                aspect=job["aspect"],
+                scene_idx=idx,
+                fal_headers=fal_headers,
             )
-            if ir.status_code != 200:
-                return None
-            data = ir.json()
-            url = (data.get("images") or [{}])[0].get("url")
-            if url:
-                # Write-through cache. fal.ai image URLs are signed with a
-                # 7-day TTL — record `expires_at` so a future sweep can
-                # purge stale entries. For now, every cache hit on a
-                # purged URL falls back gracefully (compose just 404s on
-                # that scene; downstream stitcher already handles missing
-                # frames).
-                await db.flux_cache.update_one(
-                    {"_id": cache_key},
-                    {"$set": {
-                        "url": url,
-                        "prompt": prompt,
-                        "aspect": job["aspect"],
-                        "cached_at": datetime.now(timezone.utc).isoformat(),
-                    }},
-                    upsert=True,
-                )
-            return url
 
         # Resolve URLs per scene.
         #   - AI scenes  → Flux 1.1 Pro (still image; we ken-burns it later)
@@ -2800,7 +2913,7 @@ async def studio_render(payload: RenderRequest, user: AuthUser = Depends(current
     # and dev_bypass admins are passed through unconditionally. Returns the
     # snapshot of the buyer doc post-decrement so we can pass it to the
     # background runner (used to refund the slot if the render fails).
-    quota_snapshot = await _quota_gate_or_402(
+    _quota_snapshot = await _quota_gate_or_402(
         email=user.email,
         mode=payload.mode,
         estimated_cents=estimated_cents,
@@ -3451,53 +3564,20 @@ async def studio_ai_previews(payload: AIPreviewsRequest, user: AuthUser = Depend
     if not FAL_API_KEY:
         raise HTTPException(status_code=503, detail="Image generation unavailable")
     fal_headers = {"Authorization": f"Key {FAL_API_KEY}"}
-    aspect_tag = "p" if payload.aspect == "9_16" else "l"
 
     async def gen_one(idx: int, prompt: str) -> dict:
-        # Same cache key shape as the render pipeline so previews = real frames.
-        import hashlib  # noqa: PLC0415
-        cache_key = "flux:" + hashlib.sha256(
-            f"{aspect_tag}|{prompt}".encode("utf-8")
-        ).hexdigest()[:32]
-        cached = await db.flux_cache.find_one({"_id": cache_key})
-        if cached and cached.get("url"):
-            return {"idx": idx, "prompt": prompt, "image_url": cached["url"], "cached": True}
-        try:
-            async with httpx.AsyncClient(timeout=120) as client:
-                ir = await client.post(
-                    "https://fal.run/fal-ai/flux-pro/v1.1",
-                    headers=fal_headers,
-                    json={
-                        "prompt": (
-                            f"{prompt}. Cinematic photograph, 8k, sharp focus, "
-                            f"professional lighting, photorealistic, ultra detailed. "
-                            f"No visible text or signage — if any text appears it "
-                            f"must be clear, legible, perfectly spelled English only."
-                        ),
-                        "image_size": "portrait_16_9" if payload.aspect == "9_16" else "landscape_16_9",
-                        "num_inference_steps": 32,
-                        "guidance_scale": 4.0,
-                        "output_format": "png",
-                    },
-                )
-                if ir.status_code != 200:
-                    return {"idx": idx, "prompt": prompt, "image_url": None, "error": f"flux {ir.status_code}"}
-                url = (ir.json().get("images") or [{}])[0].get("url")
-                if url:
-                    await db.flux_cache.update_one(
-                        {"_id": cache_key},
-                        {"$set": {
-                            "url": url,
-                            "prompt": prompt,
-                            "aspect": payload.aspect,
-                            "cached_at": datetime.now(timezone.utc).isoformat(),
-                        }},
-                        upsert=True,
-                    )
-                return {"idx": idx, "prompt": prompt, "image_url": url, "cached": False}
-        except Exception as exc:
-            logger.warning(f"[ai-previews] {idx}/{prompt[:30]}: {type(exc).__name__}: {exc}")
-            return {"idx": idx, "prompt": prompt, "image_url": None, "error": str(exc)}
+        # v1.18.4: delegates to _generate_scene_image (Nano Banana primary,
+        # Flux fallback). Preview endpoint now matches the render pipeline
+        # exactly so "Preview scenes" and "Render" produce identical stills.
+        url = await _generate_scene_image(
+            prompt=prompt,
+            aspect=payload.aspect,
+            scene_idx=idx,
+            fal_headers=fal_headers,
+        )
+        if url:
+            return {"idx": idx, "prompt": prompt, "image_url": url, "cached": False}
+        return {"idx": idx, "prompt": prompt, "image_url": None, "error": "gen failed"}
 
     results = await asyncio.gather(*[gen_one(i, p) for i, p in enumerate(payload.prompts)])
     results.sort(key=lambda r: r["idx"])

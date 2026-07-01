@@ -20,6 +20,63 @@ back to it for entitlement verification.
 
 ## 🔁 Workflow rule: Changelog moves with every change (set 2026-06-29 by user)
 
+### Iteration 49 (2026-07-01) — Nano Banana for scene stills + Sora 2 test lane (v1.18.4)
+
+**Trigger:** Charity's live-demo Faceless render stuck at 55% (fal.ai out of credits) plus $100+ in June testing burn with unsatisfactory Flux 1.1 Pro quality for professional/consultant/coaching aesthetic. Full strategic conversation captured earlier in the log. Decision: replace Flux with Nano Banana as default, keep Flux as silent fallback, add Sora 2 test lane on admin.
+
+**Three moves shipped in one push:**
+
+**MOVE 1 — Nano Banana for scene stills (default engine swap).**
+- NEW `_generate_scene_image(prompt, aspect, scene_idx, fal_headers)` helper in `server.py` (~140 lines, sits just before the AI text-to-video engines block).
+- Uses `emergentintegrations.llm.chat.LlmChat` with `gemini-3.1-flash-image-preview` and `modalities=["image","text"]`.
+- Base64 PNG → tmp file → `fal_client.upload_file` → returns fal.ai storage URL (so downstream ffmpeg-compose consumes it identically to the old Flux path).
+- Content-hash cache with new `nb:` prefix — doesn't pollute the old `flux:` cache entries. Cache hit path returns in <100ms.
+- Silent Flux fallback preserved for reliability. Logs `[flux-fallback] scene=N used as backup` when it fires so Charity can see Nano Banana health via logs.
+- Both call sites in `server.py` refactored to delegate to the helper: `_run_render_faceless.gen_image` (line 2352 area) and `/api/studio/ai-previews.gen_one` (line 3560 area). Preview endpoint no longer maintains its own local hash cache — always shared with the render pipeline.
+
+**MOVE 2 — Frontend copy reframe.**
+- `SOURCE_HINT.ai` tooltip: *"AI still image generated via Gemini Nano Banana — professional photorealistic quality."*
+- `SOURCE_PILL_OPTS.ai.label`: `"AI"` → `"AI Still"` (sets expectation that this is a photograph, not motion video).
+- Roadmap Faceless mode blurb rewritten via `_default_items` reseed: *"Slideshow-style videos with AI voiceover, stock B-roll from Pexels and Pixabay, and AI-generated stills via Gemini Nano Banana for scenes where stock doesn't fit."*
+
+**MOVE 3 — Admin-only Sora 2 test endpoint.**
+- `POST /api/admin/studio/test-sora2` — gated by `require_admin`, uses `emergentintegrations.llm.openai.video_generation.OpenAIVideoGeneration` with universal key.
+- Accepts `{prompt, aspect (9_16/16_9/1_1), duration (4/8/12), model (sora-2 or sora-2-pro)}`.
+- Maps aspect → Sora's supported size grid: `9_16→1024x1792`, `16_9→1792x1024`, `1_1→1024x1024`.
+- Runs the sync SDK in an executor, saves MP4 to tmp, uploads to fal.ai storage, returns URL + elapsed time + byte size + explicit note that cost debited from Universal Key balance not fal.ai.
+- Failure paths logged to `db.activity` as `sora2_test_failed` so Charity can debug via admin UI later.
+- Delayed SDK import so a missing playbook lib doesn't crash admin_routes.py at boot.
+
+**Gotcha resolved during build:** The `Sora2TestRequest` Pydantic class was initially defined inside `register_admin_routes`. FastAPI + Pydantic v2 couldn't build a proper `TypeAdapter` for a nested class — it became a `ForwardRef` and FastAPI treated the body as query params. Hoisted the class to module level; endpoint validators (400 on bad aspect/duration/model, 422 on prompt<8 chars) all fire correctly now.
+
+**Files touched:**
+- `/app/backend/server.py` — new helper (~150 lines), both Flux call sites refactored, unused `quota_snapshot` renamed to `_quota_snapshot` (silences pre-existing ruff F841)
+- `/app/backend/admin_routes.py` — Sora 2 endpoint + `Sora2TestRequest` at module level (~110 lines total)
+- `/app/backend/roadmap_routes.py` — Faceless blurb rewrite in `_default_items`
+- `/app/frontend/src/pages/Studio.jsx` — `SOURCE_HINT.ai` tooltip + `SOURCE_PILL_OPTS.ai.label` = "AI Still"
+- `/app/frontend/src/changelog.js` — APP_VERSION 1.18.4 + entry
+
+**Verified end-to-end:**
+- Nano Banana scene generation: 14.6s for one 9:16 photorealistic scene. Uploaded to fal.ai storage `https://v3b.fal.media/files/...` successfully. Cache lookup on repeat prompts returns <100ms.
+- Sora 2 endpoint auth gate: 401 without token ✓. Bad aspect: 400 ✓. Bad duration: 400 ✓. Bad model: 400 ✓. Prompt too short: 422 ✓. SDK importable ✓. Actual Sora 2 generation costs Charity money so not fired during this build — she can test on her Founder account before deciding Move 3a (park motion behind BYOK) vs Move 3b (wire Sora 2 as Cinematic engine).
+
+**Roadmap reseeded** so the new Faceless mode blurb is live on `/roadmap`.
+
+**Cost impact estimate (for Charity):**
+- Faceless renders that previously ran $2-4/each in fal.ai Flux calls now run ~$0.15-0.30/each on the Universal Key for the equivalent Nano Banana still generation. **~10x cost reduction on the visuals phase alone** while quality goes UP.
+- fal.ai still used for Kokoro TTS + ffmpeg-compose (both work well and are cheap). Flux only fires as fallback.
+- Sora 2 cinematic mode is opt-in test only until Charity validates quality.
+
+**Deployment status:** Fix is in preview. Production still runs Flux until she redeploys. She has NOT touched fal.ai credit balance during this iteration — the stuck 55% render from her original message is still in her history queue and needs manual deletion OR she needs to top up fal.ai to complete it.
+
+**Follow-up conversation open with user:**
+- After she tests Sora 2 quality on Founder account: decide Move 3a (park motion behind Pro Plus BYOK) or Move 3b (wire Sora 2 as native Cinematic Faceless engine).
+- Frontend admin UI for the Sora 2 test endpoint (currently curl-only). Would be a small addition to the Admin tab.
+
+---
+
+
+
 ### Iteration 48 (2026-06-30) — HeyGen 5,000-char guard: friendly error + live counter + mode hint
 
 **User trigger:** Charity's live client demo failed at 45% with the raw HeyGen JSON: `String should have at most 5000 characters`. Both v3 and v2 rejected the same script. HeyGen's API has a hard 5,000-char cap on `input_text` — long-form scripts routinely exceed this.

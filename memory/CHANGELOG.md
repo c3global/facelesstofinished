@@ -12,6 +12,30 @@ first. Plain English — if you're a customer reading this, this is for you.
 
 ---
 
+## v1.18.4 — July 1, 2026 (Nano Banana for scene stills + Sora 2 test lane)
+
+- **Scene stills upgraded to Gemini Nano Banana.** Faceless mode scenes
+  now generate via Gemini Nano Banana instead of Flux 1.1 Pro. Higher
+  photorealistic quality for professional aesthetic, and generation
+  cost comes off your Emergent Universal Key balance instead of fal.ai
+  per-call billing.
+- **Flux stays as a silent fallback.** If Nano Banana ever rate-limits
+  or hiccups, the pipeline transparently falls back to Flux so renders
+  don't crash mid-pipeline. Cache prefix updated so we don't
+  accidentally serve old Flux outputs.
+- **&ldquo;AI&rdquo; source pill relabeled to &ldquo;AI Still&rdquo;.**
+  Sets the right expectation — this is a professional-quality
+  photograph, not motion video. Motion is coming as a separate premium
+  lane once Sora 2 quality is validated.
+- **Admin-only Sora 2 test endpoint.** Charity can now fire test
+  cinematic clips at `/api/admin/studio/test-sora2` to evaluate quality
+  and cost per render before deciding whether Sora 2 becomes the
+  "Cinematic Faceless" engine or motion stays parked behind BYOK.
+- **Roadmap Faceless mode blurb updated** to reflect the stock-first
+  + Nano Banana workflow.
+
+---
+
 ## v1.18.3 — June 30, 2026 (HeyGen 5,000-char limit friendly error)
 
 - **Fixed:** Avatar Mode renders were failing at 45% with a wall of raw

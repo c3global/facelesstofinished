@@ -14,9 +14,20 @@
 //    See PRD.md → "Workflow rule: changelog must move with every deploy."
 // 4. Most recent on top. Each entry has version + date + bullet list.
 
-export const APP_VERSION = "1.18.3";
+export const APP_VERSION = "1.18.4";
 
 export const CHANGELOG = [
+  {
+    version: "1.18.4",
+    date: "2026-07-01",
+    changes: [
+      "Faceless scene stills now generate through Gemini Nano Banana instead of Flux — more professional photorealism, lower cost, comes off the Emergent Universal Key balance instead of fal.ai per-call billing",
+      "Content-hash cache preserved so identical scenes still return instantly on regenerate",
+      "Flux stays as a silent fallback if Nano Banana ever rate-limits, so renders don't crash mid-pipeline",
+      "'AI' source pill relabeled 'AI Still' to set the right expectation — this is a photograph, not motion video (motion is coming as a separate premium lane)",
+      "Roadmap Faceless mode blurb updated to reflect the new stock-first + Nano Banana workflow",
+    ],
+  },
   {
     version: "1.18.3",
     date: "2026-06-30",

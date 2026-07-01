@@ -70,7 +70,7 @@ def _default_items() -> list[dict]:
     add("shipped", "Studio — Avatar mode",
         "Talking-head videos in 16:9 or 9:16 with burned-in captions. Browse 1,200+ avatars and 2,300+ voices.")
     add("shipped", "Studio — Faceless mode",
-        "Slideshow-style videos with AI voiceover, AI-generated visuals, and stock B-roll. Optional caption burn-in.")
+        "Slideshow-style videos with AI voiceover, stock B-roll from Pexels and Pixabay, and AI-generated stills via Gemini Nano Banana for scenes where stock doesn't fit. Optional caption burn-in.")
     add("shipped", "Thumbnail Engine",
         "Two engines (Premium + Fast), three aspect ratios, prompt rewriter, full-screen preview, batch-generate from any script.")
     add("shipped", "Bring Your Own Keys (BYOK)",
