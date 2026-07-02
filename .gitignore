@@ -1,5 +1,8 @@
 node_modules
 dist
+build
+__pycache__
+.pytest_cache
 .env
 .env.local
 .DS_Store
