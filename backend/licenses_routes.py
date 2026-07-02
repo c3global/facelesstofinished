@@ -9,7 +9,7 @@ code regardless of source, and admin reporting separates codes by their
 Schema:
     db.redemption_codes:
         _id:         the code string (uppercased, dashes preserved)
-        tier:        "t1" | "t2" | "t3" | "t4"  (Founder is intentionally
+        tier:        "t1" | "t2" | "t3"  (Founder is intentionally
                      NOT redeemable — see tier_config.REDEEMABLE_TIER_IDS)
         source:      "appsumo" | "partner" | "beta" | "manual" | …
         status:      "available" | "redeemed" | "void"
@@ -589,7 +589,7 @@ def register_license_routes(
             return {"visible": False, "reason": "founder"}
 
         tier_id = (buyer.get("tier") or "").strip().lower()
-        if tier_id == "t4":
+        if tier_id == "t3":
             return {"visible": False, "reason": "top_tier"}
 
         sumo_url = (os.environ.get("APPSUMO_STACK_URL") or "").strip()

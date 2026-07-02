@@ -7,16 +7,18 @@ Backend gating (render endpoints, quota counter resets, kill-switch breakers),
 admin UI labels, and customer-visible upgrade prompts all read from here so
 prices / caps stay consistent across the app.
 
-Design decisions (locked by user 2026-06-29):
+Design decisions (locked by user 2026-06-29, tier IDs cleaned up 2026-07-02):
   • Quotas, not credits — simpler comprehension, refund-safe on AppSumo.
-  • T1 / T2 bundle a small Faceless quota so every tier produces actual video,
-    not just text. Improves AppSumo conversion (no "scripts only" perception).
-  • T3 / T4 sub-cap Avatar renders separately because HeyGen costs 3-4x more
+  • Internal tier IDs (t1 / t2 / t3) line up 1:1 with AppSumo listing tiers
+    (1 / 2 / 3). No more phantom internal tiers.
+  • T3 sub-caps Avatar renders separately because HeyGen costs 3-4x more
     than Faceless — protects margin on a lifetime deal.
-  • Existing 39 buyers grandfather into FOUNDER tier — no quotas enforced
-    (user explicitly said "leave them alone — they are unlimited founders").
-  • T4 BYOK is a toggle, NOT a requirement. T4 users without their own keys
-    still get a generous quota (40/mo) on platform infra. BYOK unlocks truly
+  • Existing legacy buyers (Studio Founder direct-sale customers @ $297 or
+    3×$99 payment plan, plus the original grandfathered founders) go into
+    FOUNDER tier — no quotas enforced (user explicitly said "leave them
+    alone — they are unlimited founders").
+  • T3 BYOK is a toggle, NOT a requirement. T3 users without their own keys
+    still get a generous quota (13/mo) on platform infra. BYOK unlocks truly
     unlimited rendering by offloading cost to their fal.ai / HeyGen account.
   • $ kill-switch caps are SILENT (we don't expose cents to non-admins) —
     they pause renders at the threshold and alert the admin via Activity log.
@@ -71,12 +73,13 @@ class Tier:
 
     byok_allowed: bool
     """Whether the user can plug in their own fal.ai / HeyGen / OpenAI keys
-    to bypass quotas + the cost cap. T4 only by design."""
+    to bypass quotas + the cost cap. T3 only by design."""
 
     is_founder_grandfather: bool = False
     """True for the FOUNDER tier — exempts the buyer from all quota + cost
     gates. New buyers must NEVER be assigned FOUNDER; it's stamped only on
-    the 39 pre-existing buyers via a one-time migration."""
+    pre-existing legacy buyers and on Studio Founder direct-sale customers
+    ($297 / 3×$99) via the Pinball webhook (once wired)."""
 
     sprint_allowed: bool = True
     """Whether Content Sprint (5-variant shorts generation) is available.
@@ -93,16 +96,20 @@ class Tier:
 # list to find "next tier above current".
 # ----------------------------------------------------------------------------
 
-# NOTE (2026-07-02): T1/T3/T4 quotas re-aligned to the FINAL AppSumo listing
-# copy Charity approved ("Change the feature rows to this exact wording"):
+# NOTE (2026-07-02): tier IDs re-aligned 1:1 with the AppSumo listing so
+# internal `t1 / t2 / t3` map directly onto AppSumo `Tier 1 / 2 / 3`.
+# The previous phantom "$99 Creator" tier was removed — it was never sold.
+# Studio Founder direct-sale customers ($297 one-time or 3×$99 payment
+# plan) map onto the separate FOUNDER tier (unlimited, no quotas).
+#
+# Final AppSumo listing copy Charity approved ("Change the feature rows
+# to this exact wording"):
 #   All plans: Long-form Script Engine + Shorts Engine + B-roll prompts +
 #              Voiceover cues  → entitlements include "shorts" at every tier.
 #   Tier 1 $49:  20/mo Fast thumbnails; NO Sprint, NO Faceless, NO Avatar.
-#   Tier 2 $179: 50/mo Fast+Quality thumbnails; Sprint; 3/mo Faceless.  (= t3)
+#   Tier 2 $179: 50/mo Fast+Quality thumbnails; Sprint; 3/mo Faceless.
 #   Tier 3 $349: 100/mo thumbnails; Sprint; 10/mo Faceless; 3/mo Avatar;
-#                Connect supported AI accounts (BYOK).                  (= t4)
-# The $99 Creator tier (t2) is NOT sold on AppSumo — its values are unchanged
-# and it remains reachable via partner/manual codes only.
+#                Connect supported AI accounts (BYOK).
 TIER_T1 = Tier(
     id="t1",
     label="Starter",
@@ -119,19 +126,6 @@ TIER_T1 = Tier(
 
 TIER_T2 = Tier(
     id="t2",
-    label="Creator",
-    sticker_cents=9_900,             # $99
-    entitlements=("base", "shorts"),
-    render_quota_monthly=10,
-    avatar_sub_cap=0,
-    thumbnail_quota_monthly=50,
-    thumbnail_premium_allowed=True,
-    monthly_cost_cap_cents=1_000,    # $10 silent kill-switch
-    byok_allowed=False,
-)
-
-TIER_T3 = Tier(
-    id="t3",
     label="Pro",
     sticker_cents=17_900,            # $179 — AppSumo listing "License Tier 2"
     entitlements=("base", "shorts", "studio"),
@@ -143,8 +137,8 @@ TIER_T3 = Tier(
     byok_allowed=False,
 )
 
-TIER_T4 = Tier(
-    id="t4",
+TIER_T3 = Tier(
+    id="t3",
     label="Pro Plus",
     sticker_cents=34_900,            # $349 — AppSumo listing "License Tier 3"
     entitlements=("base", "shorts", "studio", "byok"),
@@ -156,11 +150,15 @@ TIER_T4 = Tier(
     byok_allowed=True,
 )
 
-# Founder = special legacy/honorary bucket. NOT redeemable via AppSumo or any
-# public flow — only set by admin grant OR the `founders: true` migration
-# flag on the buyer doc. Kept here so `get_tier("founder")` still resolves
-# cleanly when older code paths look it up by id, but excluded from every
-# redemption / upgrade / pricing surface.
+# Founder = special legacy/honorary bucket. Assigned to:
+#   • The original 39 grandfathered founders (one-time migration).
+#   • Studio Founder direct-sale customers ($297 one-time / 3×$99 payment
+#     plan) once the Pinball webhook is wired to detect that SKU.
+# NOT redeemable via AppSumo or any public code flow — only set by admin
+# grant OR the `founders: true` migration flag on the buyer doc. Kept here
+# so `get_tier("founder")` still resolves cleanly when older code paths
+# look it up by id, but excluded from every redemption / upgrade / pricing
+# surface.
 TIER_FOUNDER = Tier(
     id="founder",
     label="Founder",
@@ -176,10 +174,10 @@ TIER_FOUNDER = Tier(
 )
 
 # Order-preserved tuple (low → high sticker). Founder is INTENTIONALLY EXCLUDED
-# — it's not a redeemable / purchasable tier, just an honorary legacy bucket.
-# The upgrade-path resolver walks this list to find "next tier above current"
-# without ever surfacing Founder to AppSumo or direct buyers.
-TIERS_ORDERED: tuple[Tier, ...] = (TIER_T1, TIER_T2, TIER_T3, TIER_T4)
+# — it's not a redeemable / purchasable AppSumo tier, just an honorary legacy
+# bucket. The upgrade-path resolver walks this list to find "next tier above
+# current" without ever surfacing Founder to AppSumo or direct buyers.
+TIERS_ORDERED: tuple[Tier, ...] = (TIER_T1, TIER_T2, TIER_T3)
 
 # Set of tier ids that are LEGITIMATELY redeemable via /api/licenses/redeem.
 # Used as a hard whitelist when accepting bulk-uploaded redemption codes to
@@ -187,13 +185,12 @@ TIERS_ORDERED: tuple[Tier, ...] = (TIER_T1, TIER_T2, TIER_T3, TIER_T4)
 REDEEMABLE_TIER_IDS: frozenset[str] = frozenset({t.id for t in TIERS_ORDERED})
 
 # Lookup map for O(1) access by id.
-TIERS_BY_ID: dict[str, Tier] = {t.id: t for t in (TIER_T1, TIER_T2, TIER_T3, TIER_T4, TIER_FOUNDER)}
+TIERS_BY_ID: dict[str, Tier] = {t.id: t for t in (TIER_T1, TIER_T2, TIER_T3, TIER_FOUNDER)}
 
 # AppSumo Licensing v2 webhooks/licenses carry NUMERIC tiers matching the
-# public listing (1, 2, 3) — not our internal ids. The listing sells three
-# tiers ($49/$179/$349) which map onto t1/t3/t4; the $99 Creator tier (t2)
-# is not on AppSumo.
-APPSUMO_NUMERIC_TIER_MAP: dict[str, str] = {"1": "t1", "2": "t3", "3": "t4"}
+# public listing (1, 2, 3) — a direct 1:1 map onto our internal ids after
+# the 2026-07-02 cleanup. Founder is never externally addressable.
+APPSUMO_NUMERIC_TIER_MAP: dict[str, str] = {"1": "t1", "2": "t2", "3": "t3"}
 
 
 def appsumo_tier_to_tier_id(value) -> str:
@@ -310,14 +307,12 @@ def tier_for_entitlements(entitlements: list[str]) -> Tier:
     """Map a buyer's entitlement set to the most appropriate tier when the
     `tier` field hasn't been migrated yet. Used by the one-time backfill
     script and by /api/admin/usage when a buyer pre-dates the tier system.
-    Precedence: founder > t4(byok) > t3(studio) > t2(shorts) > t1(base)."""
+    Precedence: founder > t3(byok) > t2(studio) > t1(base+shorts)."""
     ents = {e.strip().lower() for e in (entitlements or [])}
     if "byok" in ents and "studio" in ents:
-        return TIER_T4
-    if "studio" in ents:
         return TIER_T3
-    if "shorts" in ents:
+    if "studio" in ents:
         return TIER_T2
-    if "base" in ents:
+    if "base" in ents or "shorts" in ents:
         return TIER_T1
     return TIER_T1  # safe default; admin can reclassify

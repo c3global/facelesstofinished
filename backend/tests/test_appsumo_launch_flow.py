@@ -1,7 +1,7 @@
 """End-to-end pytest suite for the AppSumo launch path (2026-07-02 fixes).
 
 Covers the four launch-blocking gaps found after merging Emergent's branch:
-  1. AppSumo webhooks send NUMERIC tiers (1/2/3) — mapped to t1/t3/t4.
+  1. AppSumo webhooks send NUMERIC tiers (1/2/3) — mapped to t1/t2/t3.
   2. Redemption never granted entitlements → buyers couldn't sign back in.
   3. AppSumo license keys / OAuth codes had no redemption path (only the
      pre-uploaded partner-code inventory worked).
@@ -92,15 +92,15 @@ LK = "d8bfa201-d8c0-4bc8-a27c-b1c12efa4a5a"
 # ---------------------------------------------------------------------------
 def test_numeric_tier_mapping_matches_listing():
     assert tier_config.appsumo_tier_to_tier_id(1) == "t1"
-    assert tier_config.appsumo_tier_to_tier_id("2") == "t3"
-    assert tier_config.appsumo_tier_to_tier_id(3.0) == "t4"
+    assert tier_config.appsumo_tier_to_tier_id("2") == "t2"
+    assert tier_config.appsumo_tier_to_tier_id(3.0) == "t3"
     assert tier_config.appsumo_tier_to_tier_id("t2") == "t2"   # internal passthrough
     assert tier_config.appsumo_tier_to_tier_id("founder") == ""  # never external
     assert tier_config.appsumo_tier_to_tier_id("bogus") == ""
 
 
 def test_tier_values_match_final_listing():
-    t1, t3, t4 = tier_config.TIER_T1, tier_config.TIER_T3, tier_config.TIER_T4
+    t1, t3, t4 = tier_config.TIER_T1, tier_config.TIER_T2, tier_config.TIER_T3
     assert "shorts" in t1.entitlements          # Shorts Engine in ALL plans
     assert t1.render_quota_monthly == 0         # T1: no Faceless videos
     assert t1.sprint_allowed is False           # T1: no Sprint Mode
@@ -113,9 +113,9 @@ def test_tier_values_match_final_listing():
 
 
 def test_assign_buyer_to_tier_stamps_entitlements():
-    payload = tier_config.assign_buyer_to_tier(tier_id="t3")
+    payload = tier_config.assign_buyer_to_tier(tier_id="t2")
     assert payload["entitlements"] == ["base", "shorts", "studio"]
-    assert payload["tier"] == "t3"
+    assert payload["tier"] == "t2"
 
 
 # ---------------------------------------------------------------------------
@@ -144,7 +144,7 @@ async def test_webhook_upgrade_with_numeric_tier_bumps_buyer(client):
     await server.db.appsumo_licenses.insert_one(
         {"license_key": LK, "tier": 2, "email": "up@x.com"})
     await server.db.buyers.insert_one({
-        "email": "up@x.com", "tier": "t3",
+        "email": "up@x.com", "tier": "t2",
         "entitlements": ["base", "shorts", "studio"], "founders": False,
     })
     r = await client.post("/api/appsumo-webhook", json={
@@ -155,7 +155,7 @@ async def test_webhook_upgrade_with_numeric_tier_bumps_buyer(client):
     assert r.status_code == 200, r.text
     assert r.json()["success"] is True
     buyer = await server.db.buyers.find_one({"email": "up@x.com"})
-    assert buyer["tier"] == "t4"
+    assert buyer["tier"] == "t3"
     assert buyer["entitlements"] == ["base", "byok", "shorts", "studio"]
 
 
@@ -168,9 +168,9 @@ async def test_redeem_endpoint_accepts_appsumo_license_key(client):
                           headers=_auth("sumo@x.com", ents=["base"]))
     assert r.status_code == 200, r.text
     data = r.json()
-    assert data["tier"] == "t3"
+    assert data["tier"] == "t2"
     buyer = await server.db.buyers.find_one({"email": "sumo@x.com"})
-    assert buyer["tier"] == "t3"
+    assert buyer["tier"] == "t2"
     assert buyer["entitlements"] == ["base", "shorts", "studio"]
     lic = await server.db.appsumo_licenses.find_one({"license_key": LK})
     assert lic["email"] == "sumo@x.com"
@@ -201,13 +201,13 @@ async def test_redeem_unknown_code_still_404s(client):
 
 async def test_inventory_code_path_regression(client):
     await server.db.redemption_codes.insert_one({
-        "_id": "PARTNER-CODE-123", "tier": "t4", "status": "available",
+        "_id": "PARTNER-CODE-123", "tier": "t3", "status": "available",
         "source": "partner",
     })
     r = await client.post("/api/licenses/redeem", json={"code": "partner-code-123"},
                           headers=_auth("p@x.com", ents=["base"]))
     assert r.status_code == 200, r.text
-    assert r.json()["tier"] == "t4"
+    assert r.json()["tier"] == "t3"
     buyer = await server.db.buyers.find_one({"email": "p@x.com"})
     assert buyer["entitlements"] == ["base", "byok", "shorts", "studio"]
     code = await server.db.redemption_codes.find_one({"_id": "PARTNER-CODE-123"})
@@ -225,7 +225,7 @@ async def test_redeem_oauth_endpoint(client, monkeypatch):
                           json={"code": "1d512d96ba99465ba9942bdf282233ea"},
                           headers=_auth("oauth@x.com", ents=["base"]))
     assert r.status_code == 200, r.text
-    assert r.json()["tier"] == "t4"
+    assert r.json()["tier"] == "t3"
 
 
 # ---------------------------------------------------------------------------
@@ -247,7 +247,7 @@ async def test_magic_link_carries_code_and_provisions_new_buyer(client):
     assert r.status_code == 302
     assert "/auth/callback#jwt=" in r.headers["location"]
     buyer = await server.db.buyers.find_one({"email": "new@x.com"})
-    assert buyer["tier"] == "t3"
+    assert buyer["tier"] == "t2"
     assert buyer["entitlements"] == ["base", "shorts", "studio"]
 
 
@@ -279,7 +279,7 @@ async def test_magic_link_oauth_code_rides_with_prefix(client, monkeypatch):
     assert r.status_code == 302
     assert "/auth/callback#jwt=" in r.headers["location"]
     buyer = await server.db.buyers.find_one({"email": "oauthnew@x.com"})
-    assert buyer["tier"] == "t4"
+    assert buyer["tier"] == "t3"
 
 
 # ---------------------------------------------------------------------------
@@ -295,7 +295,7 @@ async def test_sprint_blocked_for_t1_allowed_for_t3_and_legacy(client, monkeypat
         "entitlements": ["base", "shorts"], "founders": False,
     })
     await server.db.buyers.insert_one({
-        "email": "t3@x.com", "tier": "t3",
+        "email": "t3@x.com", "tier": "t2",
         "entitlements": ["base", "shorts", "studio"], "founders": False,
     })
     await server.db.buyers.insert_one({

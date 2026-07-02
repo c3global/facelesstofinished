@@ -1572,7 +1572,7 @@ def register_admin_routes(
     #              "migrate"   | "activate",
     #     "email": "buyer@example.com",
     #     "license_key":  "<optional - dedupe key>",
-    #     "tier":         "t1" | "t2" | "t3" | "t4"  (required for
+    #     "tier":         "t1" | "t2" | "t3"  (required for
     #                                                 upgrade/downgrade/migrate),
     #     "reason":       "<optional human-readable>",
     #   }
@@ -1634,7 +1634,7 @@ def register_admin_routes(
 
         AppSumo Licensing v2 sends the tier as a NUMBER matching the public
         listing (`"tier": 2`), so values are normalized through
-        appsumo_tier_to_tier_id (1→t1, 2→t3, 3→t4; internal ids pass
+        appsumo_tier_to_tier_id (1→t1, 2→t2, 3→t3; internal ids pass
         through). Returns "" when nothing mappable is found."""
         from tier_config import appsumo_tier_to_tier_id  # noqa: PLC0415
 
@@ -2164,7 +2164,7 @@ def register_admin_routes(
                     },
                     "$set": {
                         "entitlements": ["base", "shorts", "studio"],
-                        "tier": "t3",
+                        "tier": "t2",
                         "renderQuotaMonthly": 50,
                         "avatarSubCap": 10,
                         "monthlyCostCapCents": 5000,

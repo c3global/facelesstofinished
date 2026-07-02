@@ -12,7 +12,7 @@ import { apiClient } from "../../App";
  * Bulk-create accepts either:
  *   code,tier
  *   F48-A1B2-C3D4,t1
- *   F48-E5F6-G7H8,t2
+ *   F48-E5F6-G7H8,t3
  * OR a list of "CODE,t1" lines without a header (we auto-detect).
  *
  * The "Source" field defaults to "appsumo" since that's the v1 launch
@@ -20,7 +20,7 @@ import { apiClient } from "../../App";
  * custom source string for downstream reporting.
  */
 const STATUS_OPTIONS = ["", "available", "redeemed", "void"];
-const TIER_OPTIONS   = ["", "t1", "t2", "t3", "t4"];
+const TIER_OPTIONS   = ["", "t1", "t2", "t3"];
 
 function fmtDate(s) {
   if (!s) return "—";
@@ -189,13 +189,14 @@ export default function LicensesTab() {
             <br />
             • Comma-separated lines — <code>F48-AAAA-BBBB,t1</code> (one per line)
             <br />
-            Tier must be <code>t1</code> / <code>t2</code> / <code>t3</code> / <code>t4</code>.
+            Tier must be <code>t1</code> / <code>t2</code> / <code>t3</code>.
             Duplicate codes are skipped silently.
           </p>
           <textarea
             rows={8}
             className="admin-textarea"
             placeholder={"code,tier\nF48-AAAA-BBBB,t2\nF48-CCCC-DDDD,t3"}
+            // NOTE: t2 = Pro ($179), t3 = Pro Plus ($349), t1 = Starter ($49).
             value={csvText}
             onChange={(e) => setCsvText(e.target.value)}
             data-testid="licenses-csv-input"

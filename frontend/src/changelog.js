@@ -14,9 +14,18 @@
 //    See PRD.md → "Workflow rule: changelog must move with every deploy."
 // 4. Most recent on top. Each entry has version + date + bullet list.
 
-export const APP_VERSION = "1.18.4";
+export const APP_VERSION = "1.19.0";
 
 export const CHANGELOG = [
+  {
+    version: "1.19.0",
+    date: "2026-07-02",
+    changes: [
+      "Passwordless sign-in — enter your email and we'll send you a one-time secure link. Old paste-and-you're-in login is gone, so your account is safe even if someone knows your email address",
+      "Tier names cleaned up — Starter ($49) / Pro ($179) / Pro Plus ($349) / Founder. The phantom 'Creator' name that never matched a real product is retired",
+      "Founder members keep unlimited access to everything — no quotas, no changes",
+    ],
+  },
   {
     version: "1.18.4",
     date: "2026-07-01",
@@ -135,7 +144,7 @@ export const CHANGELOG = [
     changes: [
       "Profile dropdown menu in the header — quick access to your tier, redeem codes, and sign out from one place",
       "New code redemption flow — paste any access code on the Redeem page (linked from the footer, the login screen, and your Profile menu) and we'll unlock your plan instantly",
-      "Tier names refreshed — Starter / Creator / Pro / Pro Plus (Founder badge unchanged for our OG legacy members)",
+      "Tier names refreshed — Starter / Pro / Pro Plus (Founder badge unchanged for our OG legacy members)",
       "Founders now get a subtle copper accent throughout the app + a 'Founder' badge in the header",
       "Upgrade button appears in the quota popover when you're running low — links to the right place automatically",
     ],

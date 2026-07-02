@@ -20,21 +20,54 @@ back to it for entitlement verification.
 
 ## 🔁 Workflow rule: Changelog moves with every change (set 2026-06-29 by user)
 
+### Iteration 51 (2026-07-02, PM) — Tier ID realignment (Creator retired, IDs 1:1 with AppSumo listing) + magic-link auth security fix
+
+**Trigger:** Charity: *"I don't have a $99 for the pinball either for creator... Studio is when I sell it directly myself, it is $297. And then there's a payment plan option of three payments of $99. That is the only thing, because I need to make sure that the founders, those that are purchasing with me, there's currently no limitation with that. It's just limitations with AppSumo."* — meaning the internal $99 "Creator" tier was cruft (nothing actually sold at that price), and Founder is her direct-sale $297 (or 3×$99 payment plan) product with unlimited access.
+
+**Tier ID cleanup:**
+- **Removed** the phantom `t2 Creator $99` tier — zero buyers on it, never sold. Verified via DB query.
+- **Renamed** `t3 Pro $179` → `t2` and `t4 Pro Plus $349` → `t3` so internal IDs match the AppSumo listing 1:1 (Tier 1/2/3 = t1/t2/t3). No data migration needed — DB had zero buyers on any t2/t3/t4 tier (all 4 seeded buyers had `tier: null`).
+- **APPSUMO_NUMERIC_TIER_MAP** updated from `{"1": "t1", "2": "t3", "3": "t4"}` → `{"1": "t1", "2": "t2", "3": "t3"}` (direct 1:1).
+- **Founder tier unchanged** — remains unlimited (9999 renders, no quotas, no cost cap). Docstrings updated to note Founder now covers BOTH the original grandfathered members AND Studio Founder direct-sale customers ($297 / 3×$99) via the Pinball webhook (once wired).
+
+**Files touched:**
+- `tier_config.py` — full restructure: deleted `TIER_T2` Creator, renamed `TIER_T3` → `TIER_T2`, `TIER_T4` → `TIER_T3`. Updated `TIERS_ORDERED`, `TIERS_BY_ID`, `tier_for_entitlements()`.
+- `admin_routes.py`, `licenses_routes.py` — updated tier-id string references and comment blocks.
+- `frontend/src/components/admin/LicensesTab.jsx` — dropdown, placeholder text, help copy.
+- `frontend/src/components/admin/UsageTab.jsx` — `TIER_LABELS` map cleaned (`t1: "Starter", t2: "Pro", t3: "Pro Plus", founder: "Founder"`).
+- `frontend/src/components/ProfileMenu.jsx` — docstring updated.
+- `frontend/src/App.css` — reassigned `.ent-chip-t2` (Pro / gold) and `.ent-chip-t3` (Pro Plus / amber), deleted `.ent-chip-t4`.
+- `backend/tests/test_appsumo_launch_flow.py` — all `TIER_T3` → `TIER_T2`, `TIER_T4` → `TIER_T3`, `"t3"` → `"t2"`, `"t4"` → `"t3"`. All 17/17 tests still pass.
+- `changelog.js` — bumped `APP_VERSION` to `1.19.0`, added new customer-facing entry.
+- `CHANGELOG.md` — new v1.19.0 section documenting magic-link + tier cleanup.
+- `PRD.md` — this entry + purged stale Creator/t4 references from earlier iterations.
+
+**NOT touched (locked by Charity):**
+- `db.buyers` — no migration required. Existing 4 buyers all had `tier: null`; existing 39 grandfathered founders keep `founders: true` flag which trumps tier field.
+- **Pinball webhook** — completely untouched, keeps working exactly as-is for existing direct-sale + entitlement flows.
+- AppSumo launch flow tests — not re-run (Charity said they're taken care of); code paths updated to match new IDs, `pytest backend/tests/test_appsumo_launch_flow.py` confirms 17/17 pass in ~0.5s.
+
+**Verified:** backend restarts clean, `python -c "import tier_config"` prints `T1=Starter, T2=Pro, T3=Pro Plus, Founder=Founder, AppSumo map={1:t1, 2:t2, 3:t3}`, live curl to `/api/appsumo-webhook` with `tier: 2` returns `{"event": "purchase", "success": true}`, `tier: 3` same.
+
+**Still deferred (explicit user request):**
+- **Studio Founder direct-sale Pinball flow** — wire up the Pinball webhook to detect the $297 one-time / 3×$99 payment-plan SKU and auto-provision `TIER_FOUNDER` with unlimited entitlements. Not started; Charity said "I don't have any of those in place" and wants to discuss the quota policy for Founders separately before wiring.
+- **Founder quota policy question** — should Founder stay truly unlimited (current behavior) or get a soft cap that's higher than Pro Plus? Deferred. Current: unlimited, no changes.
+
 ### Iteration 50 (2026-07-02) — AppSumo launch path completed: numeric tier mapping, license-key/OAuth redemption, entitlements-at-redeem fix, new-buyer onboarding via magic link, Sprint gate, final listing quotas
 
 **Trigger:** Charity validated the AppSumo Partner Portal URLs and pasted the FINAL listing copy ($49/$179/$349 with exact feature rows). Merging her Claude session's work with this branch surfaced four launch-blocking gaps that would have broken every real AppSumo purchase.
 
 **Launch-blocking gaps fixed (each has a regression test in `backend/tests/test_appsumo_launch_flow.py` — 14 tests, runs without mongod via mongomock):**
-1. **Numeric tiers.** AppSumo Licensing v2 sends `"tier": 2` (a NUMBER, matching the listing) but `_extract_tier` only accepted strings and nothing mapped numbers to internal ids. New `tier_config.appsumo_tier_to_tier_id`: 1→t1, 2→t3, 3→t4 (the $99 t2/Creator is NOT sold on AppSumo); `_extract_tier` normalizes through it. Without this every upgrade/downgrade webhook returned `success:false`.
+1. **Numeric tiers.** AppSumo Licensing v2 sends `"tier": 2` (a NUMBER, matching the listing) but `_extract_tier` only accepted strings and nothing mapped numbers to internal ids. New `tier_config.appsumo_tier_to_tier_id`: 1→t1, 2→t2, 3→t3 (1:1 mapping onto the AppSumo listing tiers); `_extract_tier` normalizes through it. Without this every upgrade/downgrade webhook returned `success:false`. (Historical note: an earlier iteration had a phantom internal $99 Creator tier at "t2" that was never actually sold — retired 2026-07-02 alongside this cleanup.)
 2. **Entitlements never granted at redemption.** `assign_buyer_to_tier` stamped tier + quota fields but NOT `entitlements` — and `_resolve_signin` refuses to issue a JWT for a buyer with empty entitlements. A buyer could redeem successfully and then never sign in again. `assign_buyer_to_tier` now stamps `entitlements: sorted(tier.entitlements)`; fix applies everywhere it's called (redeem, webhook upgrade, admin tier bump).
 3. **Real AppSumo codes had no redemption path.** `/api/licenses/redeem` only checked the pre-uploaded `db.redemption_codes` inventory; buyers paste their LICENSE KEY (UUID) from AppSumo → My Products, which lives in `db.appsumo_licenses` (webhook-populated). Refactored the endpoint core into module-level `licenses_routes.redeem_for_email` with a fallthrough: inventory code → AppSumo license key (case-insensitive, 409 on foreign-email link, 410 on deactivated) → 404. Also NEW `POST /api/licenses/redeem-oauth` which exchanges the AppSumo OAuth `?code=` at `appsumo.com/openid/token/` for the license key (creds via `db.settings("appsumo")` > env — NEW admin `GET/PUT /api/admin/appsumo/config` since Charity can't edit env vars) and redeems it. `/api/appsumo/oauth/redirect`'s hop to `/redeem?appsumo_code=` is now actually consumed by the page.
 4. **New buyers were locked out entirely** (chicken-and-egg: magic-link verify requires an existing buyer with entitlements; redemption requires being signed in). Fix: the redemption code now RIDES ALONG with the magic link. `MagicLinkRequest` gained optional `redeem` / `appsumo_oauth`; the code is stored on the token doc (`auth_magic_link.create_token(redeem_code=…)`, new `consume_token_full`); verify-magic-link applies it via `redeem_for_email` AFTER email ownership is proven, THEN runs `_resolve_signin` — so the buyer record exists by the time the JWT is minted. Failed redemption never blocks an existing customer's sign-in; new-buyer-with-bad-code gets `login?err=code_invalid`.
 
 **Tier values re-aligned to the FINAL listing copy (supersedes the 2026-06-29 draft numbers):**
 - t1 Starter $49: `+shorts` entitlement (listing: Shorts Engine in ALL plans), renders 0 (was 5), thumbnails 20 Fast-only, `sprint_allowed=False` (NEW field).
-- t3 Pro $179 (= listing Tier 2): renders 3 (was 15), avatar 0 (was 5), thumbnails 50 (was unlimited).
-- t4 Pro Plus $349 (= listing Tier 3): renders 13 = 10 Faceless + 3 Avatar (was 40/10), thumbnails 100 (was unlimited), BYOK stays.
-- t2 Creator $99 untouched (not on AppSumo; partner/manual codes only).
+- t2 Pro $179 (= listing Tier 2): renders 3 (was 15), avatar 0 (was 5), thumbnails 50 (was unlimited).
+- t3 Pro Plus $349 (= listing Tier 3): renders 13 = 10 Faceless + 3 Avatar (was 40/10), thumbnails 100 (was unlimited), BYOK stays.
+- Founder (unlimited, no quotas) is reserved for legacy grandfathered members AND for Studio Founder direct-sale customers ($297 one-time / 3×$99 payment plan sold via Pinball, once wired).
 - NEW Sprint Mode tier gate in `/api/scripts/shorts`: blocks `sprint:true` only when the buyer has an explicit tier with `sprint_allowed=False`; legacy buyers without a tier field, founders, and grant emails are never gated.
 
 **Frontend:** `Redeem.jsx` reads `?appsumo_code=`/`?code=` — signed-in users get auto-activation via redeem-oauth ("Activating your purchase…" state); signed-out users are bounced to `/login?appsumo_oauth=…` where `Login.jsx` attaches the pending code (or a pasted `redeem` code) to the magic-link request. New `code_invalid` error copy on Login.
@@ -776,7 +809,7 @@ above; all fixed and verified end-to-end via screenshot + curl).
 **Status:** SHIPPED. Iter 34: 27/27 backend pytest GREEN + 100% frontend Playwright GREEN. Zero bugs found.
 
 ### Customer-facing surface (the part the user obsessed over)
-**AppSumo is INVISIBLE in-app.** Three redemption entry points (footer link, login toggle, Profile dropdown) all land on a generic `/redeem` page that says nothing about AppSumo. Tier names are pricing-style: **Starter / Creator / Pro / Pro Plus**. The word "Founder" is hard-reserved for the legacy `founders: true` flag — NEVER an AppSumo-redeemable tier (enforced via `REDEEMABLE_TIER_IDS` frozenset at both the bulk-create AND redeem code paths).
+**AppSumo is INVISIBLE in-app.** Three redemption entry points (footer link, login toggle, Profile dropdown) all land on a generic `/redeem` page that says nothing about AppSumo. Tier names are pricing-style: **Starter / Pro / Pro Plus**. The word "Founder" is hard-reserved for the legacy `founders: true` flag AND for Studio Founder direct-sale customers ($297 / 3×$99) — NEVER an AppSumo-redeemable tier (enforced via `REDEEMABLE_TIER_IDS` frozenset at both the bulk-create AND redeem code paths). (Historical note: an earlier draft included a "Creator" tier label at $99 — retired 2026-07-02 when internal ids were realigned 1:1 with the AppSumo listing.)
 
 When the AppSumo 60-day campaign ends, nothing in the in-app UI changes. The `/api/me/upgrade-target` endpoint auto-flips from `APPSUMO_STACK_URL` → `OWN_PRICING_URL` based on the `APPSUMO_CAMPAIGN_END_AT` env var. With all three env vars blank, the Upgrade button quietly hides instead of pointing somewhere broken.
 
@@ -788,7 +821,7 @@ When the AppSumo 60-day campaign ends, nothing in the in-app UI changes. The `/a
    - `GET /api/admin/licenses?status=&tier=&source=&batch_id=&q=` — list with totals aggregation
    - `POST /api/admin/licenses/{code}/void`
    - `POST /api/admin/buyers/{email}/upgrade-tier` — manual fallback for Stripe/direct buyers
-2. **`tier_config.py` rename** — T1 → "Starter", T2 → "Creator", T3 → "Pro", T4 → "Pro Plus". `REDEEMABLE_TIER_IDS = frozenset({"t1","t2","t3","t4"})` excludes founder. Top-level `require_admin` dep extracted to `server.py:325-340` (shared by admin_routes + licenses_routes)
+2. **`tier_config.py` rename** — T1 → "Starter", T2 → "Pro", T3 → "Pro Plus". `REDEEMABLE_TIER_IDS = frozenset({"t1","t2","t3"})` excludes founder. Top-level `require_admin` dep extracted to `server.py:325-340` (shared by admin_routes + licenses_routes). (Note: the labels changed again on 2026-07-02 when the phantom internal $99 Creator tier was removed and IDs realigned 1:1 with AppSumo — final labels above.)
 3. **`/redeem` standalone page** (`Redeem.jsx`) — copper KeyRound icon, monospace input, success state w/ "Open dashboard" CTA. Pre-auth: stashes code in localStorage + bounces to `/login?redeem=…`
 4. **`ProfileMenu.jsx`** — replaces flat header email + sign-out button. Email + tier label chip + conditional copper Founder badge. Items: Upgrade plan (only when visible from backend), Redeem code, Sign out. Click-outside dismiss. Also stamps `document.body.dataset.founder` for the theme accent
 5. **Three entry points wired** — footer "Have a redemption code?" link, login toggle "I have a redemption code instead", Profile dropdown "Redeem code"

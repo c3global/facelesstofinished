@@ -12,6 +12,32 @@ first. Plain English — if you're a customer reading this, this is for you.
 
 ---
 
+## v1.19.0 — July 2, 2026 (Passwordless magic-link sign-in + tier cleanup)
+
+- **Passwordless sign-in** — the login screen now emails you a secure
+  one-time link instead of trusting whoever types your address. Links
+  expire in 15 minutes and can only be used once. Closes the security
+  hole where anyone who knew your email could impersonate you.
+- **Delivery via Resend** (primary) with the existing GoHighLevel
+  outbound webhook as automatic fallback so a Resend outage never
+  locks a customer out.
+- **Tier names cleaned up** — Starter ($49) / Pro ($179) / Pro Plus
+  ($349) / Founder. The internal "Creator" name that never matched a
+  real product SKU was retired. AppSumo Tier 1/2/3 now map 1:1 to
+  internal t1/t2/t3, no more mental gymnastics.
+- **Founder tier is unchanged** — direct-sale customers (Studio
+  Founder $297 one-time or 3×$99 payment plan) and the original
+  grandfathered founders keep unlimited access. No quotas, no
+  changes to your account.
+- **AppSumo Licensing v2 fully wired** — real webhook + OAuth
+  redemption flow, HMAC signature verification, license-key
+  redemption on top of the pre-uploaded code inventory. Numeric
+  tiers (1/2/3) from AppSumo now resolve correctly to internal ids
+  and stamp entitlements at redemption so you can sign in
+  immediately after purchase.
+
+---
+
 ## v1.18.4 — July 1, 2026 (Nano Banana for scene stills + Sora 2 test lane)
 
 - **Scene stills upgraded to Gemini Nano Banana.** Faceless mode scenes

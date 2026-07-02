@@ -7,7 +7,7 @@ import { apiClient, useAuth } from "../App";
  * Profile dropdown shown in the right side of the Header. Replaces the
  * pre-Group-D flat "email + sign-out" pair. Adds:
  *
- *   • Tier label ("Starter" / "Creator" / "Pro" / "Pro Plus" / "Founder")
+ *   • Tier label ("Starter" / "Pro" / "Pro Plus" / "Founder")
  *   • Optional Founder badge (small copper Crown chip for the legacy 39)
  *   • "Upgrade plan" link — only renders when /api/me/upgrade-target says
  *     it should be visible (auto-flips between AppSumo stack URL during

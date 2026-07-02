@@ -5031,10 +5031,11 @@
 /* ============================================================================
  * Tier chips (T1/T2/T3/T4/Founder) shown in admin Usage tab.
  * ========================================================================= */
+/* Tier chip palette — teal (Starter) → gold (Pro) → amber (Pro Plus) → violet (Founder).
+ * IDs realigned 2026-07-02 to match AppSumo listing 1:1 (t1/t2/t3 = Tier 1/2/3). */
 .ent-chip-t1      { background: rgba(120,200,180,0.18); color: #BFEFE3; border: 1px solid rgba(120,200,180,0.4); }
-.ent-chip-t2      { background: rgba(120,170,230,0.18); color: #C8DEFF; border: 1px solid rgba(120,170,230,0.4); }
-.ent-chip-t3      { background: rgba(201,149,108,0.20); color: #F5D9B6; border: 1px solid rgba(201,149,108,0.45); }
-.ent-chip-t4      { background: rgba(224,164,88,0.22);  color: #FFEAD0; border: 1px solid rgba(224,164,88,0.55); }
+.ent-chip-t2      { background: rgba(201,149,108,0.20); color: #F5D9B6; border: 1px solid rgba(201,149,108,0.45); }
+.ent-chip-t3      { background: rgba(224,164,88,0.22);  color: #FFEAD0; border: 1px solid rgba(224,164,88,0.55); }
 .ent-chip-founder { background: rgba(127,119,221,0.22); color: #DCD5FF; border: 1px solid rgba(127,119,221,0.5); font-weight: 700; }
 
 /* ============================================================================

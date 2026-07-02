@@ -27,10 +27,9 @@ function fmtDateTime(s) {
 }
 
 const TIER_LABELS = {
-  t1: "Script Engine",
-  t2: "Scripts + Shorts",
-  t3: "Studio Pro",
-  t4: "Studio Pro + BYOK",
+  t1: "Starter",
+  t2: "Pro",
+  t3: "Pro Plus",
   founder: "Founder",
 };
 
