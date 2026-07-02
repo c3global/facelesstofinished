@@ -20,6 +20,29 @@ back to it for entitlement verification.
 
 ## 🔁 Workflow rule: Changelog moves with every change (set 2026-06-29 by user)
 
+### Iteration 50 (2026-07-02) — AppSumo launch path completed: numeric tier mapping, license-key/OAuth redemption, entitlements-at-redeem fix, new-buyer onboarding via magic link, Sprint gate, final listing quotas
+
+**Trigger:** Charity validated the AppSumo Partner Portal URLs and pasted the FINAL listing copy ($49/$179/$349 with exact feature rows). Merging her Claude session's work with this branch surfaced four launch-blocking gaps that would have broken every real AppSumo purchase.
+
+**Launch-blocking gaps fixed (each has a regression test in `backend/tests/test_appsumo_launch_flow.py` — 14 tests, runs without mongod via mongomock):**
+1. **Numeric tiers.** AppSumo Licensing v2 sends `"tier": 2` (a NUMBER, matching the listing) but `_extract_tier` only accepted strings and nothing mapped numbers to internal ids. New `tier_config.appsumo_tier_to_tier_id`: 1→t1, 2→t3, 3→t4 (the $99 t2/Creator is NOT sold on AppSumo); `_extract_tier` normalizes through it. Without this every upgrade/downgrade webhook returned `success:false`.
+2. **Entitlements never granted at redemption.** `assign_buyer_to_tier` stamped tier + quota fields but NOT `entitlements` — and `_resolve_signin` refuses to issue a JWT for a buyer with empty entitlements. A buyer could redeem successfully and then never sign in again. `assign_buyer_to_tier` now stamps `entitlements: sorted(tier.entitlements)`; fix applies everywhere it's called (redeem, webhook upgrade, admin tier bump).
+3. **Real AppSumo codes had no redemption path.** `/api/licenses/redeem` only checked the pre-uploaded `db.redemption_codes` inventory; buyers paste their LICENSE KEY (UUID) from AppSumo → My Products, which lives in `db.appsumo_licenses` (webhook-populated). Refactored the endpoint core into module-level `licenses_routes.redeem_for_email` with a fallthrough: inventory code → AppSumo license key (case-insensitive, 409 on foreign-email link, 410 on deactivated) → 404. Also NEW `POST /api/licenses/redeem-oauth` which exchanges the AppSumo OAuth `?code=` at `appsumo.com/openid/token/` for the license key (creds via `db.settings("appsumo")` > env — NEW admin `GET/PUT /api/admin/appsumo/config` since Charity can't edit env vars) and redeems it. `/api/appsumo/oauth/redirect`'s hop to `/redeem?appsumo_code=` is now actually consumed by the page.
+4. **New buyers were locked out entirely** (chicken-and-egg: magic-link verify requires an existing buyer with entitlements; redemption requires being signed in). Fix: the redemption code now RIDES ALONG with the magic link. `MagicLinkRequest` gained optional `redeem` / `appsumo_oauth`; the code is stored on the token doc (`auth_magic_link.create_token(redeem_code=…)`, new `consume_token_full`); verify-magic-link applies it via `redeem_for_email` AFTER email ownership is proven, THEN runs `_resolve_signin` — so the buyer record exists by the time the JWT is minted. Failed redemption never blocks an existing customer's sign-in; new-buyer-with-bad-code gets `login?err=code_invalid`.
+
+**Tier values re-aligned to the FINAL listing copy (supersedes the 2026-06-29 draft numbers):**
+- t1 Starter $49: `+shorts` entitlement (listing: Shorts Engine in ALL plans), renders 0 (was 5), thumbnails 20 Fast-only, `sprint_allowed=False` (NEW field).
+- t3 Pro $179 (= listing Tier 2): renders 3 (was 15), avatar 0 (was 5), thumbnails 50 (was unlimited).
+- t4 Pro Plus $349 (= listing Tier 3): renders 13 = 10 Faceless + 3 Avatar (was 40/10), thumbnails 100 (was unlimited), BYOK stays.
+- t2 Creator $99 untouched (not on AppSumo; partner/manual codes only).
+- NEW Sprint Mode tier gate in `/api/scripts/shorts`: blocks `sprint:true` only when the buyer has an explicit tier with `sprint_allowed=False`; legacy buyers without a tier field, founders, and grant emails are never gated.
+
+**Frontend:** `Redeem.jsx` reads `?appsumo_code=`/`?code=` — signed-in users get auto-activation via redeem-oauth ("Activating your purchase…" state); signed-out users are bounced to `/login?appsumo_oauth=…` where `Login.jsx` attaches the pending code (or a pasted `redeem` code) to the magic-link request. New `code_invalid` error copy on Login.
+
+**Merge note:** this branch (claude/run-task-1ocab4) previously carried a parallel AppSumo implementation (`appsumo_routes.py` + `/redeem` page) built before Emergent's workspace was synced to GitHub; it was superseded by Emergent's architecture and removed during the merge. The still-valuable pieces (OAuth exchange, license-key redemption, db-backed config, HMAC-verified webhook behaviors) were re-implemented on top of Emergent's licenses/tier system as described above.
+
+**Verified:** 14/14 pytest (launch flow), frontend production build clean.
+
 ### Iteration 49 (2026-07-01) — Nano Banana for scene stills + Sora 2 test lane (v1.18.4)
 
 **Trigger:** Charity's live-demo Faceless render stuck at 55% (fal.ai out of credits) plus $100+ in June testing burn with unsatisfactory Flux 1.1 Pro quality for professional/consultant/coaching aesthetic. Full strategic conversation captured earlier in the log. Decision: replace Flux with Nano Banana as default, keep Flux as silent fallback, add Sora 2 test lane on admin.

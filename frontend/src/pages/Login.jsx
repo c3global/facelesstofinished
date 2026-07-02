@@ -21,6 +21,7 @@ export default function Login() {
   const [busy, setBusy] = useState(false);
   const [sent, setSent] = useState(false);
   const [pendingRedeem, setPendingRedeem] = useState("");
+  const [pendingOauth, setPendingOauth] = useState("");
 
   // Detect returning customers from the durable localStorage flag.
   const isReturning = useMemo(() => {
@@ -38,18 +39,28 @@ export default function Login() {
       no_access_for_this_email: "We couldn't find an active F2F48 account for that email. Contact support@c3global.co if you think this is wrong.",
       missing_token: "The sign-in link didn't include a valid token. Request a fresh one below.",
       verify_failed: "We couldn't complete sign-in. Try requesting a new link.",
+      code_invalid: "We couldn't apply your code — it may have expired or already been used. Restart activation from AppSumo → My Products, or contact support@c3global.co.",
     };
     setErr(map[cb] || "Something went wrong. Try requesting a new sign-in link.");
   }, [params]);
 
   // If the user got bounced here from /redeem, keep the pending code so
   // they can pick up where they left off after signing in via the link.
+  // Two flavors: a pasted code/license key (redeem) and the single-use
+  // AppSumo OAuth code (appsumo_oauth). Both ride along with the magic-link
+  // request and are applied server-side after the email is proven.
   useEffect(() => {
     const urlCode = params.get("redeem");
     let stash = "";
     try { stash = localStorage.getItem("f48_pending_redeem") || ""; } catch { /* ignored */ }
     const code = (urlCode || stash || "").trim();
     if (code) setPendingRedeem(code);
+
+    const urlOauth = params.get("appsumo_oauth");
+    let oauthStash = "";
+    try { oauthStash = localStorage.getItem("f48_pending_redeem_oauth") || ""; } catch { /* ignored */ }
+    const oauth = (urlOauth || oauthStash || "").trim();
+    if (oauth) setPendingOauth(oauth);
   }, [params]);
 
   const submit = async (e) => {
@@ -57,7 +68,10 @@ export default function Login() {
     setErr("");
     setBusy(true);
     try {
-      await apiClient.post("/auth/request-magic-link", { email: email.trim() });
+      const body = { email: email.trim() };
+      if (pendingRedeem) body.redeem = pendingRedeem;
+      else if (pendingOauth) body.appsumo_oauth = pendingOauth;
+      await apiClient.post("/auth/request-magic-link", body);
       // Persist a returning flag now (before they even click the link)
       // so the next visit renders "Welcome back" copy.
       try { localStorage.setItem("f48_studio_returning", "1"); } catch { /* ignored */ }

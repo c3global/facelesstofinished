@@ -1630,7 +1630,14 @@ def register_admin_routes(
     def _extract_tier(p: dict) -> str:
         """Locate the target tier id for upgrade/downgrade/migrate events.
         AppSumo ships it as `plan_id`, `tier`, or `new_plan` depending on
-        the integration spec version + which event."""
+        the integration spec version + which event.
+
+        AppSumo Licensing v2 sends the tier as a NUMBER matching the public
+        listing (`"tier": 2`), so values are normalized through
+        appsumo_tier_to_tier_id (1→t1, 2→t3, 3→t4; internal ids pass
+        through). Returns "" when nothing mappable is found."""
+        from tier_config import appsumo_tier_to_tier_id  # noqa: PLC0415
+
         for path in [
             ("tier",), ("plan_id",), ("plan",), ("new_plan",), ("new_tier",),
             ("data", "tier"), ("data", "plan_id"), ("data", "new_plan"),
@@ -1641,8 +1648,10 @@ def register_admin_routes(
                     node = None
                     break
                 node = node.get(k)
-            if isinstance(node, str) and node.strip():
-                return node.strip().lower()
+            if isinstance(node, (str, int, float)) and str(node).strip():
+                mapped = appsumo_tier_to_tier_id(node)
+                if mapped:
+                    return mapped
         return ""
 
     def _extract_license_key(p: dict) -> str:

@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import React, { useEffect, useMemo, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { KeyRound, CheckCircle2, ArrowRight } from "lucide-react";
 import { apiClient, useAuth } from "../App";
 
@@ -14,14 +14,57 @@ import { apiClient, useAuth } from "../App";
  *   - Signed in: paste code → POST /api/licenses/redeem → land in Studio.
  *   - Not signed in: send to /login?redeem=<code> so they auth first, then
  *     auto-replay the redemption.
+ *   - AppSumo OAuth redirect: arrives with ?code= (or ?appsumo_code= via
+ *     the backend's /api/appsumo/oauth/redirect hop). Signed-in users get
+ *     it exchanged automatically via POST /api/licenses/redeem-oauth; new
+ *     buyers are bounced to /login where the code rides along with the
+ *     magic-link request and is applied server-side after email proof.
  */
 export default function Redeem() {
-  const { user, refresh } = useAuth();
+  const { user, loading, refresh } = useAuth();
   const nav = useNavigate();
+  const [params] = useSearchParams();
+  const oauthCode = useMemo(
+    () => (params.get("appsumo_code") || params.get("code") || "").trim(),
+    [params],
+  );
   const [code, setCode] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState(null);
+
+  // AppSumo OAuth arrival — auto-activate once auth state is known.
+  useEffect(() => {
+    if (!oauthCode || loading || success) return;
+    if (!user) {
+      // New buyer: the OAuth code rides along with the magic-link request
+      // (Login reads this stash) and is redeemed server-side after the
+      // email is proven. It's single-use, so it must not be burned here.
+      try { localStorage.setItem("f48_pending_redeem_oauth", oauthCode); } catch {}
+      nav(`/login?appsumo_oauth=${encodeURIComponent(oauthCode)}`, { replace: true });
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      setSubmitting(true);
+      setError("");
+      try {
+        const r = await apiClient.post("/licenses/redeem-oauth", { code: oauthCode });
+        if (cancelled) return;
+        setSuccess(r.data);
+        try { localStorage.removeItem("f48_pending_redeem_oauth"); } catch {}
+        try { await refresh?.(); } catch {}
+      } catch (e) {
+        if (cancelled) return;
+        const detail = e?.response?.data?.detail;
+        setError(typeof detail === "string" ? detail : (detail?.message || "Couldn't activate your AppSumo purchase."));
+      } finally {
+        if (!cancelled) setSubmitting(false);
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [oauthCode, user, loading]);
 
   const trimmed = code.trim();
   const canSubmit = trimmed.length >= 6 && !submitting && !success;
@@ -78,6 +121,10 @@ export default function Redeem() {
               Open your dashboard <ArrowRight size={14} />
             </button>
           </div>
+        ) : oauthCode && submitting ? (
+          <p className="redeem-sub" data-testid="redeem-oauth-activating" role="status">
+            Activating your purchase…
+          </p>
         ) : (
           <form onSubmit={onSubmit} className="redeem-form">
             <label className="redeem-label" htmlFor="redeem-input">

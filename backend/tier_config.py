@@ -78,6 +78,11 @@ class Tier:
     gates. New buyers must NEVER be assigned FOUNDER; it's stamped only on
     the 39 pre-existing buyers via a one-time migration."""
 
+    sprint_allowed: bool = True
+    """Whether Content Sprint (5-variant shorts generation) is available.
+    Per the final AppSumo listing (2026-07-02): Sprint Mode is 'Not
+    included' at Tier 1 / Starter, included everywhere above."""
+
     def to_dict(self) -> dict:
         return asdict(self)
 
@@ -88,17 +93,28 @@ class Tier:
 # list to find "next tier above current".
 # ----------------------------------------------------------------------------
 
+# NOTE (2026-07-02): T1/T3/T4 quotas re-aligned to the FINAL AppSumo listing
+# copy Charity approved ("Change the feature rows to this exact wording"):
+#   All plans: Long-form Script Engine + Shorts Engine + B-roll prompts +
+#              Voiceover cues  → entitlements include "shorts" at every tier.
+#   Tier 1 $49:  20/mo Fast thumbnails; NO Sprint, NO Faceless, NO Avatar.
+#   Tier 2 $179: 50/mo Fast+Quality thumbnails; Sprint; 3/mo Faceless.  (= t3)
+#   Tier 3 $349: 100/mo thumbnails; Sprint; 10/mo Faceless; 3/mo Avatar;
+#                Connect supported AI accounts (BYOK).                  (= t4)
+# The $99 Creator tier (t2) is NOT sold on AppSumo — its values are unchanged
+# and it remains reachable via partner/manual codes only.
 TIER_T1 = Tier(
     id="t1",
     label="Starter",
     sticker_cents=4_900,             # $49
-    entitlements=("base",),
-    render_quota_monthly=5,           # 5 free Faceless renders/month for tier credibility
+    entitlements=("base", "shorts"),  # listing: Shorts Engine included in ALL plans
+    render_quota_monthly=0,           # listing: Faceless videos "Not included"
     avatar_sub_cap=0,                 # No Avatar access at T1
     thumbnail_quota_monthly=20,
     thumbnail_premium_allowed=False,
     monthly_cost_cap_cents=500,       # $5 silent kill-switch
     byok_allowed=False,
+    sprint_allowed=False,             # listing: Sprint Mode "Not included"
 )
 
 TIER_T2 = Tier(
@@ -117,11 +133,11 @@ TIER_T2 = Tier(
 TIER_T3 = Tier(
     id="t3",
     label="Pro",
-    sticker_cents=17_900,            # $179
+    sticker_cents=17_900,            # $179 — AppSumo listing "License Tier 2"
     entitlements=("base", "shorts", "studio"),
-    render_quota_monthly=15,
-    avatar_sub_cap=5,                # 5 of the 15 can be Avatar
-    thumbnail_quota_monthly=9_999,   # effectively unlimited
+    render_quota_monthly=3,          # listing: 3/month Faceless Studio videos
+    avatar_sub_cap=0,                # listing: Avatar Studio videos "Not included"
+    thumbnail_quota_monthly=50,      # listing: 50/month Fast + Quality
     thumbnail_premium_allowed=True,
     monthly_cost_cap_cents=2_000,    # $20 silent kill-switch
     byok_allowed=False,
@@ -130,11 +146,11 @@ TIER_T3 = Tier(
 TIER_T4 = Tier(
     id="t4",
     label="Pro Plus",
-    sticker_cents=34_900,            # $349
+    sticker_cents=34_900,            # $349 — AppSumo listing "License Tier 3"
     entitlements=("base", "shorts", "studio", "byok"),
-    render_quota_monthly=40,
-    avatar_sub_cap=10,               # 10 of the 40 can be Avatar
-    thumbnail_quota_monthly=9_999,
+    render_quota_monthly=13,         # listing: 10/mo Faceless + 3/mo Avatar
+    avatar_sub_cap=3,                # listing: 3/month Avatar Studio videos
+    thumbnail_quota_monthly=100,     # listing: 100/month Fast + Quality
     thumbnail_premium_allowed=True,
     monthly_cost_cap_cents=5_000,    # $50 silent kill-switch (BYOK off path)
     byok_allowed=True,
@@ -172,6 +188,34 @@ REDEEMABLE_TIER_IDS: frozenset[str] = frozenset({t.id for t in TIERS_ORDERED})
 
 # Lookup map for O(1) access by id.
 TIERS_BY_ID: dict[str, Tier] = {t.id: t for t in (TIER_T1, TIER_T2, TIER_T3, TIER_T4, TIER_FOUNDER)}
+
+# AppSumo Licensing v2 webhooks/licenses carry NUMERIC tiers matching the
+# public listing (1, 2, 3) — not our internal ids. The listing sells three
+# tiers ($49/$179/$349) which map onto t1/t3/t4; the $99 Creator tier (t2)
+# is not on AppSumo.
+APPSUMO_NUMERIC_TIER_MAP: dict[str, str] = {"1": "t1", "2": "t3", "3": "t4"}
+
+
+def appsumo_tier_to_tier_id(value) -> str:
+    """Normalize a tier value from an AppSumo payload to an internal tier id.
+
+    Accepts numerics (1, "2", 3.0 → via listing map), internal ids ("t1",
+    "T3" → passthrough), or anything else → "" so callers can reject it.
+    Founder is never resolvable from external input by design."""
+    if value is None:
+        return ""
+    s = str(value).strip().lower()
+    if not s:
+        return ""
+    if s in REDEEMABLE_TIER_IDS:
+        return s
+    # "3.0" → "3" (JSON floats), "tier 2" → "2"
+    s = s.replace("tier", "").strip()
+    try:
+        s = str(int(float(s)))
+    except (ValueError, TypeError):
+        return ""
+    return APPSUMO_NUMERIC_TIER_MAP.get(s, "")
 
 
 # ----------------------------------------------------------------------------
@@ -220,6 +264,11 @@ def assign_buyer_to_tier(*, tier_id: str, is_upgrade: bool = False) -> dict:
     now = datetime.now(timezone.utc)
     payload = {
         "tier": t.id,
+        # Entitlements MUST be stamped here: auth (_resolve_signin) refuses
+        # to issue a JWT for a buyer with an empty entitlements list, so a
+        # tier assignment without entitlements produced buyers who redeemed
+        # successfully but could never sign in again. Fixed 2026-07-02.
+        "entitlements": sorted(t.entitlements),
         "renderQuotaMonthly": t.render_quota_monthly,
         "avatarSubCap": t.avatar_sub_cap,
         "thumbnailQuotaMonthly": t.thumbnail_quota_monthly,

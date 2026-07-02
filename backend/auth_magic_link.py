@@ -80,8 +80,14 @@ async def is_rate_limited(db, email: str) -> bool:
     return count >= MAGIC_LINK_RATE_LIMIT_PER_15MIN
 
 
-async def create_token(db, *, email: str, ip: str = "") -> tuple[str, datetime]:
-    """Insert a fresh single-use token for `email`. Returns (token, expiry)."""
+async def create_token(db, *, email: str, ip: str = "", redeem_code: str = "") -> tuple[str, datetime]:
+    """Insert a fresh single-use token for `email`. Returns (token, expiry).
+
+    `redeem_code` (optional) rides along with the token: a redemption code /
+    AppSumo license key (or `oauth:<code>` for the AppSumo OAuth redirect
+    flow) that verify-magic-link applies AFTER email ownership is proven.
+    This is how brand-new AppSumo buyers get provisioned — they have no
+    buyer record yet, so redemption must happen inside the sign-in flow."""
     token = generate_token()
     created = now_utc()
     expires = created + timedelta(minutes=MAGIC_LINK_TTL_MINUTES)
@@ -92,12 +98,13 @@ async def create_token(db, *, email: str, ip: str = "") -> tuple[str, datetime]:
         "expires_at": expires,   # datetime for TTL index
         "used_at": None,
         "ip": ip[:64],
+        "redeem_code": (redeem_code or "").strip()[:256],
     })
     return token, expires
 
 
-async def consume_token(db, *, token: str) -> Optional[str]:
-    """Validate + single-use consume `token`. Returns the email address
+async def consume_token_full(db, *, token: str) -> Optional[dict]:
+    """Validate + single-use consume `token`. Returns {"email", "redeem_code"}
     when valid, or None when the token is missing/expired/already-used.
 
     Uses an atomic `find_one_and_update` so two concurrent verify hits on
@@ -113,7 +120,16 @@ async def consume_token(db, *, token: str) -> Optional[str]:
     )
     if not doc:
         return None
-    return (doc.get("email") or "").strip().lower() or None
+    email = (doc.get("email") or "").strip().lower()
+    if not email:
+        return None
+    return {"email": email, "redeem_code": (doc.get("redeem_code") or "").strip()}
+
+
+async def consume_token(db, *, token: str) -> Optional[str]:
+    """Back-compat wrapper around consume_token_full — email only."""
+    doc = await consume_token_full(db, token=token)
+    return doc["email"] if doc else None
 
 
 def build_magic_link_url(base_url: str, token: str) -> str:

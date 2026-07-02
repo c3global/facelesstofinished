@@ -482,6 +482,13 @@ async def _resolve_signin(email: str) -> Optional[dict]:
 
 class MagicLinkRequest(BaseModel):
     email: str
+    # Optional redemption payload that rides along with the sign-in link:
+    # an inventory code / AppSumo license key (redeem) OR the AppSumo OAuth
+    # redirect code (appsumo_oauth). Applied by verify-magic-link AFTER
+    # email ownership is proven — this is how brand-new AppSumo buyers
+    # (no buyer record yet, so no other path to a JWT) get provisioned.
+    redeem: Optional[str] = None
+    appsumo_oauth: Optional[str] = None
 
 
 @app.on_event("startup")
@@ -520,7 +527,15 @@ async def request_magic_link(request: Request, payload: MagicLinkRequest):
         return {"ok": True, "sent": True}
 
     ip = request.client.host if request.client else ""
-    token, expires = await auth_magic_link.create_token(db, email=email, ip=ip)
+    # Stash any pending redemption on the token so verify can apply it after
+    # email ownership is proven. OAuth codes get the "oauth:" prefix so the
+    # shared redeemer knows to exchange them (and preserves their case).
+    redeem_code = (payload.redeem or "").strip()
+    if not redeem_code and (payload.appsumo_oauth or "").strip():
+        redeem_code = f"oauth:{payload.appsumo_oauth.strip()}"
+    token, expires = await auth_magic_link.create_token(
+        db, email=email, ip=ip, redeem_code=redeem_code,
+    )
     base_url = auth_magic_link.resolve_base_url(request)
     magic_link_url = auth_magic_link.build_magic_link_url(base_url, token)
 
@@ -582,7 +597,8 @@ async def verify_magic_link(request: Request, token: str = Query(...)):
     from fastapi.responses import RedirectResponse
 
     base_url = auth_magic_link.resolve_base_url(request)
-    email = await auth_magic_link.consume_token(db, token=token)
+    consumed = await auth_magic_link.consume_token_full(db, token=token)
+    email = consumed["email"] if consumed else None
     if not email:
         try:
             await db.activity.insert_one({
@@ -599,6 +615,39 @@ async def verify_magic_link(request: Request, token: str = Query(...)):
             status_code=302,
         )
 
+    # Pending redemption riding on the token (AppSumo onboarding): the email
+    # is now PROVEN, so apply the code BEFORE resolving sign-in — this is
+    # what provisions a brand-new buyer record so _resolve_signin succeeds.
+    # A failed redemption must never block sign-in for someone who already
+    # has access, so failures are logged and we fall through.
+    redeem_error = ""
+    if consumed and consumed.get("redeem_code"):
+        from licenses_routes import redeem_for_email  # noqa: PLC0415
+        try:
+            await redeem_for_email(
+                db, email=email, code_raw=consumed["redeem_code"],
+                log_activity=_log_activity,
+                dev_bypass_email=DEV_BYPASS_EMAIL,
+                studio_grant_emails=STUDIO_GRANT_EMAILS,
+            )
+        except HTTPException as exc:
+            redeem_error = str(exc.detail)
+            try:
+                await db.activity.insert_one({
+                    "id": str(uuid.uuid4()),
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "type": "magic_link_redeem_failed",
+                    "email": email,
+                    "detail": {"reason": redeem_error,
+                               "code_prefix": consumed["redeem_code"][:12]},
+                })
+            except Exception:
+                pass
+        except Exception as exc:  # noqa: BLE001 — never break sign-in
+            redeem_error = "Redemption failed unexpectedly."
+            logger.error("[magic-link] redeem crashed for %s: %s: %s",
+                         email, type(exc).__name__, exc)
+
     resolved = await _resolve_signin(email)
     if not resolved:
         try:
@@ -607,12 +656,16 @@ async def verify_magic_link(request: Request, token: str = Query(...)):
                 "ts": datetime.now(timezone.utc).isoformat(),
                 "type": "magic_link_no_access",
                 "email": email,
-                "detail": {"reason": "no entitlements on file"},
+                "detail": {"reason": "no entitlements on file",
+                           "redeem_error": redeem_error},
             })
         except Exception:
             pass
+        # If they arrived with a code that failed, show the code error —
+        # it's the actionable one (e.g. "already used", "expired link").
+        err = "code_invalid" if redeem_error else "no_access_for_this_email"
         return RedirectResponse(
-            url=f"{base_url}/login?err=no_access_for_this_email",
+            url=f"{base_url}/login?err={err}",
             status_code=302,
         )
 
@@ -4132,6 +4185,23 @@ async def scripts_shorts(payload: ShortsRequest, user: AuthUser = Depends(curren
         raise HTTPException(status_code=400, detail="Invalid platform")
 
     if payload.sprint:
+        # Sprint Mode is tier-gated per the AppSumo listing (T1/Starter:
+        # "Not included"). Legacy buyers without a tier field, founders,
+        # and admin/grant accounts are unaffected — only an explicit tier
+        # with sprint_allowed=False blocks.
+        buyer = await db.buyers.find_one({"email": user.email})
+        buyer_tier_id = ((buyer or {}).get("tier") or "").strip().lower()
+        if buyer_tier_id and not (buyer or {}).get("founders"):
+            from tier_config import get_tier as _get_tier  # noqa: PLC0415
+            _tier = _get_tier(buyer_tier_id)
+            if not _tier.sprint_allowed and not _tier.is_founder_grandfather:
+                raise HTTPException(
+                    status_code=403,
+                    detail=(
+                        f"Content Sprint isn't included in your {_tier.label} plan. "
+                        "Upgrade your license to unlock 5-variant sprints."
+                    ),
+                )
         system = build_sprint_system_prompt(payload.platform)
         user_msg = (
             f"Generate a CONTENT SPRINT — 5 distinct shorts on the topic: {payload.topic.strip()}.\n"
