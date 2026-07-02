@@ -31,10 +31,14 @@ Tier model (per Charity's AppSumo listing, 2026-07-02):
   - Tier 1 ($49):  scripts only.
   - Tier 2 ($179): + Studio ("studio" entitlement).
   - Tier 3 ($349): + Studio.
-  NOTE: the listing's per-month render quotas (3/10 faceless, 3 avatar) and
-  the Sprint/Avatar gates are NOT enforced in code — per Charity's explicit
-  instruction the integration must not modify the existing (Emergent-built)
-  render/scripts endpoints. Only the tier → entitlement mapping is applied.
+  Per-tier limits from the listing (Sprint gate, faceless/avatar renders per
+  month) are enforced at the render + shorts endpoints in server.py via
+  get_buyer_appsumo_limits() — Charity approved this on 2026-07-02. Limits
+  apply only to buyers whose access came from AppSumo (source == "appsumo");
+  Pinball/admin-granted customers stay unlimited. The listing's thumbnail
+  quota and "Connected AI accounts" rows concern features that don't exist
+  in this codebase copy (they live in Emergent's workspace) and can't be
+  enforced here.
 
 Refund safety: each license doc records which entitlements it NEWLY granted,
 so a deactivate (refund) removes only AppSumo's own grants — a Pinball
@@ -94,6 +98,23 @@ except json.JSONDecodeError:
     logger.warning("APPSUMO_TIER_MAP env var is not valid JSON, falling back to defaults")
     APPSUMO_TIER_MAP = DEFAULT_APPSUMO_TIER_MAP
 
+# Per-tier feature limits, enforced in server.py for AppSumo-sourced buyers.
+# sprint: Content Sprint (5-variant shorts) allowed?
+# faceless_per_month / avatar_per_month: Studio render quotas (0 = not included).
+# Composite renders use a HeyGen avatar, so they draw from the avatar quota.
+# JSON env override APPSUMO_TIER_LIMITS_MAP available for future tier changes.
+DEFAULT_APPSUMO_TIER_LIMITS = {
+    "1": {"sprint": False, "faceless_per_month": 0, "avatar_per_month": 0},
+    "2": {"sprint": True, "faceless_per_month": 3, "avatar_per_month": 0},
+    "3": {"sprint": True, "faceless_per_month": 10, "avatar_per_month": 3},
+}
+try:
+    _env_limits = os.environ.get("APPSUMO_TIER_LIMITS_MAP", "").strip()
+    APPSUMO_TIER_LIMITS = json.loads(_env_limits) if _env_limits else DEFAULT_APPSUMO_TIER_LIMITS
+except json.JSONDecodeError:
+    logger.warning("APPSUMO_TIER_LIMITS_MAP env var is not valid JSON, falling back to defaults")
+    APPSUMO_TIER_LIMITS = DEFAULT_APPSUMO_TIER_LIMITS
+
 STUDIO_LIFETIME_PERIOD_END = "2099-01-01T00:00:00Z"
 
 
@@ -120,6 +141,28 @@ def _tier_entitlements(tier: Any) -> list[str]:
         logger.warning(f"[appsumo] unknown tier {tier!r}; falling back to tier 1")
         ents = APPSUMO_TIER_MAP.get("1", ["base", "shorts"])
     return sorted(set(ents))
+
+
+async def get_buyer_appsumo_limits(db, email: str) -> Optional[dict]:
+    """Per-month feature limits for a buyer, or None for unlimited access.
+
+    Limits apply only to pure AppSumo customers (buyer.source == "appsumo"
+    with an appsumo_tier on file). Buyers who first arrived via Pinball /
+    admin grant keep unrestricted access even if they also redeem an
+    AppSumo license. Imported by server.py at the render + sprint gates.
+    """
+    buyer = await db.buyers.find_one({"email": (email or "").strip().lower()})
+    if not buyer or buyer.get("source") != "appsumo":
+        return None
+    tier = buyer.get("appsumo_tier")
+    if tier is None:
+        return None
+    limits = APPSUMO_TIER_LIMITS.get(str(tier))
+    if limits is None:
+        # Unknown tier — don't lock a paying customer out; log for follow-up.
+        logger.warning(f"[appsumo] no limits defined for tier {tier!r} ({email})")
+        return None
+    return {**limits, "tier": tier}
 
 
 def _verify_signature(api_key: str, raw_body: bytes, timestamp: str, signature: str) -> bool:
@@ -162,6 +205,23 @@ def register_appsumo_routes(*, api, db, current_user, log_activity) -> None:
     # ------------------------------------------------------------------
     # Shared grant / revoke helpers
     # ------------------------------------------------------------------
+    async def _active_tiers(email: str, exclude_key: Optional[str] = None) -> list[int]:
+        """Tier numbers of the buyer's ACTIVE AppSumo licenses (parent deals
+        only — add-ons carry a tier but don't map to plan tiers)."""
+        filt: dict[str, Any] = {
+            "email": email, "status": "active",
+            "parent_license_key": {"$in": [None, ""]},
+        }
+        if exclude_key:
+            filt["license_key"] = {"$ne": exclude_key}
+        tiers = []
+        async for other in db.appsumo_licenses.find(filt):
+            try:
+                tiers.append(int(other.get("tier") or 1))
+            except (TypeError, ValueError):
+                tiers.append(1)
+        return tiers
+
     async def _grant_for_license(email: str, lic: dict) -> list[str]:
         """Grant the license's tier entitlements to `email` in db.buyers.
         Records which entitlements were newly added by THIS license on the
@@ -173,9 +233,18 @@ def register_appsumo_routes(*, api, db, current_user, log_activity) -> None:
         newly = sorted(set(ents) - prev)
         merged = sorted(prev | set(ents))
 
+        try:
+            this_tier = int(lic.get("tier") or 1)
+        except (TypeError, ValueError):
+            this_tier = 1
+        # Highest tier across active licenses wins (covers upgrade windows
+        # where old + new keys are briefly both active).
+        tier = max([this_tier, *(await _active_tiers(email, exclude_key=lic["license_key"]))])
+
         set_doc: dict[str, Any] = {
             "email": email,
             "entitlements": merged,
+            "appsumo_tier": tier,
             "updatedAt": _now_iso(),
             "source": "appsumo" if not buyer else (buyer.get("source") or "appsumo"),
         }
@@ -203,32 +272,36 @@ def register_appsumo_routes(*, api, db, current_user, log_activity) -> None:
     async def _revoke_for_license(lic: dict) -> list[str]:
         """Claw back what THIS license granted, but keep any entitlement still
         covered by another active AppSumo license on the same email (upgrade
-        flows: the new key's grant must survive the old key's deactivate)."""
+        flows: the new key's grant must survive the old key's deactivate).
+        Also recomputes the buyer's appsumo_tier from remaining licenses."""
         email = lic.get("email")
-        removable = set(lic.get("granted_entitlements") or [])
-        if not email or not removable:
-            return []
-        keep: set[str] = set()
-        async for other in db.appsumo_licenses.find(
-            {"email": email, "status": "active", "license_key": {"$ne": lic["license_key"]}}
-        ):
-            keep |= set(_tier_entitlements(other.get("tier")))
-        to_remove = sorted(removable - keep)
-        if not to_remove:
+        if not email:
             return []
         buyer = await db.buyers.find_one({"email": email})
         if not buyer:
             return []
-        remaining = sorted(set(buyer.get("entitlements") or []) - set(to_remove))
-        unset_doc: dict[str, Any] = {}
-        if "studio" in to_remove:
-            unset_doc = {"studio_status": "", "studio_lifetime": "", "studio_current_period_end": ""}
+        remaining_tiers = await _active_tiers(email, exclude_key=lic["license_key"])
+        removable = set(lic.get("granted_entitlements") or [])
+        keep: set[str] = set()
+        for t in remaining_tiers:
+            keep |= set(_tier_entitlements(t))
+        to_remove = sorted(removable - keep)
+
         update: dict[str, Any] = {
-            "$set": {"entitlements": remaining, "updatedAt": _now_iso()},
+            "$set": {"updatedAt": _now_iso()},
             "$pull": {"appsumo_license_keys": lic["license_key"]},
         }
-        if unset_doc:
-            update["$unset"] = unset_doc
+        if remaining_tiers:
+            update["$set"]["appsumo_tier"] = max(remaining_tiers)
+        else:
+            update.setdefault("$unset", {})["appsumo_tier"] = ""
+        if to_remove:
+            remaining_ents = sorted(set(buyer.get("entitlements") or []) - set(to_remove))
+            update["$set"]["entitlements"] = remaining_ents
+            if "studio" in to_remove:
+                update.setdefault("$unset", {}).update(
+                    {"studio_status": "", "studio_lifetime": "", "studio_current_period_end": ""}
+                )
         await db.buyers.update_one({"email": email}, update)
         return to_remove
 

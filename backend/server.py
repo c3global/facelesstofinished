@@ -52,7 +52,7 @@ from prompts import (
 load_dotenv()
 
 from admin_routes import register_admin_routes  # noqa: E402
-from appsumo_routes import register_appsumo_routes  # noqa: E402
+from appsumo_routes import get_buyer_appsumo_limits, register_appsumo_routes  # noqa: E402
 from uploads_routes import register_uploads_routes  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -252,6 +252,50 @@ async def current_user(authorization: Optional[str] = Header(default=None)) -> A
 def require_studio(user: AuthUser) -> None:
     if "studio" not in user.entitlements:
         raise HTTPException(status_code=403, detail="Studio entitlement required")
+
+
+async def _enforce_appsumo_render_quota(user: AuthUser, mode: str, jobs: int = 1) -> None:
+    """AppSumo tier quota gate for Studio renders (approved by Charity
+    2026-07-02). No-op for non-AppSumo customers — get_buyer_appsumo_limits
+    returns None for Pinball/admin-granted buyers, keeping them unlimited.
+
+    AppSumo tiers include a fixed number of Studio videos per calendar month
+    (UTC): Tier 2 = 3 Faceless; Tier 3 = 10 Faceless + 3 Avatar. Composite
+    renders use a HeyGen avatar so they draw from the Avatar quota. Failed
+    renders don't count against the quota."""
+    limits = await get_buyer_appsumo_limits(db, user.email)
+    if limits is None:
+        return
+    is_avatar = mode in ("avatar", "composite")
+    quota = int(limits.get("avatar_per_month" if is_avatar else "faceless_per_month") or 0)
+    label = "Avatar" if is_avatar else "Faceless"
+    if quota <= 0:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"{label} videos aren't included in your AppSumo tier "
+                f"(Tier {limits['tier']}). Upgrade your license on AppSumo to unlock them."
+            ),
+        )
+    # created_at is a UTC isoformat string, so string comparison is safe here.
+    month_start = datetime.now(timezone.utc).replace(
+        day=1, hour=0, minute=0, second=0, microsecond=0
+    ).isoformat()
+    used = await db.renders.count_documents({
+        "user_email": user.email,
+        "mode": {"$in": ["avatar", "composite"]} if is_avatar else "faceless",
+        "status": {"$ne": "failed"},
+        "created_at": {"$gte": month_start},
+    })
+    if used + jobs > quota:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"You've used {used} of the {quota} {label} videos included in your "
+                f"AppSumo tier this month. Your quota resets on the 1st — or upgrade "
+                f"your license on AppSumo for more."
+            ),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -2577,6 +2621,7 @@ async def studio_render(payload: RenderRequest, user: AuthUser = Depends(current
         raise HTTPException(status_code=400, detail="Bad mode")
     if not payload.script.strip():
         raise HTTPException(status_code=400, detail="Script required")
+    await _enforce_appsumo_render_quota(user, payload.mode)
 
     # Silent runaway-cost circuit-breaker. Not customer-facing cost
     # protection — exists to catch pathological inputs (malformed scripts,
@@ -2657,6 +2702,8 @@ async def studio_render_both_aspects(payload: RenderRequest, user: AuthUser = De
         raise HTTPException(status_code=400, detail="Bad mode")
     if not payload.script.strip():
         raise HTTPException(status_code=400, detail="Script required")
+    # Two jobs are queued at once, so both must fit within the quota.
+    await _enforce_appsumo_render_quota(user, payload.mode, jobs=2)
 
     jobs = []
     for aspect in ("9_16", "16_9"):
@@ -3307,6 +3354,17 @@ async def scripts_shorts(payload: ShortsRequest, user: AuthUser = Depends(curren
         raise HTTPException(status_code=400, detail="Invalid platform")
 
     if payload.sprint:
+        # Sprint Mode is a tier-2+ AppSumo feature; non-AppSumo customers
+        # are unaffected (limits is None for them).
+        limits = await get_buyer_appsumo_limits(db, user.email)
+        if limits is not None and not limits.get("sprint"):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "Sprint Mode isn't included in your AppSumo tier "
+                    f"(Tier {limits['tier']}). Upgrade your license on AppSumo to unlock it."
+                ),
+            )
         system = build_sprint_system_prompt(payload.platform)
         user_msg = (
             f"Generate a CONTENT SPRINT — 5 distinct shorts on the topic: {payload.topic.strip()}.\n"
