@@ -43,6 +43,8 @@ back to it for entitlement verification.
 
 **Verified:** 14/14 pytest (launch flow), frontend production build clean.
 
+**Addendum (same day) — Resend-first magic-link email delivery.** Charity created a Resend account with sending domain **faceless48.com** (DNS verified on Resend; the domain is otherwise NOT yet connected to Emergent or the funnel — that's fine, sending domain ≠ app domain). New `backend/email_delivery.py`: provider chain Resend → GHL → log-only for the magic-link email, with a branded inline-styled HTML template (from-address default `Faceless to Finished <sign-in@faceless48.com>`, override via config). Config: `db.settings("email")` > `RESEND_API_KEY`/`RESEND_FROM` env. NEW admin `GET/PUT /api/admin/email/config` (masked key) so the Resend API key can be stored without env-var access. `request_magic_link` now delegates delivery to the chain; a Resend failure falls back to GHL so a bad key can't lock customers out of sign-in. 17/17 pytests. **Still needed from Charity: the actual Resend API key** (paste in chat → stored as db/env default).
+
 ### Iteration 49 (2026-07-01) — Nano Banana for scene stills + Sora 2 test lane (v1.18.4)
 
 **Trigger:** Charity's live-demo Faceless render stuck at 55% (fal.ai out of credits) plus $100+ in June testing burn with unsatisfactory Flux 1.1 Pro quality for professional/consultant/coaching aesthetic. Full strategic conversation captured earlier in the log. Decision: replace Flux with Nano Banana as default, keep Flux as silent fallback, add Sora 2 test lane on admin.

@@ -317,3 +317,65 @@ async def test_sprint_blocked_for_t1_allowed_for_t3_and_legacy(client, monkeypat
                           json={"topic": "t", "platform": "youtube"},
                           headers=_auth("t1@x.com", ents=["base", "shorts"]))
     assert r.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Magic-link email delivery: Resend-first provider chain + admin config
+# ---------------------------------------------------------------------------
+async def test_magic_link_prefers_resend_when_configured(client, monkeypatch):
+    import email_delivery
+
+    sent = {}
+
+    async def _fake_resend(cfg, *, email, magic_link_url, ttl_minutes):
+        sent.update(email=email, url=magic_link_url, frm=cfg["resend_from"])
+        return {"status": "sent", "provider": "resend", "id": "re_123"}
+
+    monkeypatch.setattr(email_delivery, "send_via_resend", _fake_resend)
+    # Key stored via the db-backed admin config path (no env vars needed).
+    await server.db.settings.update_one(
+        {"_id": "email"},
+        {"$set": {"resend_api_key": "re_test_key",
+                  "resend_from": "F2F48 <sign-in@faceless48.com>"}},
+        upsert=True,
+    )
+    r = await client.post("/api/auth/request-magic-link", json={"email": "rs@x.com"})
+    assert r.status_code == 200 and r.json()["ok"] is True
+    assert sent["email"] == "rs@x.com"
+    assert "/api/auth/verify-magic-link?token=" in sent["url"]
+    assert sent["frm"] == "F2F48 <sign-in@faceless48.com>"
+    act = await server.db.activity.find_one({"type": "magic_link_requested"})
+    assert act["detail"]["delivery_provider"] == "resend"
+    assert act["detail"]["delivery_status"] == "sent"
+
+
+async def test_magic_link_falls_back_to_log_when_no_provider(client):
+    # No Resend key, no GHL env → logged_only, but the request still
+    # succeeds (anti-enumeration + token is stored for manual retrieval).
+    r = await client.post("/api/auth/request-magic-link", json={"email": "np@x.com"})
+    assert r.status_code == 200 and r.json()["ok"] is True
+    act = await server.db.activity.find_one({"type": "magic_link_requested"})
+    assert act["detail"]["delivery_status"] == "logged_only"
+    tok = await server.db.magic_link_tokens.find_one({"email": "np@x.com"})
+    assert tok is not None
+
+
+async def test_admin_email_config_get_and_put(client):
+    admin = "drcharitycampbell@gmail.com"  # default ADMIN_EMAILS entry
+    r = await client.get("/api/admin/email/config", headers=_auth(admin))
+    assert r.status_code == 200
+    assert r.json()["resend_configured"] is False
+
+    r = await client.put("/api/admin/email/config",
+                         json={"resend_api_key": "re_live_abcd9876"},
+                         headers=_auth(admin))
+    assert r.status_code == 200
+    data = r.json()
+    assert data["resend_configured"] is True
+    assert data["resend_api_key_masked"] == "…9876"
+    doc = await server.db.settings.find_one({"_id": "email"})
+    assert doc["resend_api_key"] == "re_live_abcd9876"
+
+    # Non-admin is rejected.
+    r = await client.get("/api/admin/email/config", headers=_auth("user@x.com"))
+    assert r.status_code == 403

@@ -54,6 +54,7 @@ load_dotenv()
 from admin_routes import register_admin_routes  # noqa: E402
 from uploads_routes import register_uploads_routes  # noqa: E402
 import auth_magic_link  # noqa: E402  – magic-link token storage + helpers
+import email_delivery  # noqa: E402  – Resend → GHL → log magic-link delivery chain
 import ghl_integration  # noqa: E402  – outbound webhook to GHL (magic link email)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -539,34 +540,27 @@ async def request_magic_link(request: Request, payload: MagicLinkRequest):
     base_url = auth_magic_link.resolve_base_url(request)
     magic_link_url = auth_magic_link.build_magic_link_url(base_url, token)
 
-    # Log the outbound attempt for admin visibility. If GHL is off we
-    # ALSO log the magic link at INFO so the operator can grab it from
-    # backend logs (last-resort fallback while GHL is being wired).
-    ghl_configured = ghl_integration.is_configured()
-    if not ghl_configured:
-        logger.info(
-            "[magic-link] GHL unconfigured — link for %s (expires %s): %s",
-            email, expires.isoformat(), magic_link_url,
-        )
+    # Deliver via the provider chain: Resend (Charity's account, sending
+    # domain faceless48.com) → GHL outbound webhook → log-only fallback.
+    # See email_delivery.py for config resolution (db.settings > env).
+    async def _log(t, e, d):
+        try:
+            await db.activity.insert_one({
+                "id": str(uuid.uuid4()),
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "type": t, "email": e, "detail": d,
+            })
+        except Exception:
+            pass
 
-    push_result = {"status": "skipped"}
-    if ghl_configured:
-        async def _log(t, e, d):
-            try:
-                await db.activity.insert_one({
-                    "id": str(uuid.uuid4()),
-                    "ts": datetime.now(timezone.utc).isoformat(),
-                    "type": t, "email": e, "detail": d,
-                })
-            except Exception:
-                pass
-        push_result = await ghl_integration.push_magic_link(
-            email=email,
-            magic_link_url=magic_link_url,
-            expires_at_iso=expires.isoformat(),
-            ttl_minutes=auth_magic_link.MAGIC_LINK_TTL_MINUTES,
-            log_activity=_log,
-        )
+    push_result = await email_delivery.send_magic_link_email(
+        db,
+        email=email,
+        magic_link_url=magic_link_url,
+        expires_at_iso=expires.isoformat(),
+        ttl_minutes=auth_magic_link.MAGIC_LINK_TTL_MINUTES,
+        log_activity=_log,
+    )
 
     try:
         await db.activity.insert_one({
@@ -575,7 +569,8 @@ async def request_magic_link(request: Request, payload: MagicLinkRequest):
             "type": "magic_link_requested",
             "email": email,
             "detail": {
-                "ghl_status": push_result.get("status"),
+                "delivery_status": push_result.get("status"),
+                "delivery_provider": push_result.get("provider", "ghl"),
                 "ttl_minutes": auth_magic_link.MAGIC_LINK_TTL_MINUTES,
                 "ip": ip,
             },
@@ -584,6 +579,50 @@ async def request_magic_link(request: Request, payload: MagicLinkRequest):
         pass
 
     return {"ok": True, "sent": True, "ttl_minutes": auth_magic_link.MAGIC_LINK_TTL_MINUTES}
+
+
+class EmailConfigPayload(BaseModel):
+    # Partial updates; empty string clears the override back to env/default.
+    resend_api_key: Optional[str] = None
+    resend_from: Optional[str] = None
+
+
+@api.get("/admin/email/config")
+async def admin_email_config_get(user: AuthUser = Depends(current_user)):
+    """Admin-only view of the transactional email config (secrets masked)."""
+    if not user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin only")
+    cfg = await email_delivery.get_email_config(db)
+    key = cfg["resend_api_key"]
+    return {
+        "resend_configured": bool(key),
+        "resend_api_key_masked": (f"…{key[-4:]}" if len(key) > 4 else "…") if key else "",
+        "resend_from": cfg["resend_from"],
+        "ghl_configured": ghl_integration.is_configured(),
+    }
+
+
+@api.put("/admin/email/config")
+async def admin_email_config_put(payload: EmailConfigPayload, user: AuthUser = Depends(current_user)):
+    """Admin-only: store the Resend API key / from-address in db.settings.
+    Exists because the operator can't edit env vars on her deployment
+    platform — the key from resend.com is pasted here instead."""
+    if not user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin only")
+    updates = {k: v.strip() for k, v in payload.model_dump().items() if v is not None}
+    if not updates:
+        raise HTTPException(status_code=400, detail="Nothing to update")
+    set_doc = {k: v for k, v in updates.items() if v}
+    unset_doc = {k: "" for k, v in updates.items() if not v}
+    update: dict = {}
+    if set_doc:
+        update["$set"] = {**set_doc, "updatedAt": datetime.now(timezone.utc).isoformat()}
+    if unset_doc:
+        update["$unset"] = unset_doc
+    await db.settings.update_one({"_id": "email"}, update, upsert=True)
+    await _log_activity("email_config_updated", user.email,
+                        {"fields": sorted(updates.keys())})  # names only — never values
+    return await admin_email_config_get(user)
 
 
 @api.get("/auth/verify-magic-link")
