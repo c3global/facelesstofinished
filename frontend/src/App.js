@@ -5,6 +5,7 @@ import Studio from "./pages/Studio";
 import Scripts from "./pages/Scripts";
 import Resources from "./pages/Resources";
 import Login from "./pages/Login";
+import Redeem from "./pages/Redeem";
 import Admin from "./pages/Admin";
 import Header from "./components/Header";
 import "./App.css";
@@ -183,6 +184,7 @@ export default function App() {
           <Header />
           <Routes>
             <Route path="/login" element={<Login />} />
+            <Route path="/redeem" element={<Redeem />} />
             <Route path="/studio" element={<RequireStudio><Studio /></RequireStudio>} />
             <Route path="/scripts" element={<RequireAuth><Scripts /></RequireAuth>} />
             <Route path="/resources" element={<RequireAuth><Resources /></RequireAuth>} />

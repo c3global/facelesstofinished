@@ -52,6 +52,7 @@ from prompts import (
 load_dotenv()
 
 from admin_routes import register_admin_routes  # noqa: E402
+from appsumo_routes import register_appsumo_routes  # noqa: E402
 from uploads_routes import register_uploads_routes  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -3412,6 +3413,15 @@ register_admin_routes(
     current_user=current_user,
     ADMIN_EMAILS=ADMIN_EMAILS,
     KNOWN_ENTITLEMENTS=KNOWN_ENTITLEMENTS,
+    log_activity=_log_activity,
+)
+
+# AppSumo licensing — webhook receiver + OAuth redemption + admin license
+# lookup. Same wiring pattern as the Pinball webhook above.
+register_appsumo_routes(
+    api=api,
+    db=db,
+    current_user=current_user,
     log_activity=_log_activity,
 )
 
