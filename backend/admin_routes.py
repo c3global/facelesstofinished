@@ -2249,15 +2249,39 @@ def register_admin_routes(
         payload: Sora2TestRequest = Body(...),
         admin=Depends(require_admin),
     ):
-        # Map aspect → Sora 2's supported size grid (playbook constraint).
-        size_map = {
-            "9_16": "1024x1792",   # vertical
-            "16_9": "1792x1024",   # widescreen
-            "1_1":  "1024x1024",   # square
-        }
+        # Sora 2 SDK enforces its own size grid (differs from raw OpenAI API):
+        #   Allowed:  1280x720, 1792x1024, 1024x1792, 1024x1024
+        # Model → allowed sizes (per OpenAI's own error):
+        #   • sora-2 (fast/standard, $0.10/sec):   1280x720 ONLY (16:9 landscape)
+        #   • sora-2-pro ($0.30-0.50/sec):         1792x1024, 1024x1792, 1024x1024
+        #
+        # ⚠️  KEY IMPLICATION FOR FACELESS TO FINISHED: Charity's primary
+        # output is 9:16 vertical shorts. That requires sora-2-pro at
+        # 1024x1792 → $3.00 for a 10-second clip. Google Veo 3 Fast at
+        # 9:16 costs $1.50 for the same 10-second clip — half the price.
+        # Sora 2 is ONLY cheaper for 16:9 landscape content.
+        if payload.model == "sora-2-pro":
+            size_map = {
+                "9_16": "1024x1792",   # vertical Pro
+                "16_9": "1792x1024",   # widescreen Pro
+                "1_1":  "1024x1024",   # square Pro
+            }
+        else:  # sora-2 (fast/standard tier)
+            size_map = {
+                "16_9": "1280x720",    # widescreen — the ONLY option on sora-2
+                "9_16": None,          # not supported — force upgrade to sora-2-pro
+                "1_1":  None,          # not supported — force upgrade to sora-2-pro
+            }
         size = size_map.get(payload.aspect)
         if not size:
-            raise HTTPException(status_code=400, detail="aspect must be 9_16, 16_9, or 1_1")
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"{payload.model} only supports 16:9 landscape (1280x720). "
+                    f"For 9:16 vertical or square, switch to sora-2-pro "
+                    f"(higher cost but the only tier that supports non-landscape)."
+                ),
+            )
         if payload.duration not in (4, 8, 12):
             raise HTTPException(status_code=400, detail="duration must be 4, 8, or 12")
         if payload.model not in ("sora-2", "sora-2-pro"):

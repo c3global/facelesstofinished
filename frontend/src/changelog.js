@@ -23,6 +23,7 @@ export const CHANGELOG = [
     changes: [
       "Passwordless sign-in — enter your email and we'll send you a one-time secure link. Old paste-and-you're-in login is gone, so your account is safe even if someone knows your email address",
       "Studio Founder Lifetime buyers now get unlimited access the instant Pinball fires — the webhook auto-flags you as a Founder so there's no waiting for a manual grant",
+      "AppSumo redemption + auto-provisioning is live — buyers get their tier, entitlements, and BYOK toggle set the moment they redeem their license key",
       "Tier names cleaned up — Starter ($49) / Pro ($179) / Pro Plus ($349) / Founder. The phantom 'Creator' name that never matched a real product is retired",
       "Founder members keep unlimited access to everything — no quotas, no changes",
     ],
