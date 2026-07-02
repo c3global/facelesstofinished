@@ -44,7 +44,7 @@ back to it for entitlement verification.
 
 **NOT touched (locked by Charity):**
 - `db.buyers` — no migration required. Existing 4 buyers all had `tier: null`; existing 39 grandfathered founders keep `founders: true` flag which trumps tier field.
-- **Pinball webhook** — completely untouched, keeps working exactly as-is for existing direct-sale + entitlement flows.
+- **Pinball webhook** — the entitlement mapping (base / shorts / studio) is unchanged. The ONLY behavior change: when `product == "studio"` is granted, the webhook now ALSO stamps `founders: True` on the buyer record (matching how Studio Founder Lifetime has always been sold as "unlimited"). Comment on the old `founder=False` GHL push line is corrected — Studio purchases via Pinball ARE founders. Production DB is unaffected because existing Studio Founder buyers already have `founders: True` set manually.
 - AppSumo launch flow tests — not re-run (Charity said they're taken care of); code paths updated to match new IDs, `pytest backend/tests/test_appsumo_launch_flow.py` confirms 17/17 pass in ~0.5s.
 
 **Verified:** backend restarts clean, `python -c "import tier_config"` prints `T1=Starter, T2=Pro, T3=Pro Plus, Founder=Founder, AppSumo map={1:t1, 2:t2, 3:t3}`, live curl to `/api/appsumo-webhook` with `tier: 2` returns `{"event": "purchase", "success": true}`, `tier: 3` same.

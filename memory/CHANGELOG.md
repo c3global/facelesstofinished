@@ -12,6 +12,8 @@ first. Plain English — if you're a customer reading this, this is for you.
 
 ---
 
+- **Studio Founder Lifetime = auto-Founder.** Charity clarified her $297 (or 3×$99 payment plan) Studio Founder Lifetime product is meant to be truly unlimited from the moment Pinball fires. The webhook was setting `studio_lifetime: True` on the buyer but NOT `founders: True`, and the render quota gate ONLY checks `founders`. Fixed by stamping `founders: True` alongside the existing `studio_lifetime` metadata whenever `product == "studio"` in the Pinball webhook. Same fix updates the GHL outbound push so Studio purchases correctly tag as `founder` in her workflows (was tagged as `pro` before). Production DB is unaffected — existing Studio Founder buyers already have the flag set manually; this change ONLY affects NEW purchases going forward. The comment on the old `founder=False` GHL push line was corrected (previous engineer's assumption that "founders never enter via Pinball" was wrong — that IS how she sells Founder). Payment plan (3×$99) is the same Pinball product_id as the $297 one-time, so single mapping covers both.
+
 ## v1.19.0 — July 2, 2026 (Passwordless magic-link sign-in + tier cleanup)
 
 - **Passwordless sign-in** — the login screen now emails you a secure

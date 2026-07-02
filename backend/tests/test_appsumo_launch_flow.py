@@ -384,3 +384,55 @@ async def test_admin_email_config_get_and_put(client):
     # Non-admin is rejected.
     r = await client.get("/api/admin/email/config", headers=_auth("user@x.com"))
     assert r.status_code == 403
+
+
+
+
+# ---------------------------------------------------------------------------
+# Pinball Studio Founder Lifetime → auto-Founder (2026-07-02 fix)
+# ---------------------------------------------------------------------------
+async def test_pinball_studio_purchase_auto_flags_founder(client, monkeypatch):
+    """Studio Founder Lifetime buyers (Charity's $297 direct-sale product,
+    sold via Pinball) must be truly unlimited from the moment Pinball fires
+    the webhook — not gated by the Pro-tier fallback (3 renders/month) that
+    tier_for_entitlements would otherwise resolve them to.
+
+    Fix: the Pinball webhook now stamps `founders: True` alongside the
+    existing `studio_lifetime: True` metadata whenever `product == "studio"`.
+    The render quota gate at server.py:3294 short-circuits to `return None`
+    (unlimited) as soon as `founders: True` is present.
+
+    Regression guard: shorts/base products must NOT auto-set founders.
+    """
+    import admin_routes
+    monkeypatch.setattr(admin_routes, "PINBALL_WEBHOOK_TOKEN", "test-token")
+
+    # Studio purchase → founders: True + studio_lifetime: True.
+    r = await client.post(
+        "/api/pinball-webhook?token=test-token&product=studio",
+        json={
+            "email": "founder@x.com",
+            "total_amount": "29700",  # $297.00
+            "order_id": "pinball-studio-founder-1",
+            "data": {"items": [{"product_id": "01kv67kgk9z028tn0hy1kzk92r"}]},
+        },
+    )
+    assert r.status_code == 200, r.text
+    buyer = await server.db.buyers.find_one({"email": "founder@x.com"})
+    assert buyer["founders"] is True
+    assert buyer["studio_lifetime"] is True
+    assert "studio" in buyer["entitlements"]
+
+    # Shorts purchase → founders NOT auto-set (only Studio Founder Lifetime is).
+    r = await client.post(
+        "/api/pinball-webhook?token=test-token&product=shorts",
+        json={
+            "email": "shortsbuyer@x.com",
+            "total_amount": "4700",
+            "order_id": "pinball-shorts-1",
+        },
+    )
+    assert r.status_code == 200, r.text
+    buyer = await server.db.buyers.find_one({"email": "shortsbuyer@x.com"})
+    assert buyer.get("founders") in (None, False)
+    assert "shorts" in buyer["entitlements"]

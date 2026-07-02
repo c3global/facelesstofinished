@@ -1191,6 +1191,15 @@ def register_admin_routes(
             set_doc["studio_status"] = "active"
             set_doc["studio_lifetime"] = True
             set_doc["studio_current_period_end"] = STUDIO_LIFETIME_PERIOD_END
+            # Studio Founder Lifetime = your direct-sale Founder product
+            # ($297 one-time or 3×$99 payment plan). Stamping `founders: True`
+            # here means the render quota gate (server.py:3294) treats them
+            # as unlimited on the very first render, without waiting for a
+            # manual admin flag. Idempotent — True stays True on repeat
+            # webhook hits. (Reversed 2026-07-02 after Charity clarified
+            # her Founder tier is auto-provisioned via Pinball, not just
+            # manual onboarding.)
+            set_doc["founders"] = True
 
         # Pending welcome toast — flagged only when this webhook ADDS at least
         # one new entitlement. auth_check reads & clears this on first sign-in
