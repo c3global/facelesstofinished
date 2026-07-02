@@ -60,7 +60,12 @@ import tier_config  # noqa: E402
 
 
 @pytest_asyncio.fixture(autouse=True)
-async def clean_db():
+async def clean_db(monkeypatch):
+    # Neutralize the baked-in production Resend key so no test can reach
+    # the real API — tests that exercise Resend set a key via db.settings
+    # and stub send_via_resend.
+    import email_delivery
+    monkeypatch.setattr(email_delivery, "DEFAULT_RESEND_API_KEY", "")
     for coll in ("buyers", "appsumo_licenses", "redemption_codes",
                  "magic_link_tokens", "activity", "settings", "scripts"):
         await server.db[coll].delete_many({})

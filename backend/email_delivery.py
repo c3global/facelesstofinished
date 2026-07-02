@@ -31,10 +31,18 @@ RESEND_API_URL = "https://api.resend.com/emails"
 
 DEFAULT_FROM = "Faceless to Finished <sign-in@faceless48.com>"
 
+# Baked-in default Resend key (Charity's account, provided 2026-07-02).
+# Lives in code because the operator can't edit env vars on her deployment
+# platform. db.settings("email") and the RESEND_API_KEY env var both
+# override it. TODO once Emergent env access returns: move this to an env
+# var and ROTATE the key at resend.com → API Keys (revoke this one).
+DEFAULT_RESEND_API_KEY = "re_Xnv4diji_3xBqgxv4NnLSjnT5V2zNUEcx"
+
 
 async def get_email_config(db) -> dict:
     cfg = {
-        "resend_api_key": (os.environ.get("RESEND_API_KEY") or "").strip(),
+        "resend_api_key": (os.environ.get("RESEND_API_KEY") or "").strip()
+        or DEFAULT_RESEND_API_KEY,
         "resend_from": (os.environ.get("RESEND_FROM") or "").strip() or DEFAULT_FROM,
     }
     doc = await db.settings.find_one({"_id": "email"}) or {}
