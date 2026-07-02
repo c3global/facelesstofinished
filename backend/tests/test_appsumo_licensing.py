@@ -157,29 +157,29 @@ async def test_webhook_test_ping_returns_success_without_side_effects(env):
 
 async def test_webhook_hmac_signature_enforced_when_key_set(env):
     client, db = env
-    appsumo_routes.APPSUMO_API_KEY = "secret-api-key"
-    try:
-        body = {"event": "purchase", "license_key": "k-hmac", "test": True}
-        raw = json.dumps(body).encode()
-        ts = "1751470000"
-        good_sig = hmac.new(b"secret-api-key", ts.encode() + raw, hashlib.sha256).hexdigest()
+    # API key stored via the db-backed settings (Admin → AppSumo config path).
+    await db.settings.update_one(
+        {"_id": "appsumo"}, {"$set": {"api_key": "secret-api-key"}}, upsert=True
+    )
+    body = {"event": "purchase", "license_key": "k-hmac", "test": True}
+    raw = json.dumps(body).encode()
+    ts = "1751470000"
+    good_sig = hmac.new(b"secret-api-key", ts.encode() + raw, hashlib.sha256).hexdigest()
 
-        r = await client.post(
-            WEBHOOK, content=raw,
-            headers={"Content-Type": "application/json",
-                     "X-Appsumo-Timestamp": ts, "X-Appsumo-Signature": "bogus"},
-        )
-        assert r.status_code == 401
+    r = await client.post(
+        WEBHOOK, content=raw,
+        headers={"Content-Type": "application/json",
+                 "X-Appsumo-Timestamp": ts, "X-Appsumo-Signature": "bogus"},
+    )
+    assert r.status_code == 401
 
-        r = await client.post(
-            WEBHOOK, content=raw,
-            headers={"Content-Type": "application/json",
-                     "X-Appsumo-Timestamp": ts, "X-Appsumo-Signature": good_sig},
-        )
-        assert r.status_code == 200
-        assert r.json()["success"] is True
-    finally:
-        appsumo_routes.APPSUMO_API_KEY = ""
+    r = await client.post(
+        WEBHOOK, content=raw,
+        headers={"Content-Type": "application/json",
+                 "X-Appsumo-Timestamp": ts, "X-Appsumo-Signature": good_sig},
+    )
+    assert r.status_code == 200
+    assert r.json()["success"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -211,15 +211,16 @@ async def test_redeem_links_email_and_grants_tier_entitlements(env):
     assert r.status_code == 200, r.text
     data = r.json()
     assert data["email"] == "sumo@example.com"
-    assert data["entitlements"] == ["base", "shorts"]  # tier 2
+    assert data["entitlements"] == ["base", "shorts", "studio"]  # tier 2
 
     buyer = await db.buyers.find_one({"email": "sumo@example.com"})
-    assert buyer["entitlements"] == ["base", "shorts"]
+    assert buyer["entitlements"] == ["base", "shorts", "studio"]
     assert buyer["source"] == "appsumo"
     assert buyer["pending_welcome"] is True
+    assert buyer["studio_lifetime"] is True
     lic = await db.appsumo_licenses.find_one({"license_key": LK1})
     assert lic["email"] == "sumo@example.com"
-    assert lic["granted_entitlements"] == ["base", "shorts"]
+    assert lic["granted_entitlements"] == ["base", "shorts", "studio"]
 
 
 async def test_redeem_conflicting_email_is_rejected(env):
@@ -256,7 +257,7 @@ async def test_upgrade_carries_email_and_deactivate_of_old_key_keeps_new_grants(
     await _post_webhook(client, {"event": "activate", "license_key": LK1,
                                  "license_status": "inactive", "tier": 1})
     buyer = await db.buyers.find_one({"email": "up@x.com"})
-    assert buyer["entitlements"] == ["base"]
+    assert buyer["entitlements"] == ["base", "shorts"]  # tier 1 = both script engines
 
     # Upgrade to tier 3 → new key LK2, then simultaneous deactivate of LK1.
     r = await _post_webhook(client, {
@@ -330,3 +331,41 @@ async def test_admin_license_search(env):
     assert data["items"][0]["license_key"] == LK1
     r = await client.get("/api/admin/appsumo/licenses", params={"q": LK1[:8]})
     assert r.json()["total"] == 1
+
+
+async def test_admin_config_get_and_put(env):
+    client, db = env
+    # GET exposes the effective webhook token/URL (env-provided in tests)
+    r = await client.get("/api/admin/appsumo/config")
+    assert r.status_code == 200
+    cfg = r.json()
+    assert cfg["webhook_token"] == "as_test-token-123"
+    assert "appsumo-webhook?token=as_test-token-123" in cfg["webhook_url"]
+    assert cfg["client_id_set"] is True  # env "cid"
+
+    # PUT stores overrides in db.settings; secrets come back masked
+    r = await client.put("/api/admin/appsumo/config",
+                         json={"api_key": "final-portal-key-9876"})
+    assert r.status_code == 200
+    cfg = r.json()
+    assert cfg["api_key_set"] is True
+    assert cfg["api_key_masked"] == "…9876"
+    doc = await db.settings.find_one({"_id": "appsumo"})
+    assert doc["api_key"] == "final-portal-key-9876"
+
+    # Clearing with an empty string falls back to env/default
+    r = await client.put("/api/admin/appsumo/config", json={"api_key": ""})
+    assert r.json()["api_key_set"] is False
+
+
+async def test_webhook_token_override_from_db_settings(env):
+    client, db = env
+    await db.settings.update_one(
+        {"_id": "appsumo"}, {"$set": {"webhook_token": "as_rotated"}}, upsert=True
+    )
+    # Old (env) token no longer accepted; db-stored token is.
+    r = await _post_webhook(client, {"event": "purchase", "license_key": "k", "test": True})
+    assert r.status_code == 401
+    r = await _post_webhook(client, {"event": "purchase", "license_key": "k", "test": True},
+                            url="/api/appsumo-webhook?token=as_rotated")
+    assert r.status_code == 200
