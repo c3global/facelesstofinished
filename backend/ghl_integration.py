@@ -178,3 +178,53 @@ def push_in_background(
         # called outside an async context, e.g. during module import).
         # Silently skip — the next live request will catch up.
         pass
+
+
+# ---------------------------------------------------------------------------
+# Magic-link email push — fires when a user requests a sign-in link.
+# Payload shape is distinct from the buyer-lifecycle push so Charity's
+# GHL workflows can filter on `event == "magic_link_requested"` and route
+# the send through her transactional-email node.
+# ---------------------------------------------------------------------------
+
+def build_magic_link_payload(
+    *,
+    email: str,
+    magic_link_url: str,
+    expires_at_iso: str,
+    ttl_minutes: int,
+) -> dict[str, Any]:
+    return {
+        "event": "magic_link_requested",
+        "email": (email or "").strip().lower(),
+        "magic_link_url": magic_link_url,
+        "expires_at": expires_at_iso,
+        "ttl_minutes": ttl_minutes,
+        "tags": ["f2f48-customer", "event:magic-link"],
+        "occurred_at": datetime.now(timezone.utc).isoformat(),
+        "app": "F2F48",
+    }
+
+
+async def push_magic_link(
+    *,
+    email: str,
+    magic_link_url: str,
+    expires_at_iso: str,
+    ttl_minutes: int,
+    log_activity: Optional[Callable[[str, str, dict[str, Any]], Awaitable[None]]] = None,
+    timeout_s: float = 8.0,
+) -> dict[str, Any]:
+    """Send the magic-link payload to GHL synchronously (short timeout).
+
+    Runs synchronously (not fire-and-forget) so the /auth/request-magic-link
+    handler can surface a friendly error if the GHL workflow is
+    misconfigured — the user needs to know their email won't arrive.
+    """
+    payload = build_magic_link_payload(
+        email=email,
+        magic_link_url=magic_link_url,
+        expires_at_iso=expires_at_iso,
+        ttl_minutes=ttl_minutes,
+    )
+    return await push(payload, log_activity=log_activity, timeout_s=timeout_s)

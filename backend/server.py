@@ -53,6 +53,8 @@ load_dotenv()
 
 from admin_routes import register_admin_routes  # noqa: E402
 from uploads_routes import register_uploads_routes  # noqa: E402
+import auth_magic_link  # noqa: E402  – magic-link token storage + helpers
+import ghl_integration  # noqa: E402  – outbound webhook to GHL (magic link email)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("f48")
@@ -383,36 +385,16 @@ async def health():
     return {"ok": True}
 
 
-@api.post("/auth/check")
-async def auth_check(payload: LoginPayload):
-    """Verify a user has Studio access.
+async def _resolve_signin(email: str) -> Optional[dict]:
+    """Shared post-authentication resolver — turns a verified email into a
+    (token, user, welcome?) response tuple by checking DEV_BYPASS,
+    STUDIO_GRANT, and `db.buyers` in order. Returns None when the email
+    has no path to a token (unknown buyer / no entitlements).
 
-    Resolution order (first match wins):
-      1. `DEV_BYPASS_EMAIL` — preview/local-only single-email bypass so devs
-         can hit the Studio UI without touching production data. Set ONLY in
-         the preview .env; never in production env vars.
-      2. `STUDIO_GRANT_EMAILS` — comma-separated list of hand-onboarded
-         founders that get instant access. Permanent admin backstop.
-      3. `db.buyers` lookup — admin-added buyers (Admin → Buyers UI) and
-         Pinball-webhook buyers (auto-populated on paid orders). LIVE
-         source of truth for paying customers since the Netlify→Emergent
-         migration. Returns a one-time `welcome` field on first sign-in
-         after a Pinball auto-grant so the UI can celebrate.
+    IMPORTANT: this helper trusts that the caller has ALREADY proven the
+    user owns the email address (via a valid magic-link token). It is
+    NOT safe to call from an unverified `/auth/check` request.
     """
-    email = payload.email.strip().lower()
-    if not email:
-        raise HTTPException(status_code=400, detail="Email required")
-
-    # Stamp a real "last seen" timestamp on the buyer record AFTER a successful
-    # sign-in. The pre-fix admin Stats tab was reading lastLoginAt from CSV
-    # imports + webhook payloads only — meaning users who actually signed in
-    # via this endpoint never got a real timestamp, and the "Active users
-    # (30d)" metric was effectively stale historical data. We update inside
-    # each successful resolution path below (not here at the top) so failed
-    # auth attempts don't pollute the timestamp, and we use `update_one` with
-    # `upsert=False` so DEV_BYPASS / STUDIO_GRANT users without a buyer
-    # record don't accidentally create one. Idempotent + cheap (one indexed
-    # email lookup + one $set per successful sign-in).
     async def _stamp_last_login() -> None:
         try:
             now_iso = datetime.now(timezone.utc).isoformat()
@@ -425,12 +407,11 @@ async def auth_check(payload: LoginPayload):
                 upsert=False,
             )
         except Exception:
-            # Never block sign-in on a telemetry write — log silently and
-            # let the auth flow continue. Worst case: the user signs in,
-            # stat doesn't tick. Better than a 500 on a successful login.
             pass
 
-    # 1) Dev bypass — preview env only.
+    # 1) Dev bypass — preview env only. STILL requires the magic-link flow
+    # in production; this branch just means the dev doesn't need an entry
+    # in db.buyers.
     if DEV_BYPASS_EMAIL and email == DEV_BYPASS_EMAIL:
         is_admin = email in ADMIN_EMAILS
         token = issue_jwt(email, KNOWN_ENTITLEMENTS, is_admin=is_admin)
@@ -450,25 +431,14 @@ async def auth_check(payload: LoginPayload):
             "user": {"email": email, "entitlements": KNOWN_ENTITLEMENTS, "isAdmin": is_admin},
         }
 
-    # 3) Database-backed buyer lookup — admin-added buyers + Pinball-webhook
-    #    buyers. This is the SOURCE OF TRUTH for paying customers since the
-    #    Netlify→Emergent migration. The admin Buyers UI writes here, and the
-    #    Pinball webhook auto-populates this collection on every paid order.
+    # 3) Database-backed buyer lookup — source of truth for paying customers.
     buyer = await db.buyers.find_one({"email": email})
     if buyer:
         ents = list(buyer.get("entitlements") or [])
         is_admin = email in ADMIN_EMAILS
-        # Admins can sign in even with no entitlements (so an owner without
-        # a purchase record can still use the app). Everyone else needs at
-        # least one entitlement on file. Empty-entitlement buyers are
-        # treated as "revoked" — admin can re-grant via the Buyers UI.
         if is_admin and not ents:
             ents = list(KNOWN_ENTITLEMENTS)
         if ents:
-            # First-sign-in welcome flag — set by the Pinball webhook when it
-            # auto-provisions a buyer. We read it ONCE on first sign-in and
-            # clear it atomically so the frontend can show a "Welcome — access
-            # granted" toast exactly once per Pinball grant.
             welcome = None
             if buyer.get("pending_welcome"):
                 welcome = {
@@ -488,13 +458,229 @@ async def auth_check(payload: LoginPayload):
             if welcome:
                 response["welcome"] = welcome
             return response
+    return None
 
-    # 4) No remaining resolution path. The cross-origin Netlify auth-me
-    #    handshake was retired with the Netlify site itself — db.buyers is
-    #    now the single source of truth. Anyone who can't sign in here
-    #    either hasn't been admin-granted or hasn't completed a Pinball
-    #    purchase (or used a different email at checkout).
-    raise HTTPException(status_code=401, detail="Could not sign in. Use the email you bought with.")
+
+# ---------------------------------------------------------------------------
+# Magic-link auth (P0 security fix — replaces the previous "type-your-email-
+# and-you're-in" flow with a real passwordless email verification loop).
+#
+# Flow:
+#   POST /api/auth/request-magic-link  { email }
+#     → Generates a 32-byte token, stores it in db.magic_link_tokens with a
+#       15-minute expiry, and pushes an outbound webhook to GHL. GHL's
+#       workflow sends the actual email via her transactional-email node.
+#     → Returns { ok: true } ALWAYS (anti-enumeration).
+#
+#   GET /api/auth/verify-magic-link?token=<token>
+#     → Validates the token (atomic single-use consume), runs the shared
+#       _resolve_signin() helper to derive entitlements + JWT, and
+#       302-redirects to `<app_base>/auth/callback#jwt=<JWT>&email=<email>`
+#     → Frontend AuthCallback.jsx page reads the fragment, stores the
+#       token, and navigates to /scripts.
+# ---------------------------------------------------------------------------
+
+class MagicLinkRequest(BaseModel):
+    email: str
+
+
+@app.on_event("startup")
+async def _magic_link_indexes() -> None:
+    await auth_magic_link.ensure_indexes(db)
+
+
+@api.post("/auth/request-magic-link")
+async def request_magic_link(request: Request, payload: MagicLinkRequest):
+    """Generate and email (via GHL) a single-use sign-in link.
+
+    Returns `{ok: true, sent: true}` regardless of whether the email is on
+    file — this prevents email enumeration. If GHL is unconfigured we log
+    the magic link so the operator can retrieve it manually while the
+    webhook is being wired.
+    """
+    email = (payload.email or "").strip().lower()
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="Enter a valid email address.")
+
+    # Rate-limit BEFORE we hit downstream so a hostile client can't burn
+    # our GHL webhook budget hammering one address.
+    if await auth_magic_link.is_rate_limited(db, email):
+        # Log but still return generic success. The real user will see
+        # "check your email" and the earlier link is still valid.
+        try:
+            await db.activity.insert_one({
+                "id": str(uuid.uuid4()),
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "type": "magic_link_rate_limited",
+                "email": email,
+                "detail": {"ip": request.client.host if request.client else ""},
+            })
+        except Exception:
+            pass
+        return {"ok": True, "sent": True}
+
+    ip = request.client.host if request.client else ""
+    token, expires = await auth_magic_link.create_token(db, email=email, ip=ip)
+    base_url = auth_magic_link.resolve_base_url(request)
+    magic_link_url = auth_magic_link.build_magic_link_url(base_url, token)
+
+    # Log the outbound attempt for admin visibility. If GHL is off we
+    # ALSO log the magic link at INFO so the operator can grab it from
+    # backend logs (last-resort fallback while GHL is being wired).
+    ghl_configured = ghl_integration.is_configured()
+    if not ghl_configured:
+        logger.info(
+            "[magic-link] GHL unconfigured — link for %s (expires %s): %s",
+            email, expires.isoformat(), magic_link_url,
+        )
+
+    push_result = {"status": "skipped"}
+    if ghl_configured:
+        async def _log(t, e, d):
+            try:
+                await db.activity.insert_one({
+                    "id": str(uuid.uuid4()),
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "type": t, "email": e, "detail": d,
+                })
+            except Exception:
+                pass
+        push_result = await ghl_integration.push_magic_link(
+            email=email,
+            magic_link_url=magic_link_url,
+            expires_at_iso=expires.isoformat(),
+            ttl_minutes=auth_magic_link.MAGIC_LINK_TTL_MINUTES,
+            log_activity=_log,
+        )
+
+    try:
+        await db.activity.insert_one({
+            "id": str(uuid.uuid4()),
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "type": "magic_link_requested",
+            "email": email,
+            "detail": {
+                "ghl_status": push_result.get("status"),
+                "ttl_minutes": auth_magic_link.MAGIC_LINK_TTL_MINUTES,
+                "ip": ip,
+            },
+        })
+    except Exception:
+        pass
+
+    return {"ok": True, "sent": True, "ttl_minutes": auth_magic_link.MAGIC_LINK_TTL_MINUTES}
+
+
+@api.get("/auth/verify-magic-link")
+async def verify_magic_link(request: Request, token: str = Query(...)):
+    """Consume the magic-link token and 302 to the frontend callback.
+
+    On failure (invalid / expired / already-used) we redirect to /login
+    with an `?err=...` query param so the user sees a friendly explanation
+    instead of a JSON 4xx dump.
+    """
+    from fastapi.responses import RedirectResponse
+
+    base_url = auth_magic_link.resolve_base_url(request)
+    email = await auth_magic_link.consume_token(db, token=token)
+    if not email:
+        try:
+            await db.activity.insert_one({
+                "id": str(uuid.uuid4()),
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "type": "magic_link_invalid",
+                "email": "",
+                "detail": {"ip": request.client.host if request.client else ""},
+            })
+        except Exception:
+            pass
+        return RedirectResponse(
+            url=f"{base_url}/login?err=expired_or_invalid_link",
+            status_code=302,
+        )
+
+    resolved = await _resolve_signin(email)
+    if not resolved:
+        try:
+            await db.activity.insert_one({
+                "id": str(uuid.uuid4()),
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "type": "magic_link_no_access",
+                "email": email,
+                "detail": {"reason": "no entitlements on file"},
+            })
+        except Exception:
+            pass
+        return RedirectResponse(
+            url=f"{base_url}/login?err=no_access_for_this_email",
+            status_code=302,
+        )
+
+    callback_url = auth_magic_link.build_callback_url(
+        base_url, resolved["token"], email=email,
+    )
+    try:
+        await db.activity.insert_one({
+            "id": str(uuid.uuid4()),
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "type": "magic_link_verified",
+            "email": email,
+            "detail": {"ip": request.client.host if request.client else ""},
+        })
+    except Exception:
+        pass
+    return RedirectResponse(url=callback_url, status_code=302)
+
+
+@api.post("/auth/check")
+async def auth_check(payload: LoginPayload):
+    """Verify a user has Studio access — LOCAL DEV ONLY.
+
+    v1.19.0 (P0 security fix): this endpoint now REJECTS every request
+    except `DEV_BYPASS_EMAIL` — production sign-in goes through the
+    magic-link flow (`/auth/request-magic-link` → email → `/auth/verify-
+    magic-link` → JWT). The previous behaviour let anyone who knew a
+    paying customer's email address log in as them, which was
+    unacceptable ahead of the AppSumo launch.
+    """
+    email = payload.email.strip().lower()
+    if not email:
+        raise HTTPException(status_code=400, detail="Email required")
+
+    # DEV_BYPASS_EMAIL still short-circuits (single email, only set on
+    # preview .env — never in production). Everyone else must use the
+    # magic-link flow.
+    if DEV_BYPASS_EMAIL and email == DEV_BYPASS_EMAIL:
+        is_admin = email in ADMIN_EMAILS
+        token = issue_jwt(email, KNOWN_ENTITLEMENTS, is_admin=is_admin)
+        try:
+            now_iso = datetime.now(timezone.utc).isoformat()
+            await db.buyers.update_one(
+                {"email": email},
+                {"$set": {"lastLoginAt": now_iso, "updatedAt": now_iso},
+                 "$inc": {"loginCount": 1}},
+                upsert=False,
+            )
+        except Exception:
+            pass
+        return {
+            "token": token,
+            "user": {"email": email, "entitlements": KNOWN_ENTITLEMENTS, "isAdmin": is_admin},
+        }
+
+    # Everyone else: force magic-link. Anti-enumeration friendly copy so
+    # the response doesn't reveal whether the address is on file.
+    raise HTTPException(
+        status_code=403,
+        detail="Sign-in without a magic link is disabled. Please request an email link.",
+    )
+
+
+# ---------------------------------------------------------------------------
+# (Legacy /auth/check body removed in v1.19.0 — magic-link is now the sole
+# production path. Sole exception: DEV_BYPASS_EMAIL handled above.)
+# ---------------------------------------------------------------------------
+
 
 
 @api.get("/auth/me")

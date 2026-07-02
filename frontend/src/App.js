@@ -10,6 +10,7 @@ import Roadmap from "./pages/Roadmap";
 import Changelog from "./pages/Changelog";
 import SettingsKeys from "./pages/SettingsKeys";
 import Login from "./pages/Login";
+import AuthCallback from "./pages/AuthCallback";
 import Admin from "./pages/Admin";
 import Header from "./components/Header";
 import Footer from "./components/Footer";
@@ -189,6 +190,7 @@ export default function App() {
           <Header />
           <Routes>
             <Route path="/login" element={<Login />} />
+            <Route path="/auth/callback" element={<AuthCallback />} />
             <Route path="/studio" element={<RequireStudio><Studio /></RequireStudio>} />
             <Route path="/scripts" element={<RequireAuth><Scripts /></RequireAuth>} />
             <Route path="/thumbnails" element={<RequireAuth><Thumbnails /></RequireAuth>} />

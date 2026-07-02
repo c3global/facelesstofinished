@@ -1578,6 +1578,35 @@ def register_admin_routes(
     #   }
 
     APPSUMO_WEBHOOK_TOKEN = os.environ.get("APPSUMO_WEBHOOK_TOKEN", "").strip()
+    # AppSumo Licensing v2: HMAC SHA256 signing key. Same key used to
+    # authenticate outbound Licensing API calls. Set in Partner Portal.
+    # When empty (preview / pre-launch), HMAC verification is a no-op —
+    # the webhook still returns 200 to pass URL validation.
+    APPSUMO_LICENSING_KEY = os.environ.get("APPSUMO_LICENSING_KEY", "").strip()
+
+    def _verify_appsumo_signature(raw_body: bytes, signature: str, timestamp: str) -> bool:
+        """Verify HMAC-SHA256 signature per AppSumo Licensing v2 spec.
+
+        Signature = HMAC_SHA256(APPSUMO_LICENSING_KEY, timestamp + raw_body_utf8)
+
+        Returns True if the signature matches (or if no key is configured —
+        the endpoint stays permissive during pre-launch validation)."""
+        if not APPSUMO_LICENSING_KEY:
+            return True  # not configured yet — accept everything, log a note
+        if not signature or not timestamp:
+            return False
+        try:
+            import hmac  # noqa: PLC0415
+            import hashlib  # noqa: PLC0415
+            msg = timestamp.encode("utf-8") + raw_body
+            expected = hmac.new(
+                APPSUMO_LICENSING_KEY.encode("utf-8"),
+                msg,
+                hashlib.sha256,
+            ).hexdigest()
+            return hmac.compare_digest(expected, signature.strip())
+        except Exception:
+            return False
 
     def _extract_event_type(p: dict) -> str:
         """Find the event-type field across AppSumo's several payload shapes.
@@ -1635,38 +1664,129 @@ def register_admin_routes(
     async def _process_appsumo_event(*, event: str, body: dict, source: str) -> dict:
         """Pure handler shared by the public webhook + the admin Replay
         action. Idempotent — same license_key + event no-ops the second
-        time. Always logs to db.activity for admin visibility."""
+        time. Always logs to db.activity for admin visibility.
+
+        v1.19.0 update: AppSumo Licensing v2 webhooks generally do NOT
+        include an email address (per their partner guide — emails are
+        collected via OAuth on the redirect URL, not in the webhook).
+        We now key by `license_key` first and look up the associated
+        buyer email in db.appsumo_licenses when it's known. Missing
+        email is NOT a fatal error anymore — we log the event against
+        the license record so admin can see the full lifecycle.
+        """
         email = _extract_email(body)
-        if not email or not EMAIL_RE.match(email):
-            await log_activity(
-                "appsumo_webhook_failed", email,
-                {"reason": "missing or malformed email", "event": event,
-                 "payload": body, "source": source},
-            )
-            raise HTTPException(status_code=400, detail="Missing or malformed email")
-
         license_key = _extract_license_key(body)
-        # Dedupe: same license_key + same event = no-op return on second hit.
-        # We stamp `appsumo_events: [{event, license_key, ts}]` onto the buyer
-        # doc as the dedupe trail. Empty license_key means no dedupe (the
-        # webhook still processes, but we can't guarantee idempotency).
-        existing = await db.buyers.find_one({"email": email})
-        if license_key and existing:
-            for ev in (existing.get("appsumo_events") or []):
-                if ev.get("event") == event and ev.get("license_key") == license_key:
-                    await log_activity(
-                        "appsumo_webhook", email,
-                        {"status": "duplicate", "event": event,
-                         "license_key": license_key, "source": source,
-                         "payload": body},
-                    )
-                    return {"status": "duplicate", "event": event,
-                            "license_key": license_key}
+        now = _now_iso()
 
-        from tier_config import assign_buyer_to_tier, tier_for_entitlements  # local import
+        # test:true events are AppSumo's URL-validation ping. They MUST
+        # return 200 with the required success shape without touching
+        # any real data. Handled at the endpoint level, but we defense-
+        # in-depth here too.
+        if body.get("test") is True:
+            await log_activity(
+                "appsumo_webhook", email,
+                {"status": "test_event_acknowledged", "event": event,
+                 "source": source, "license_key": license_key, "payload": body},
+            )
+            return {"status": "test", "event": event, "license_key": license_key}
+
+        # Track the event against the license_key so we can rebuild the
+        # full audit trail even when email isn't known yet.
+        if license_key:
+            try:
+                existing_lic = await db.appsumo_licenses.find_one({"license_key": license_key})
+                # Dedupe: same license_key + same event fired twice = no-op.
+                if existing_lic:
+                    for ev in (existing_lic.get("events") or []):
+                        if ev.get("event") == event and ev.get("event_timestamp") == body.get("event_timestamp"):
+                            await log_activity(
+                                "appsumo_webhook", email,
+                                {"status": "duplicate", "event": event,
+                                 "license_key": license_key, "source": source,
+                                 "payload": body},
+                            )
+                            return {"status": "duplicate", "event": event,
+                                    "license_key": license_key}
+                await db.appsumo_licenses.update_one(
+                    {"license_key": license_key},
+                    {
+                        "$setOnInsert": {
+                            "license_key": license_key,
+                            "created_at": now,
+                            "source": source,
+                        },
+                        "$set": {
+                            "tier": body.get("tier"),
+                            "license_status": body.get("license_status"),
+                            "updated_at": now,
+                            "last_event": event,
+                        },
+                        "$push": {
+                            "events": {
+                                "event": event,
+                                "event_timestamp": body.get("event_timestamp"),
+                                "created_at": body.get("created_at"),
+                                "license_status": body.get("license_status"),
+                                "tier": body.get("tier"),
+                                "prev_license_key": body.get("prev_license_key"),
+                                "partner_plan_name": body.get("partner_plan_name"),
+                                "parent_license_key": body.get("parent_license_key"),
+                                "extra": body.get("extra"),
+                                "ts": now,
+                            },
+                        },
+                    },
+                    upsert=True,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[appsumo] license log write failed: %s", exc)
+
+        # If we don't have an email associated with this license yet, we
+        # can only record the event for later OAuth-driven activation.
+        # Return early with a `pending_email` status so the caller knows.
+        if not email or not EMAIL_RE.match(email):
+            # If we have a `prev_license_key` (upgrade / downgrade), try to
+            # find the email from the previous license.
+            prev = _extract_license_key({"license_key": body.get("prev_license_key") or ""})
+            if prev:
+                try:
+                    prev_doc = await db.appsumo_licenses.find_one({"license_key": prev})
+                    if prev_doc and prev_doc.get("email"):
+                        email = prev_doc["email"].strip().lower()
+                        # Backfill the new license row with the same email.
+                        if license_key:
+                            await db.appsumo_licenses.update_one(
+                                {"license_key": license_key},
+                                {"$set": {"email": email, "updated_at": now}},
+                            )
+                except Exception:
+                    pass
+            if not email:
+                await log_activity(
+                    "appsumo_webhook", "",
+                    {"status": "pending_email", "event": event,
+                     "license_key": license_key, "source": source,
+                     "payload": body},
+                )
+                return {"status": "pending_email", "event": event,
+                        "license_key": license_key}
+
+        # From here on we know the email. Continue with buyer-side dispatch.
+        existing = await db.buyers.find_one({"email": email})
+
+        # Backfill the email on the license row.
+        if license_key:
+            try:
+                await db.appsumo_licenses.update_one(
+                    {"license_key": license_key},
+                    {"$set": {"email": email, "updated_at": now}},
+                )
+            except Exception:
+                pass
+
+        from tier_config import assign_buyer_to_tier, tier_for_entitlements  # local import  # noqa: F401
 
         # ---- Event dispatch --------------------------------------------
-        now = _now_iso()
         revoke_events = {"deactivate", "refund", "cancel", "cancelled", "revoke"}
         upgrade_events = {"upgrade", "stack"}
         downgrade_events = {"downgrade"}
@@ -1834,44 +1954,90 @@ def register_admin_routes(
         raise HTTPException(status_code=400, detail=f"Unknown event: {event}")
 
     @api.post("/appsumo-webhook")
-    async def appsumo_webhook(
-        request: Request,
-        token: str = Query(...),
-    ):
-        """Public AppSumo lifecycle webhook receiver.
+    async def appsumo_webhook(request: Request, token: str = Query(default="")):
+        """Public AppSumo Licensing v2 webhook receiver.
 
-        Closes the refund leak: when AppSumo fires `deactivate` or `refund`
-        (during the 60-day refund window or after a partner-initiated
-        revoke), this endpoint wipes the buyer's entitlements + tier so
-        they immediately lose access to renders. Without this, refunded
-        buyers retained lifetime access forever and Charity ate the
-        rendering cost.
+        AppSumo v2 spec compliance:
+        - Endpoint URL is public (no `?token=` query param required).
+        - MUST return `{event, success: true}` with HTTP 200 for every
+          valid webhook (including the `test: true` validation ping).
+        - MAY verify HMAC-SHA256 signature via `X-Appsumo-Signature` +
+          `X-Appsumo-Timestamp` headers using `APPSUMO_LICENSING_KEY`.
+        - Supports 6 event types: purchase, activate, upgrade, downgrade,
+          migrate, deactivate. Extra tolerance for refund/cancel/etc.
+        - Emails are NOT expected in the webhook — collected via OAuth
+          redirect. License events are tracked by `license_key`.
 
-        Token-gated via ?token=<APPSUMO_WEBHOOK_TOKEN>. Empty configured
-        token = endpoint disabled (rejects everything with 401). Same
-        token-gate pattern as /pinball-webhook for consistency.
+        Backwards-compat: if `?token=<APPSUMO_WEBHOOK_TOKEN>` is passed,
+        it's still validated (this preserves the admin's ability to
+        trigger internal replays without HMAC keys). AppSumo itself will
+        NEVER pass this param — its calls go through the HMAC path.
         """
-        if not APPSUMO_WEBHOOK_TOKEN or token != APPSUMO_WEBHOOK_TOKEN:
-            try:
-                body = await request.json()
-            except Exception:
-                body = {"_raw": (await request.body()).decode("utf-8", "replace")[:1000]}
-            await log_activity(
-                "appsumo_webhook_failed", "",
-                {"reason": "invalid token", "payload": body, "source": "appsumo"},
-            )
-            raise HTTPException(status_code=401, detail="Invalid token")
-
+        # Read raw body FIRST so HMAC verification can hash it byte-for-byte.
         try:
-            body = await request.json()
-        except Exception:
+            raw = await request.body()
+            body = json.loads(raw.decode("utf-8"))
+            if not isinstance(body, dict):
+                body = {}
+        except (ValueError, UnicodeDecodeError):
+            # Malformed body — return 200 anyway with a fallback event so
+            # AppSumo doesn't retry a permanently-broken payload forever.
             await log_activity(
                 "appsumo_webhook_failed", "",
                 {"reason": "malformed json", "source": "appsumo"},
             )
-            raise HTTPException(status_code=400, detail="Malformed JSON")
+            return {"event": "purchase", "success": False,
+                    "message": "Malformed JSON body"}
+
+        # HMAC verification (skipped when APPSUMO_LICENSING_KEY is empty).
+        signature = request.headers.get("X-Appsumo-Signature", "")
+        ts_header = request.headers.get("X-Appsumo-Timestamp", "")
+        hmac_valid = _verify_appsumo_signature(raw, signature, ts_header)
+
+        # Fallback auth: legacy token query gate — only enforced when both
+        # HMAC verification is DISABLED (empty key) AND the token query is
+        # non-empty. AppSumo itself never sends a token; leaving the key
+        # empty during pre-launch keeps the endpoint fully open.
+        if APPSUMO_LICENSING_KEY:
+            if not hmac_valid:
+                await log_activity(
+                    "appsumo_webhook_failed", "",
+                    {"reason": "invalid HMAC signature",
+                     "signature_present": bool(signature),
+                     "ts_present": bool(ts_header),
+                     "payload_keys": sorted(list(body.keys()))[:20] if isinstance(body, dict) else [],
+                     "source": "appsumo"},
+                )
+                # AppSumo webhook must return 200 even on failed HMAC or
+                # they mark the endpoint unreachable. Their spec: we OWN
+                # the auth, they own the transport.
+                return {"event": (body.get("event") or "purchase"),
+                        "success": False, "message": "Invalid signature"}
+        elif APPSUMO_WEBHOOK_TOKEN and token and token != APPSUMO_WEBHOOK_TOKEN:
+            # Only reject when a *token was explicitly provided* AND doesn't
+            # match. AppSumo requests (no token) pass through this gate.
+            await log_activity(
+                "appsumo_webhook_failed", "",
+                {"reason": "legacy token mismatch", "source": "appsumo"},
+            )
+            return {"event": (body.get("event") or "purchase"),
+                    "success": False, "message": "Invalid token"}
 
         event = _extract_event_type(body)
+        # AppSumo test/validation ping: test:true. Return the required
+        # success shape immediately without touching any real data.
+        if body.get("test") is True:
+            # Echo the event field so we pass URL validation for any of
+            # the 6 event types AppSumo may fire during onboarding.
+            echoed = event or "purchase"
+            await log_activity(
+                "appsumo_webhook", "",
+                {"status": "test_event", "event": echoed,
+                 "source": "appsumo", "hmac_valid": hmac_valid,
+                 "payload": body},
+            )
+            return {"event": echoed, "success": True}
+
         if not event:
             await log_activity(
                 "appsumo_webhook_failed", _extract_email(body),
@@ -1879,12 +2045,84 @@ def register_admin_routes(
                  "top_keys": sorted(list(body.keys()))[:20] if isinstance(body, dict) else [],
                  "payload": body, "source": "appsumo"},
             )
-            raise HTTPException(
-                status_code=400,
-                detail="Missing event type. Expected `event`/`action`/`type` field.",
-            )
+            # Still 200 (AppSumo requires) but with success:false so their
+            # dashboard flags it for us to fix.
+            return {"event": "purchase", "success": False,
+                    "message": "Missing event field"}
 
-        return await _process_appsumo_event(event=event, body=body, source="appsumo")
+        # Process the event. Handler may raise HTTPException on unknown
+        # events; we catch and translate to the AppSumo success:false
+        # shape so we keep returning HTTP 200.
+        try:
+            await _process_appsumo_event(event=event, body=body, source="appsumo")
+        except HTTPException as exc:
+            await log_activity(
+                "appsumo_webhook_failed", _extract_email(body),
+                {"reason": str(exc.detail), "event": event,
+                 "source": "appsumo", "payload": body},
+            )
+            return {"event": event, "success": False,
+                    "message": str(exc.detail)}
+        except Exception as exc:  # noqa: BLE001
+            logger.error("[appsumo] handler crashed: %s: %s", type(exc).__name__, exc)
+            await log_activity(
+                "appsumo_webhook_failed", _extract_email(body),
+                {"reason": f"{type(exc).__name__}: {exc}",
+                 "event": event, "source": "appsumo", "payload": body},
+            )
+            return {"event": event, "success": False,
+                    "message": "Internal error — see admin logs"}
+
+        return {"event": event, "success": True}
+
+    @api.get("/appsumo-webhook")
+    async def appsumo_webhook_probe():
+        """GET probe endpoint. Some webhook validators send a GET before
+        the POST validation ping to confirm the URL is alive. Returns
+        200 with a friendly JSON blob rather than 405."""
+        return {"ok": True, "endpoint": "appsumo-webhook",
+                "hint": "This is a POST-only webhook receiver."}
+
+    @api.get("/appsumo/oauth/redirect")
+    async def appsumo_oauth_redirect(request: Request, code: str = Query(default="")):
+        """AppSumo OAuth Redirect URL — GET endpoint that AppSumo hits after
+        a customer purchase.
+
+        Per AppSumo Licensing v2 spec:
+          - Must be publicly reachable
+          - Must return HTTP 200 (validation-time)
+          - After a real purchase, gets `?code=<oauth_code>` — we exchange
+            it for an access_token, fetch the license_key + status, then
+            redirect the buyer to our /redeem page with their code so
+            they can activate it against their email.
+
+        For URL validation (no `code` query param) we return 200 with
+        a friendly welcome JSON blob so the AppSumo dashboard passes
+        the redirect-URL health check.
+        """
+        # Validation-time probe (no code) → 200 OK
+        if not code:
+            return {"ok": True, "message": "AppSumo redirect URL ready.",
+                    "next": "activate a real purchase to see the redemption flow"}
+        # Real activation flow — hand off to the customer-facing /redeem
+        # page which will prompt for email + apply the code.
+        from fastapi.responses import RedirectResponse
+        origin = (request.headers.get("origin") or "").strip()
+        if not origin:
+            referer = (request.headers.get("referer") or "").strip()
+            if referer:
+                from urllib.parse import urlparse  # noqa: PLC0415
+                try:
+                    u = urlparse(referer)
+                    if u.scheme and u.netloc:
+                        origin = f"{u.scheme}://{u.netloc}"
+                except Exception:
+                    pass
+        origin = (os.environ.get("APP_BASE_URL") or origin or "").rstrip("/")
+        return RedirectResponse(
+            url=f"{origin}/redeem?appsumo_code={code}",
+            status_code=302,
+        )
 
     @api.post("/admin/appsumo/test-webhook")
     async def admin_appsumo_test_webhook(
