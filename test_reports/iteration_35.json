@@ -1,0 +1,45 @@
+{
+  "summary": "Iter 35 (Group E — BYOK) is MOSTLY GREEN. Backend pytest 13/13 PASS (test_iter35_byok.py): GET /api/user/byok 401 without JWT; owner gets byok_allowed=true with all 3 services (openai/heygen/fal) configured=false at baseline; T1 buyer gets byok_allowed=false; T4 buyer gets byok_allowed=true. POST: success returns ok=true + masked hint 'sk-…XXXX' (full plaintext NEVER in response or list); short key 422; unknown service 400; T1 buyer 403 with detail.reason='byok_not_allowed'. DELETE: success ok=true + removes db.byok_keys row; missing returns 404. Idempotent upsert verified: encrypted_key changes, created_at preserved, updated_at bumped. Encryption sanity: ciphertext starts with Fernet token prefix 'gAAAAA' + does NOT contain plaintext. Render-path wiring verified by static source inspection: _run_render_avatar calls get_byok_key(db,user_email,'heygen') → _override_heygen_key_ctx.set(); _run_render_faceless does the same for 'fal'; nested helpers (_fal_t2v_generate, _fal_kling_i2v_generate, _burn_in_captions) all use _effective_fal_key(). Frontend Playwright: login as drcharitycampbell@gmail.com works; DIRECT NAV to /settings/keys renders settings-keys-main + all 3 service cards (openai/heygen/fal); save 'sk-test-byok-1234567890abc' → saved badge shows ' Saved · sk-…0abc' (mask correct, no plaintext leak); short key 'short' on heygen → settings-key-err-heygen 'That key looks too short.'; delete openai with confirm → saved badge disappears; 0 console errors on /settings/keys page; regression /scripts /studio /redeem /thumbnails all load 0 errors. CRITICAL BUG FOUND: ProfileMenu 'API keys' link (data-testid='profile-menu-keys') is NOT rendered for owner/founder/studio-grant users because /api/me/quota's early-return dict for those users omits the byok_allowed field. ProfileMenu line 133 gates the link on `quota?.byok_allowed` which evaluates as falsy when the field is undefined. Users must currently know the URL /settings/keys to access the page.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "GET /api/me/quota", "issue": "Omits byok_allowed field in the unlimited early-return branches (owner/studio-grant at server.py:500-505 and founder at 508-513). Frontend ProfileMenu gates the 'API keys' link on quota?.byok_allowed, so owners/founders/grants don't see the link despite the BYOK backend accepting their requests via the dev_bypass + studio_grant + founders allowlist in byok_routes._require_byok_allowed.", "priority": "HIGH"}
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "ProfileMenu", "issue": "'API keys' menu link missing for DEV_BYPASS owner (drcharitycampbell@gmail.com). Root cause is the backend bug above. The menu shows only 'Redeem code' + 'Sign out' for the owner. (Spec requires profile-menu-keys to be visible.)", "selector": "[data-testid='profile-menu-keys']", "priority": "HIGH"}
+    ],
+    "integration_issues": [
+      {"flow": "Profile menu → /settings/keys discovery", "issue": "Owner/Founder/Studio-grant users cannot discover the BYOK page from the UI — the link is hidden. Direct URL navigation works perfectly.", "affected_selectors": ["[data-testid='profile-menu-keys']"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter35_byok.py",
+    "/app/test_reports/pytest/iteration_35.xml"
+  ],
+  "action_items": [
+    "Fix /api/me/quota: add `\"byok_allowed\": True` to BOTH unlimited early-return dicts in server.py — lines ~500-505 (DEV_BYPASS / STUDIO_GRANT branch) and lines ~508-513 (founders branch). Founder/owner/studio-grant users are unconditionally allowed by byok_routes._require_byok_allowed, so the quota field must reflect that. Single-line change in each branch.",
+    "After the fix, re-verify in the UI: ProfileMenu for drcharitycampbell@gmail.com should now show the 'API keys' (KeyRound icon) item with data-testid='profile-menu-keys' between 'Redeem code' and 'Sign out'."
+  ],
+  "critical_code_review_comments": [
+    "byok_routes.py is clean: Fernet vault with deterministic JWT_SECRET-derived fallback (logged-once on first miss), masked hints never leak plaintext, upsert preserves created_at via $setOnInsert, get_byok_key stamps last_used_at fire-and-forget so render code never fails due to vault write issues — solid design.",
+    "_load_fernet() falls back silently — fallback derived key is logged at WARNING level only when an invalid env key is set, NOT when the env key is missing entirely. Acceptable for preview/dev but operator should be aware that an unset BYOK_ENCRYPTION_KEY produces no warning at all. Minor: consider one-time INFO log on cold start when fallback is used.",
+    "Render-path BYOK lookups (server.py:2038-2046 and 2262-2270) correctly wrap the lookup in try/except so a vault failure NEVER breaks the render — falls back to platform key silently. Good defensive design.",
+    "Single source-of-truth bug: /api/me/quota and byok_routes._require_byok_allowed disagree on whether owner/founder/grant users can BYOK. byok_routes says YES; /me/quota implicitly says NO by omission. Fix at /me/quota (cheaper than reworking the frontend).",
+    "Pydantic SaveKeyRequest min_length=8 produces 422 on short key, but byok_routes also has an in-route `if len(key) < 8: raise 400` which is dead code (the Pydantic validator fires first). Not a bug, just dead code worth removing in a future cleanup.",
+    "SettingsKeys.jsx — clean React: useCallback load, per-service draft state, optimistic 2.4s success toast, native window.confirm() for delete (spec-conformant but a custom modal would feel less jarring). All required data-testids present.",
+    "DELETE on a never-saved service returns 404 — correct per spec, but the frontend's Delete button only renders when svc.configured=true, so the 404 path is effectively unreachable from the UI (good)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter35_byok.py (new — 13 pytest cases)"
+  ],
+  "success_rate": {"backend": "100% (13/13 BYOK tests pass)", "frontend": "85% (page+save+delete+short-error all work via direct URL; ProfileMenu discovery link missing due to backend /me/quota bug)"},
+  "test_credentials": "Owner/Admin: drcharitycampbell@gmail.com (DEV_BYPASS passwordless). T1/T4 buyers: forged JWT (HS256 with backend JWT_SECRET) on auto-seeded test_iter35_byok_*@example.com — cleaned up by per-fixture teardown.",
+  "seed_data_creation": "Per-test fixtures create+delete 2 buyer docs (test_iter35_byok_t1_<rand>@example.com tier=t1, test_iter35_byok_t4_<rand>@example.com tier=t4) and clean db.byok_keys for OWNER_EMAIL before/after each test. No leaked rows.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend BYOK endpoints + render-path wiring are 100% solid. Encryption verified end-to-end (Fernet 'gAAAAA' prefix, no plaintext in mongo, masked hint format 'XXX…YYYY'). The ONLY gap is the ProfileMenu link not rendering for owner/founder/grant users — root cause is /api/me/quota's early-return branches missing byok_allowed. After main agent adds `\"byok_allowed\": True` to both unlimited dicts in me_quota(), retest by logging in as drcharitycampbell@gmail.com → open profile menu → assert [data-testid='profile-menu-keys'] is visible → click it → assert URL becomes /settings/keys.",
+  "rca of the issue": "RCA: ProfileMenu.jsx:133 uses `quota?.byok_allowed && (...)` to gate the API-keys link. /api/me/quota (server.py:495-549) has THREE return paths: (1) unlimited dev_bypass/studio_grant → returns only {unlimited, tier_id, tier_label}; (2) founder unlimited → same minimal shape; (3) normal buyer → full shape including byok_allowed at line 548. Paths 1 and 2 omit byok_allowed, so quota.byok_allowed === undefined for the very users who ARE allowed (per byok_routes._require_byok_allowed which dev_bypass+studio_grant+founders all bypass to True). Reproduction: GET /api/me/quota as drcharitycampbell@gmail.com → response has no byok_allowed key. Mitigation: add `\"byok_allowed\": True` to both early-return dicts. One-line fix per branch."
+}

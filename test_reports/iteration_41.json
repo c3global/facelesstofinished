@@ -1,0 +1,68 @@
+{
+  "summary": "Iteration 41 — v1.17.0 light-mode polish trilogy (Studio eyebrow + Owner pill + Settings/Keys page) verified GREEN. All 9 acceptance criteria PASS via getComputedStyle inspection in real browser. Dark-mode regression byte-for-byte unchanged. v1.16.0 Thumbnails light fixes still working. No new bugs found.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Clean v1.17.0 scope — overrides are all inside [data-theme='light'] block, routed through design tokens (var(--surface), var(--bg), var(--muted), var(--warning), var(--accent), var(--border)). Dark mode is provably untouched (rgb(201,149,108) eyebrow, rgba(15,10,30,0.55) card bg both verified pixel-exact).",
+    "App.css is now well past 6800+ lines. Recommend per-page CSS modules (studio.css, thumbnails.css, settings.css) each owning its own [data-theme='light'] block. Otherwise the trilogy will become a quadrilogy when the next card component (e.g., /admin tabs, /resources tiles) lands.",
+    "Consider introducing a shared `.surface-card` mixin/utility (bg=var(--surface), border=1px solid var(--border), shadow=var(--shadow-card)) so future card components automatically theme-switch and avoid the recurring pattern of hardcoded rgba(15,10,30,0.55) leaking into light mode.",
+    "Owner pill light-mode gradient (cream→lavender) is subtle but legible against the lavender page bg. Border rgb(168,112,69) at 1px is what carries the visual weight — good call. Make sure new pills follow the same border+gradient pattern rather than relying on the dark 16% alpha trick."
+  ],
+  "updated_files": [],
+  "success_rate": { "backend": "n/a (skipped per request)", "frontend": "100% (9/9 acceptance criteria)" },
+  "test_credentials": "drcharitycampbell@gmail.com (DEV_BYPASS owner, isAdmin=true, byok_allowed=true)",
+  "seed_data_creation": "Used live Anthropic key save+delete cycle on the actual /settings/keys page (sk-ant-test1234 placeholder, deleted at end — no residue).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "v1.17.0 trilogy complete. Verification snippet for next agent (login + on /settings/keys with localStorage.f48_studio_theme='light'):\n  getComputedStyle(document.querySelector('.settings-key-card')).backgroundColor === 'rgb(255, 255, 255)'\n  getComputedStyle(document.querySelector('[data-testid=\\\"studio-eyebrow\\\"]')).color === 'color(srgb 0.513882 0.342588 0.211059)' (≈rgb(131,87,54))\n  getComputedStyle(document.querySelector('.quota-pill-unlimited')).borderColor === 'rgb(168, 112, 69)'\nDark-mode regression equivalents: studio-eyebrow → rgb(201,149,108); settings-key-card bg → rgba(15,10,30,0.55).",
+  "verified_measurements": {
+    "studio_light": {
+      "studio_eyebrow_color": "color(srgb 0.513882 0.342588 0.211059)  ≈ rgb(131,87,54) — DEEP COPPER ✓",
+      "owner_pill_color": "color(srgb 0.519608 0.35 0.25) ≈ rgb(132,89,64) — warning 75% mix ✓",
+      "owner_pill_border": "rgb(168, 112, 69) — full copper var(--warning) ✓",
+      "owner_pill_bg": "linear-gradient(135deg, cream, lavender) ✓"
+    },
+    "thumbnails_light": {
+      "thumb_eyebrow_color": "color(srgb 0.513882 0.342588 0.211059) — matches studio eyebrow ✓",
+      "thumb_card_bg": "rgb(255, 255, 255) ✓",
+      "thumb_tile_bg": "rgb(255, 255, 255) ✓",
+      "thumb_tile_prompt_color": "rgb(91, 86, 128) ✓"
+    },
+    "settings_keys_light": {
+      "hero_bg": "linear-gradient(135deg, lavender, cream) — soft accent+warning ✓",
+      "title_color": "rgb(26, 21, 48) — exact --text ✓",
+      "sub_color": "rgb(91, 86, 128) — exact --muted ✓",
+      "card_count": 6,
+      "card_bgs": "all 6 = rgb(255, 255, 255) ✓",
+      "card_borders": "all 6 = rgb(216, 210, 234) (--border) ✓",
+      "input_bg": "rgb(246, 244, 251) — exact --bg ✓",
+      "save_btn_bg": "rgb(168, 112, 69) — exact --warning ✓",
+      "save_btn_color": "rgb(255, 255, 255) ✓",
+      "trust_bg": "rgb(255, 255, 255) ✓"
+    },
+    "save_delete_cycle": {
+      "is_saved_bg": "linear-gradient(135deg, warm-cream, white) ✓",
+      "after_delete": "rgb(255, 255, 255), no is-saved class ✓"
+    },
+    "dark_regression": {
+      "theme_attr": "dark ✓",
+      "studio_eyebrow_color": "rgb(201, 149, 108) — original copper untouched ✓",
+      "owner_pill_color": "rgb(245, 217, 182) ✓",
+      "owner_pill_bg": "linear-gradient(135deg, rgba(201,149,108,0.16), rgba(127,119,221,0.16)) — original 16% gradient ✓",
+      "settings_card_bg": "rgba(15, 10, 30, 0.55) — exact byte-for-byte ✓"
+    },
+    "cross_page_smoke_light": {
+      "/scripts": "no errors",
+      "/admin": "no errors",
+      "/redeem": "no errors (Unlock my plan button visible, form readable)"
+    },
+    "footer_version": "v1.17.0 ✓"
+  },
+  "rca of the issue": "Iter_40 left .settings-key-card + studio/thumbs eyebrow + .quota-pill-unlimited still authored against dark palette only (hardcoded rgba(15,10,30,0.55) and copper #c9956c). v1.17.0 fix adds a comprehensive [data-theme='light'] block (App.css L6735-6870) that re-points every affected element to design tokens — eyebrow color shifts from the original rgb(201,149,108) (which washed out on lavender) to a 78%-warning + 22%-black mix landing at rgb(131,87,54) which holds 4.5:1+ contrast against the lavender page bg. Settings cards route through var(--surface)=white. Save buttons use var(--warning) as primary CTA (Stripe-style copper-on-white). Dark mode is provably unchanged because every override is gated on the [data-theme='light'] selector."
+}

@@ -13,11 +13,23 @@ import {
 import ModePicker, { COMPOSITE_TOAST } from "../components/ModePicker";
 import MediaLibrary from "../components/MediaLibrary";
 import Toast from "../components/Toast";
+import StudioQuotaPill from "../components/StudioQuotaPill";
 
 const MODES = { AVATAR: "avatar", FACELESS: "faceless" };
+// HeyGen's API caps script text at exactly 5,000 characters on BOTH v3
+// (/v3/videos → `script`) and v2 (/v2/video/generate → video_inputs[0].
+// voice.input_text). Longer scripts get rejected with a 400
+// `invalid_parameter` before the render can start — which then burns
+// the customer's UX (45% progress bar → red error wall). Enforce the
+// cap client-side BEFORE calling /api/studio/render so long-form
+// scripts hit a friendly inline hint and never make the round-trip.
+// Faceless mode has no such limit (voiceover is chunked scene-by-scene
+// via Kokoro TTS), so we tell the user to switch modes if they need
+// the full script.
+const AVATAR_SCRIPT_MAX_CHARS = 5000;
 const MAX_SCENES = 12;
 const SOURCE_HINT = {
-  ai:       "An AI-generated visual will be created from your prompt.",
+  ai:       "AI still image generated via Gemini Nano Banana — professional photorealistic quality.",
   pexels:   "We'll search the Pexels stock library.",
   pixabay:  "We'll search the Pixabay stock library.",
   uploaded: "We'll use the media file you uploaded for this scene.",
@@ -35,10 +47,31 @@ const modeChipLabel = (m) => (m === MODES.AVATAR ? "Avatar" : "Faceless");
 // We surface script-length issues as a script suggestion (no vendor names,
 // no cost language).
 function friendlyRenderError(e) {
-  const raw = (e?.response?.data?.detail || e?.message || "").toString();
+  // Quota / cost-cap rejections come back as 402 with a structured detail
+  // dict. Surface the friendly `message` field so the user sees the
+  // unified "You've used all X renders this cycle. Resets in N days." copy
+  // the backend builds (which intentionally hides the silent cost cap).
+  const status = e?.response?.status;
+  const detail = e?.response?.data?.detail;
+  if (status === 402 && detail && typeof detail === "object" && detail.message) {
+    return detail.message;
+  }
+  const raw = (typeof detail === "string" ? detail : detail?.message) || e?.message || "";
   const lower = raw.toLowerCase();
-  if (lower.includes("script") && (lower.includes("too long") || lower.includes("character") || lower.includes("length") || lower.includes("limit"))) {
-    return "Your script is too long for an avatar video — try shortening it or splitting it into two parts.";
+  // Match the HeyGen 5,000-char-cap error family. HeyGen v3 sends
+  //   `String should have at most 5000 characters` on `param: input_text`
+  // HeyGen v2 sends
+  //   `video_inputs.0.voice.text.input_text is invalid: String should have at most 5000 characters`
+  // Neither string contains the word "script", so the old matcher missed
+  // both. Loosened to catch "5000 characters" / "input_text" / "at most"
+  // regardless of surrounding text.
+  const scriptTooLong = (
+    (lower.includes("5000 character") || lower.includes("at most 5000")) ||
+    (lower.includes("input_text") && lower.includes("invalid")) ||
+    (lower.includes("script") && (lower.includes("too long") || lower.includes("length") || lower.includes("limit")))
+  );
+  if (scriptTooLong) {
+    return "Your script is too long for Avatar mode (5,000 character limit). Shorten it, split into two shorter parts, or switch to Faceless mode — Faceless has no character limit.";
   }
   if (lower.includes("configuration is too large")) {
     return "Render configuration is too large. Please contact support.";
@@ -48,7 +81,7 @@ function friendlyRenderError(e) {
 }
 
 const SOURCE_PILL_OPTS = [
-  { id: "ai", label: "AI" },
+  { id: "ai", label: "AI Still" },
   { id: "pexels", label: "Pexels" },
   { id: "pixabay", label: "Pixabay" },
   { id: "uploaded", label: "Yours" },
@@ -78,6 +111,24 @@ function SourcePills({ idx, current, onPick }) {
 export default function Studio() {
   // Mode
   const [mode, setMode] = useState(MODES.AVATAR);
+
+  // Quota pill refresh counter — incremented after each successful render
+  // submission so the StudioQuotaPill re-fetches /me/quota and shows the
+  // freshly-decremented count without a manual reload.
+  const [quotaBump, setQuotaBump] = useState(0);
+  const bumpQuota = () => setQuotaBump((n) => n + 1);
+
+  // v1.14.0 — track unlimited tier (owner / founder) so the regen
+  // soft-cap doesn't fire on accounts that pay no marginal cost. Light
+  // fetch on mount + every quota bump.
+  const [isUnlimited, setIsUnlimited] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    apiClient.get("/me/quota")
+      .then((r) => { if (!cancelled) setIsUnlimited(!!r.data?.unlimited); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [quotaBump]);
 
   // Mode-picker landing card — shown on first visit, persisted to localStorage
   // so returning users skip straight to the chip form. A "Change mode" link
@@ -393,12 +444,28 @@ export default function Studio() {
   // pathological payloads; everything else fires the real pipeline.
   const fireRender = async (body) => {
     setRenderErr("");
+    // Client-side pre-flight for HeyGen's 5,000-char cap on Avatar mode.
+    // Rejecting here means the user sees the friendly hint immediately
+    // without the "45% failed" progress-bar experience Charity hit in
+    // the client demo. Faceless mode is exempt — its voiceover is chunked
+    // by Kokoro TTS per scene, so long scripts are fine there.
+    if (
+      body.mode === MODES.AVATAR &&
+      typeof body.script === "string" &&
+      body.script.length > AVATAR_SCRIPT_MAX_CHARS
+    ) {
+      setRenderErr(
+        `Your script is ${body.script.length.toLocaleString()} characters, but Avatar mode maxes out at ${AVATAR_SCRIPT_MAX_CHARS.toLocaleString()} (about 750 words). Shorten it, split into two shorter parts, or switch to Faceless mode — Faceless has no character limit.`
+      );
+      return;
+    }
     try {
       const r = await apiClient.post("/studio/render", body);
       setRender(r.data);
       setToast("Render started…");
       scrollToRenderCard();
       pollStatus(r.data.id);
+      bumpQuota();
     } catch (e) {
       setRenderErr(friendlyRenderError(e));
     }
@@ -411,8 +478,22 @@ export default function Studio() {
   // grid above the History list will show both progress bars side by side.
   const renderBothAspects = async () => {
     setRenderErr("");
+    const bothPayload = buildPayload();
+    // Same 5,000-char pre-flight as fireRender — both-aspects fires TWO
+    // HeyGen jobs, so a too-long script would blow up both progress bars
+    // at 45% instead of one. Guard here saves the double failure.
+    if (
+      bothPayload.mode === MODES.AVATAR &&
+      typeof bothPayload.script === "string" &&
+      bothPayload.script.length > AVATAR_SCRIPT_MAX_CHARS
+    ) {
+      setRenderErr(
+        `Your script is ${bothPayload.script.length.toLocaleString()} characters, but Avatar mode maxes out at ${AVATAR_SCRIPT_MAX_CHARS.toLocaleString()} (about 750 words). Shorten it, split into two shorter parts, or switch to Faceless mode — Faceless has no character limit.`
+      );
+      return;
+    }
     try {
-      const r = await apiClient.post("/studio/render/both-aspects", buildPayload());
+      const r = await apiClient.post("/studio/render/both-aspects", bothPayload);
       const jobs = r.data?.jobs || [];
       if (jobs.length === 0) throw new Error("Empty response");
       // Set the freshly-submitted 9:16 as the focused render (first in the
@@ -429,6 +510,7 @@ export default function Studio() {
       setToast(`Two renders queued — 9:16 + 16:9.`);
       scrollToRenderCard();
       pollStatus(focus.id);
+      bumpQuota();
     } catch (e) {
       setRenderErr(friendlyRenderError(e));
     }
@@ -436,9 +518,39 @@ export default function Studio() {
 
   // Re-fire the SAME render payload (same script, avatar, voice, scenes).
   // Smoother UX than rebuilding the form when iterating on a render.
+  //
+  // v1.14.0 — Soft-cap regenerations to 5 per source script so a runaway
+  // tweaking session can't burn $50+ in HeyGen / fal.ai bills. The cap is
+  // tracked per (script, mode) tuple in localStorage so it survives
+  // refreshes; admins (drcharitycampbell / Founders) get unlimited.
+  const REGEN_SOFT_CAP = 5;
+  const regenKey = (doc) => `f48_regen:${doc?.mode || "?"}:${(doc?.script || "").slice(0, 80)}`;
+  const readRegens = (doc) => {
+    try { return parseInt(localStorage.getItem(regenKey(doc)) || "0", 10) || 0; }
+    catch { return 0; }
+  };
+  const bumpRegens = (doc) => {
+    try {
+      const n = readRegens(doc) + 1;
+      localStorage.setItem(regenKey(doc), String(n));
+      return n;
+    } catch { return 0; }
+  };
+
   const regenerate = async (sourceDoc) => {
     if (!sourceDoc) return;
     setRenderErr("");
+
+    // Soft-cap check — unlimited tier (owner/founder) bypasses entirely.
+    const unlimited = isUnlimited;
+    const usedSoFar = readRegens(sourceDoc);
+    if (!unlimited && usedSoFar >= REGEN_SOFT_CAP) {
+      setRenderErr(
+        `You've regenerated this render ${REGEN_SOFT_CAP} times already. Try tweaking the script or avatar choice instead — fresh inputs render better than another retry.`,
+      );
+      return;
+    }
+
     // Visual reset so the click registers immediately.
     setRender({
       ...sourceDoc,
@@ -465,9 +577,16 @@ export default function Studio() {
     try {
       const r = await apiClient.post("/studio/render", body);
       setRender(r.data);
-      setToast("Regenerating — scroll up to watch.");
+      const newCount = bumpRegens(sourceDoc);
+      const remaining = unlimited ? null : Math.max(0, REGEN_SOFT_CAP - newCount);
+      setToast(
+        remaining === null
+          ? "Regenerating — scroll up to watch."
+          : `Regenerating — scroll up to watch. (${remaining} regen${remaining === 1 ? "" : "s"} left for this script)`,
+      );
       scrollToRenderCard();
       pollStatus(r.data.id);
+      bumpQuota();
     } catch (e) {
       setRenderErr(friendlyRenderError(e));
     }
@@ -763,9 +882,12 @@ export default function Studio() {
     <main className="studio-main" data-mode={mode} data-testid="studio-page">
       {/* Hero */}
       <div className="studio-hero">
-        <p className="studio-eyebrow" data-testid="studio-eyebrow">
-          Faceless to Finished · Video Engine
-        </p>
+        <div className="studio-hero-top">
+          <p className="studio-eyebrow" data-testid="studio-eyebrow">
+            Faceless to Finished · Video Engine
+          </p>
+          <StudioQuotaPill bump={quotaBump} />
+        </div>
         <h1 className="studio-title">Turn your script into a finished video.</h1>
         <p className="studio-sub">
           Paste your script, pick your look in two clicks, and we&rsquo;ll render the final cut — captions, voice, footage and all.
@@ -855,7 +977,21 @@ export default function Studio() {
 
       {/* Script */}
       <div className="script-block">
-        <span className="script-label">Script</span>
+        <div className="script-header-row">
+          <span className="script-label">Script</span>
+          {/* Always-visible mode-limit hint so writers see the constraint
+              BEFORE they hit render. Avatar 5,000-char cap comes from
+              HeyGen's API — Faceless has no cap because Kokoro TTS
+              chunks voiceover per scene. Copy is intentionally short
+              and appears next to the label. */}
+          <span
+            className="script-limit-hint"
+            data-testid="script-limit-hint"
+            aria-label="Script length limits by mode"
+          >
+            Avatar: <b>5,000 chars</b> (~750 words) · Faceless: <b>any length</b>
+          </span>
+        </div>
         <textarea
           className="script-area"
           data-testid="script-textarea"
@@ -869,6 +1005,34 @@ export default function Studio() {
         <div className="script-meta">
           <span data-testid="script-word-count">{script.trim() ? script.trim().split(/\s+/).length : 0} words</span>
           <span>~{Math.max(15, Math.round(script.split(/\s+/).filter(Boolean).length / 2.5))}s read time</span>
+          {/* Live character counter — only rendered in Avatar mode because
+              that's the mode with the 5,000-char cap. Faceless is unlimited,
+              so a counter would be noise there. Color states:
+                <80%  → muted (default)
+                80-99% → amber warning (approaching cap)
+                ≥100% → red danger (render will be blocked by pre-flight) */}
+          {mode === MODES.AVATAR && (() => {
+            const len = script.length;
+            const pct = len / AVATAR_SCRIPT_MAX_CHARS;
+            const cls = pct >= 1 ? "script-chars-danger"
+                     : pct >= 0.8 ? "script-chars-warn"
+                     : "script-chars-ok";
+            return (
+              <span
+                className={`script-chars ${cls}`}
+                data-testid="script-char-count"
+                title={
+                  pct >= 1
+                    ? "Over the Avatar 5,000-char limit. Shorten or switch to Faceless."
+                    : pct >= 0.8
+                    ? "Approaching the Avatar 5,000-char limit."
+                    : "Well within the Avatar 5,000-char limit."
+                }
+              >
+                {len.toLocaleString()} / {AVATAR_SCRIPT_MAX_CHARS.toLocaleString()} chars
+              </span>
+            );
+          })()}
         </div>
       </div>
 
@@ -1248,6 +1412,20 @@ export default function Studio() {
                     src={terminalCurrent.result_url}
                     controls
                     playsInline
+                    onPlay={() => {
+                      // Fire only once per render id to avoid duplicate
+                      // logs on play/pause/seek. Tracks the rendered id on
+                      // the element itself via a data attribute.
+                      apiClient.post("/activity/log", {
+                        type: "video_played",
+                        detail: {
+                          render_id: terminalCurrent.id,
+                          mode: terminalCurrent.mode,
+                          aspect: terminalCurrent.aspect,
+                          context: "inline-card",
+                        },
+                      }).catch(() => {});
+                    }}
                   />
                 )}
                 {terminalCurrent.status === "failed" && (
@@ -1375,7 +1553,13 @@ export default function Studio() {
                   {r.status === "complete" && r.result_url && (
                     <button
                       className="icon-btn"
-                      onClick={() => setPlayerModal({ url: r.result_url, aspect: r.aspect })}
+                      onClick={() => {
+                        setPlayerModal({ url: r.result_url, aspect: r.aspect });
+                        apiClient.post("/activity/log", {
+                          type: "video_played",
+                          detail: { render_id: r.id, mode: r.mode, aspect: r.aspect },
+                        }).catch(() => {});
+                      }}
                       data-testid={`history-play-${r.id}`}
                       aria-label="Play"
                       title="Play"

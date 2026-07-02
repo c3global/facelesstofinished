@@ -8,7 +8,7 @@ import {
   ResponsiveContainer,
   CartesianGrid,
 } from "recharts";
-import { Users, FileText, Film, DollarSign, RefreshCw } from "lucide-react";
+import { Users, FileText, Film, ImageIcon, DollarSign, RefreshCw } from "lucide-react";
 import { apiClient } from "../../App";
 
 function fmtCents(c) {
@@ -67,6 +67,7 @@ export default function StatsTab() {
         <MetricTile icon={Users} label="Active (30d)" value={data.active_30d} testid="stat-active-30d" />
         <MetricTile icon={Film} label="Studio renders" value={data.total_renders} testid="stat-renders" />
         <MetricTile icon={FileText} label="Scripts generated" value={data.total_scripts} testid="stat-scripts" />
+        <MetricTile icon={ImageIcon} label="Thumbnails generated" value={data.total_thumbnails ?? 0} testid="stat-thumbnails" />
         <MetricTile icon={DollarSign} label="Revenue (all-time)" value={fmtCents(data.revenue_cents)} testid="stat-revenue" />
       </div>
 

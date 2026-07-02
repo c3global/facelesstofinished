@@ -15,36 +15,948 @@ paying customers + entitlements on the existing Netlify backend at
 `https://faceless48.c3global.co/api/auth-me` — the new Studio should call
 back to it for entitlement verification.
 
-## 2026-07-02 — AppSumo Licensing v2 integration: webhook receiver, OAuth /redeem flow, license storage
-**Status:** SHIPPED — 12/12 pytests green (`backend/tests/test_appsumo_licensing.py`), frontend production build clean.
 
-Charity is listing on AppSumo. The Partner Portal requires two validated URLs before the listing can go live:
-  - **Webhook URL** → `https://faceless48.c3global.co/api/appsumo-webhook?token=<APPSUMO_WEBHOOK_TOKEN>`
-  - **OAuth redirect URL** → `https://faceless48.c3global.co/redeem`
+---
 
-**Backend** — new `/app/backend/appsumo_routes.py` (registered in server.py alongside admin/uploads):
-  - `POST /api/appsumo-webhook?token=...` — token-gated (same pattern as Pinball) + optional HMAC SHA256 verification (`X-Appsumo-Signature` over timestamp+body, keyed with `APPSUMO_API_KEY`). Handles all 6 events: `purchase` / `activate` / `upgrade` / `downgrade` / `deactivate` / `migrate`, plus Partner Portal `test: true` pings (ACK, no side effects). Always answers `200 {"event": ..., "success": true}` as AppSumo requires.
-  - `POST /api/appsumo/redeem` — called by the /redeem page. Exchanges the single-use `?code=` for an access token (`https://appsumo.com/openid/token/`), fetches the buyer's `license_key`, links it to the email the buyer enters, grants tier entitlements in `db.buyers`, and sets the pending-welcome toast. Conflicts (license already linked to another email) → 409; deactivated license → 410; used/expired code → friendly 400.
-  - `GET /api/admin/appsumo/licenses?q=` — admin-gated license search (AppSumo requires license keys be support-searchable; AppSumo never stores buyer emails).
-  - Licenses live in `db.appsumo_licenses` (one doc per license_key). Every event lands in the existing activity log.
-  - **Refund-safe entitlement clawback**: each license doc records which entitlements it NEWLY granted; `deactivate` removes only those, minus anything still covered by another active AppSumo license (so upgrade's new key survives the old key's simultaneous deactivate, and a Pinball customer who also bought on AppSumo keeps their original purchases on refund).
-  - Tier map (per Charity's live AppSumo listing — all tiers include both script engines): `{"1": ["base","shorts"], "2": ["base","shorts","studio"], "3": ["base","shorts","studio"]}` (JSON env override `APPSUMO_TIER_MAP`).
-  - **Tier limits ENFORCED** (Charity approved 2026-07-02, follow-up message): T1 no Sprint Mode + no Studio; T2 Sprint + 3 Faceless videos/calendar-month (UTC); T3 Sprint + 10 Faceless + 3 Avatar/month. Composite renders draw from the Avatar quota; failed renders don't count. Enforcement lives in `server.py` (`_enforce_appsumo_render_quota` at /studio/render + /studio/render/both-aspects; sprint gate in /scripts/shorts) and applies ONLY to buyers with `source == "appsumo"` + `appsumo_tier` on file — Pinball/admin-granted customers are untouched/unlimited. Limits map override: `APPSUMO_TIER_LIMITS_MAP` env (JSON). The listing's thumbnail quotas + "Connected AI accounts" rows target features that only exist in Emergent's workspace copy of the codebase (thumbnail engine, BYOK) — NOT in this repo — so they can't be enforced here (see divergence warning below).
-  - **⚠️ REPO/WORKSPACE DIVERGENCE (2026-07-02)**: Emergent's live workspace (/app) has shipped features NOT present in this GitHub repo: `roadmap_routes.py`, `tier_config.py`, thumbnail engine, BYOK (Fernet), GHL outbound webhooks, Nano Banana image gen, public /roadmap + /changelog pages, and their own (validation-failing) AppSumo webhook in their `admin_routes.py`. Deploying this repo as-is would ROLL BACK those features. The AppSumo work in this repo (appsumo_routes.py, /redeem, quota gates) must be MERGED into the Emergent workspace, not deployed over it. Also note Emergent flagged a P0 auth flaw (email-only login = account takeover by knowing an email) that applies to this repo's /auth/check too.
+## 🔁 Workflow rule: Changelog moves with every change (set 2026-06-29 by user)
 
-**Frontend** — new `/app/frontend/src/pages/Redeem.jsx` + `/redeem` route in App.js. Reuses the Login page's card styling. Reads `?code=`, collects email, POSTs redeem, then auto-signs-in via the existing email-only `login()` and lands on /scripts (welcome toast included). Without a code it shows recovery instructions (AppSumo → My Products). SPA fallback serves the route with HTTP 200, which is what AppSumo's URL validation checks.
+### Iteration 49 (2026-07-01) — Nano Banana for scene stills + Sora 2 test lane (v1.18.4)
 
-**Config — NO env vars required** (Charity has no Emergent credits, so she can't edit env vars):
-  - Resolution order per field: `db.settings` doc `_id="appsumo"` > env var > baked-in default.
-  - Webhook token has a baked-in default (`as_06e0e0bb12f22e97c3335db2a344587fb0e3772a` in appsumo_routes.py) so the webhook works with zero configuration — the AppSumo Partner Portal webhook URL must be `https://faceless48.c3global.co/api/appsumo-webhook?token=as_06e0e0bb12f22e97c3335db2a344587fb0e3772a`.
-  - OAuth `client_id` / `client_secret` / `api_key` (HMAC) are stored via `PUT /api/admin/appsumo/config` (admin JWT) into db.settings; `GET` returns masked secrets + the full webhook URL for copy/paste. Env vars (`APPSUMO_WEBHOOK_TOKEN`, `APPSUMO_CLIENT_ID/SECRET`, `APPSUMO_API_KEY`, `APPSUMO_REDIRECT_URI`, `APPSUMO_TIER_MAP`) still work as a middle layer if ever available.
+**Trigger:** Charity's live-demo Faceless render stuck at 55% (fal.ai out of credits) plus $100+ in June testing burn with unsatisfactory Flux 1.1 Pro quality for professional/consultant/coaching aesthetic. Full strategic conversation captured earlier in the log. Decision: replace Flux with Nano Banana as default, keep Flux as silent fallback, add Sora 2 test lane on admin.
 
-**Files touched**
-- `/app/backend/appsumo_routes.py` — NEW
-- `/app/backend/server.py` — import + `register_appsumo_routes(...)` before mount
-- `/app/frontend/src/pages/Redeem.jsx` — NEW
-- `/app/frontend/src/App.js` — `/redeem` public route
-- `/app/backend/tests/test_appsumo_licensing.py` — NEW, 12 tests, runs without mongod (mongomock-motor) and with a stubbed OAuth exchange (zero API spend)
+**Three moves shipped in one push:**
+
+**MOVE 1 — Nano Banana for scene stills (default engine swap).**
+- NEW `_generate_scene_image(prompt, aspect, scene_idx, fal_headers)` helper in `server.py` (~140 lines, sits just before the AI text-to-video engines block).
+- Uses `emergentintegrations.llm.chat.LlmChat` with `gemini-3.1-flash-image-preview` and `modalities=["image","text"]`.
+- Base64 PNG → tmp file → `fal_client.upload_file` → returns fal.ai storage URL (so downstream ffmpeg-compose consumes it identically to the old Flux path).
+- Content-hash cache with new `nb:` prefix — doesn't pollute the old `flux:` cache entries. Cache hit path returns in <100ms.
+- Silent Flux fallback preserved for reliability. Logs `[flux-fallback] scene=N used as backup` when it fires so Charity can see Nano Banana health via logs.
+- Both call sites in `server.py` refactored to delegate to the helper: `_run_render_faceless.gen_image` (line 2352 area) and `/api/studio/ai-previews.gen_one` (line 3560 area). Preview endpoint no longer maintains its own local hash cache — always shared with the render pipeline.
+
+**MOVE 2 — Frontend copy reframe.**
+- `SOURCE_HINT.ai` tooltip: *"AI still image generated via Gemini Nano Banana — professional photorealistic quality."*
+- `SOURCE_PILL_OPTS.ai.label`: `"AI"` → `"AI Still"` (sets expectation that this is a photograph, not motion video).
+- Roadmap Faceless mode blurb rewritten via `_default_items` reseed: *"Slideshow-style videos with AI voiceover, stock B-roll from Pexels and Pixabay, and AI-generated stills via Gemini Nano Banana for scenes where stock doesn't fit."*
+
+**MOVE 3 — Admin-only Sora 2 test endpoint.**
+- `POST /api/admin/studio/test-sora2` — gated by `require_admin`, uses `emergentintegrations.llm.openai.video_generation.OpenAIVideoGeneration` with universal key.
+- Accepts `{prompt, aspect (9_16/16_9/1_1), duration (4/8/12), model (sora-2 or sora-2-pro)}`.
+- Maps aspect → Sora's supported size grid: `9_16→1024x1792`, `16_9→1792x1024`, `1_1→1024x1024`.
+- Runs the sync SDK in an executor, saves MP4 to tmp, uploads to fal.ai storage, returns URL + elapsed time + byte size + explicit note that cost debited from Universal Key balance not fal.ai.
+- Failure paths logged to `db.activity` as `sora2_test_failed` so Charity can debug via admin UI later.
+- Delayed SDK import so a missing playbook lib doesn't crash admin_routes.py at boot.
+
+**Gotcha resolved during build:** The `Sora2TestRequest` Pydantic class was initially defined inside `register_admin_routes`. FastAPI + Pydantic v2 couldn't build a proper `TypeAdapter` for a nested class — it became a `ForwardRef` and FastAPI treated the body as query params. Hoisted the class to module level; endpoint validators (400 on bad aspect/duration/model, 422 on prompt<8 chars) all fire correctly now.
+
+**Files touched:**
+- `/app/backend/server.py` — new helper (~150 lines), both Flux call sites refactored, unused `quota_snapshot` renamed to `_quota_snapshot` (silences pre-existing ruff F841)
+- `/app/backend/admin_routes.py` — Sora 2 endpoint + `Sora2TestRequest` at module level (~110 lines total)
+- `/app/backend/roadmap_routes.py` — Faceless blurb rewrite in `_default_items`
+- `/app/frontend/src/pages/Studio.jsx` — `SOURCE_HINT.ai` tooltip + `SOURCE_PILL_OPTS.ai.label` = "AI Still"
+- `/app/frontend/src/changelog.js` — APP_VERSION 1.18.4 + entry
+
+**Verified end-to-end:**
+- Nano Banana scene generation: 14.6s for one 9:16 photorealistic scene. Uploaded to fal.ai storage `https://v3b.fal.media/files/...` successfully. Cache lookup on repeat prompts returns <100ms.
+- Sora 2 endpoint auth gate: 401 without token ✓. Bad aspect: 400 ✓. Bad duration: 400 ✓. Bad model: 400 ✓. Prompt too short: 422 ✓. SDK importable ✓. Actual Sora 2 generation costs Charity money so not fired during this build — she can test on her Founder account before deciding Move 3a (park motion behind BYOK) vs Move 3b (wire Sora 2 as Cinematic engine).
+
+**Roadmap reseeded** so the new Faceless mode blurb is live on `/roadmap`.
+
+**Cost impact estimate (for Charity):**
+- Faceless renders that previously ran $2-4/each in fal.ai Flux calls now run ~$0.15-0.30/each on the Universal Key for the equivalent Nano Banana still generation. **~10x cost reduction on the visuals phase alone** while quality goes UP.
+- fal.ai still used for Kokoro TTS + ffmpeg-compose (both work well and are cheap). Flux only fires as fallback.
+- Sora 2 cinematic mode is opt-in test only until Charity validates quality.
+
+**Deployment status:** Fix is in preview. Production still runs Flux until she redeploys. She has NOT touched fal.ai credit balance during this iteration — the stuck 55% render from her original message is still in her history queue and needs manual deletion OR she needs to top up fal.ai to complete it.
+
+**Follow-up conversation open with user:**
+- After she tests Sora 2 quality on Founder account: decide Move 3a (park motion behind Pro Plus BYOK) or Move 3b (wire Sora 2 as native Cinematic Faceless engine).
+- Frontend admin UI for the Sora 2 test endpoint (currently curl-only). Would be a small addition to the Admin tab.
+
+---
+
+
+
+### Iteration 48 (2026-06-30) — HeyGen 5,000-char guard: friendly error + live counter + mode hint
+
+**User trigger:** Charity's live client demo failed at 45% with the raw HeyGen JSON: `String should have at most 5000 characters`. Both v3 and v2 rejected the same script. HeyGen's API has a hard 5,000-char cap on `input_text` — long-form scripts routinely exceed this.
+
+**Three layers of protection shipped in v1.18.3:**
+
+1. **Client-side pre-flight** in `Studio.jsx` `fireRender()` + `renderBothAspects()`. If Avatar mode AND `script.length > 5000`, we set a friendly error and return BEFORE calling `/api/studio/render`. No progress-bar-to-red-wall experience anymore.
+2. **Backend friendly error mapping** in `friendlyRenderError()`. The old matcher required the word "script" in the raw text, but HeyGen returns `input_text` and `String should have at most 5000 characters` — no "script" anywhere. Loosened the matcher to catch `5000 character`, `at most 5000`, `input_text ... invalid`.
+3. **Live 5,000-char counter** in the `.script-meta` row (Avatar mode only). Three color states escalate as the writer approaches the cap:
+   - `< 80% (< 4,000 chars)` → muted (`script-chars-ok`)
+   - `80-99% (4,000-4,999)` → amber warning (`script-chars-warn`)
+   - `≥ 100% (5,000+)` → red danger (`script-chars-danger`)
+   Hidden in Faceless mode (no cap = counter would be noise).
+
+**Mode-constraint hint permanently visible** next to the "Script" label in BOTH modes: *"Avatar: 5,000 chars (~750 words) · Faceless: any length"*. So even before typing, writers see which mode fits their script length. Rendered via `.script-header-row` + `.script-limit-hint` (new CSS classes).
+
+**Files touched:**
+- `/app/frontend/src/pages/Studio.jsx` — `AVATAR_SCRIPT_MAX_CHARS = 5000` constant, `friendlyRenderError` widened matcher, `fireRender` pre-flight, `renderBothAspects` pre-flight, `.script-header-row` + hint + counter added to the Script block
+- `/app/frontend/src/App.css` — `.script-header-row`, `.script-limit-hint`, `.script-chars`, `.script-chars-ok/warn/danger` (dark + light overrides), `.script-meta` widened to `flex-wrap` with `margin-left:auto` on the counter so it right-aligns
+- `/app/frontend/src/changelog.js` — APP_VERSION bumped to 1.18.3 + entry added
+
+**Verified (screenshot test — 5 states):**
+- Hint: `Avatar: 5,000 chars (~750 words) · Faceless: any length` ✓
+- 3,000 chars → `script-chars-ok` (muted) ✓
+- 4,200 chars → `script-chars-warn` (amber) ✓
+- 5,500 chars → `script-chars-danger` (red) ✓
+- Faceless mode → counter hidden, hint remains ✓
+- Backend friendly mapping: 4/4 unit tests pass on the exact HeyGen error string from Charity's screenshot ✓
+
+**Note on deployment:** This fix is in preview. Production (`faceless48.c3global.co`) still has the old raw-JSON error UX until Charity redeploys. Preview verification confirmed all states render correctly in both dark + light themes.
+
+**Bigger future improvement (deferred):**
+Auto-chunk long scripts into multiple `video_inputs` scene arrays so a 10,000-char script renders as a single continuous Avatar video by splitting into 2× 5,000-char scenes. Bigger build; not blocking launch since the hint + counter give writers clear guidance to shorten OR switch to Faceless.
+
+---
+
+
+
+### Iteration 47 (2026-06-30) — Audience-neutral roadmap + unified public header
+
+**User feedback that drove this iteration:** Charity called out that
+the roadmap was leading with "AppSumo buyers locked in the lifetime
+price" — but the product is meant for every customer (Founders,
+lifetime-deal holders, organic visitors, post-AppSumo signups). Also
+called out two layout issues: the public nav was sitting BELOW the
+hero image (separate row), and the login page had no footer.
+
+**What landed:**
+1. **Public nav consolidated into the existing Header** (`Header.jsx`).
+   Roadmap · Changelog · Sign in now render on the same row as the
+   logo and theme toggle when `!user`. Sign-in is auto-hidden on the
+   /login route itself (linking to the page you're on is silly).
+2. **Login-specific `.login-topnav` deleted** (along with its CSS).
+   The old nav was using `position: absolute` over the hero — a hack
+   I never should have needed. Putting it in the main Header was the
+   right move all along.
+3. **FooterGate now always renders Footer** — including on /login.
+   Removed the `if (loc.pathname === "/login") return null` early-out
+   + the now-unused `useLocation` import.
+4. **De-AppSumo'd customer-visible copy:**
+   - Roadmap footnote rewritten: "Every customer on this page —
+     Founders, lifetime-deal holders, and everyone who joins us
+     later — is locked in for everything we ship here."
+   - Shipped item renamed: "AppSumo redemption flow" → "Redemption
+     codes" (no tag).
+   - In Progress renamed: "Production deploy + AppSumo launch" →
+     "Production launch".
+   - Admin Dashboard blurb: "For Charity + team only" → "For the
+     team only".
+   - Multilingual Scripts: removed "AppSumo market" reference.
+   - `changelog.js` v1.17.0 and earlier entries had two stray
+     AppSumo mentions in v1.18.0 + v1.14.0 — both rewritten.
+5. **Removed orphan `/app/frontend/src/data/roadmap.js`** — that
+   static seed file was replaced by API-fetched data in iter 45 but
+   left behind. Deleted; no imports referenced it.
+
+**Internal-only AppSumo references that REMAIN (intentional):**
+- `LicensesTab.jsx` — admin-only "Source" field default is still
+  "appsumo" because that IS the v1 launch channel. This component
+  is gated behind the admin role and never shown to customers.
+- `ProfileMenu.jsx` source comments — internal documentation.
+- `App.css` — comment + an orphan `[data-tag="appsumo"]` selector
+  that no longer matches anything since the reseed (harmless).
+
+**APP_VERSION bumped to 1.18.2.** Every existing buyer's footer pill
+will pulse amber "What's New" on their next visit and clicking it
+will show them the new copy.
+
+**Files touched:**
+- `/app/frontend/src/components/Header.jsx` — added public nav,
+  Link import
+- `/app/frontend/src/pages/Login.jsx` — removed old nav, fixed 3
+  pre-existing empty-catch lint issues
+- `/app/frontend/src/App.js` — FooterGate always renders, removed
+  useLocation import
+- `/app/frontend/src/pages/Roadmap.jsx` — footnote copy rewrite
+- `/app/backend/roadmap_routes.py` — seed defaults rewritten +
+  reseeded
+- `/app/frontend/src/changelog.js` — APP_VERSION 1.18.2 + new entry
+  + 2 historical entries scrubbed
+- `/app/frontend/src/App.css` — removed `.login-topnav-*`, added
+  `.site-public-nav` / `.public-nav-link` / `.public-nav-cta`
+- DELETED `/app/frontend/src/data/roadmap.js`
+
+**Verified:**
+- Screenshot of `/login` (logged-out): logo, Roadmap, Changelog,
+  theme-toggle all at y=14-15 — same row, no overlap. Footer at
+  y=999. Sign-in CTA correctly hidden on /login.
+- Screenshot of `/roadmap` (logged-out): all 3 public nav items
+  show (Roadmap | Changelog | Sign-in CTA pill). Roadmap copy
+  cleaned: "Already live and working for every buyer", "Production
+  launch", no AppSumo leakage.
+- POST /api/admin/roadmap/reseed flushed + reinserted 31 items
+  with the new copy. Confirmed via curl: zero "AppSumo" strings
+  in any title/blurb/tag.
+
+---
+
+
+
+### Iteration 46 (2026-06-30) — Pre-launch financial hardening: AppSumo refund-leak fix
+
+**Why this matters:** AppSumo's refund window is 60 days. Lifetime-deal
+refund rates run 5-15%. Before this iteration, refunded buyers retained
+their entitlements forever — and every faceless render they fired hit
+Charity's HeyGen + fal.ai wallet indefinitely. Closing this leak was a
+P0 launch blocker.
+
+**Gap 2 — Render quota enforcement: AUDIT-ONLY, ALREADY BULLETPROOF.**
+Read of `server.py` lines 2900-3050 confirmed the existing render-gate
+already has:
+- Pre-check on `rendersThisCycle >= quota_total` (line 2972) → 402
+  with friendly "You've used all renders this cycle" message.
+- Avatar sub-cap check (line 2980).
+- Silent cost-cap circuit breaker (line 2991).
+- **Atomic findOneAndUpdate with $expr race-guard** (line 3011) —
+  prevents two concurrent renders both passing the pre-check.
+- Auto-refund quota slot on render failure (line 3028).
+No code changes needed.
+
+**Gap 1 — AppSumo lifecycle webhooks: NEW.** Added
+`POST /api/appsumo-webhook?token=<APPSUMO_WEBHOOK_TOKEN>` that handles
+all 6 AppSumo Plus event types:
+
+| Event | Action |
+|---|---|
+| `deactivate` | wipes entitlements + tier, sets status=deactivated, **zeros renderQuotaMonthly / avatarSubCap / thumbnailQuotaMonthly / monthlyCostCapCents** so any in-flight render gate rejects |
+| `refund` | same as deactivate but status=refunded |
+| `upgrade` | assigns new tier (with quotas), preserves cycle clock |
+| `downgrade` | same as upgrade but to a lower tier |
+| `migrate` | tier-swap if `tier` field present; otherwise log-only |
+| `activate` | log-only (the customer-facing /api/licenses/redeem flow already handles this path) |
+
+Lenient payload extraction — accepts `event` / `action` / `type` /
+`event_type` and nested `data.event` shapes. Same tolerance pattern
+as `_extract_email` / `_extract_items` to match AppSumo Plus + AppSumo
+Black + GHL-forwarded shapes without per-vendor config.
+
+Idempotency via `appsumo_events: [{event, license_key, ts}]` array on
+buyer doc. Duplicate (event, license_key) returns
+`{status: "duplicate"}` without re-processing.
+
+Token gate: `APPSUMO_WEBHOOK_TOKEN` env var, generated as
+`as_<32 hex>` (independent from PINBALL_WEBHOOK_TOKEN). Empty token =
+endpoint disabled (rejects all with 401).
+
+**Admin test endpoint:** `POST /api/admin/appsumo/test-webhook` —
+synthetic webhook trigger gated by `require_admin`. Used by tests +
+the upcoming admin UI "Test AppSumo webhook" button. Seeds a synthetic
+buyer for revoke tests so the wipe is observable end-to-end.
+
+**Files touched:**
+- `/app/backend/admin_routes.py` — added `_process_appsumo_event`,
+  `_extract_event_type`, `_extract_tier`, `_extract_license_key`,
+  `/api/appsumo-webhook` route, `/api/admin/appsumo/test-webhook`
+  route. ~280 lines.
+- `/app/backend/.env` — added `APPSUMO_WEBHOOK_TOKEN` (fresh hex).
+
+**Verified end-to-end (curl):**
+1. Deactivate test buyer (seeded with t3+studio+50 renders/mo) →
+   entitlements=[], tier="", status=deactivated, renderQuotaMonthly=0
+2. Refund same buyer → status=refunded, quotas still zeroed
+3. Upgrade refunded buyer to t4 → tier=t4, renderQuotaMonthly=40,
+   status=active, cycle clock preserved
+4. Wrong token → 401
+5. Unknown-buyer deactivate → graceful `no_buyer` response (handles
+   AppSumo's "deactivate-before-activate" race during migrations)
+
+**Charity's launch checklist (env-var side):**
+- `APPSUMO_WEBHOOK_TOKEN` — SET (fresh hex generated). Paste the
+  webhook URL `https://<your-app>/api/appsumo-webhook?token=as_b6...`
+  into your AppSumo partner dashboard's "Lifecycle Webhook" field.
+
+**What this NEVER promises buyers:** the public roadmap still uses
+"Native publishing" / "Cinematic Faceless" (no "unlimited" language).
+The webhook is purely cost-protection plumbing — no customer-facing
+copy changes.
+
+---
+
+
+
+### Iteration 45 (2026-06-30) — P0 bug fix + admin-editable roadmap (v1.18.1)
+
+**This iteration combined a P0 bug fix from a live client demo with a
+content + UX expansion. Five distinct things landed in one push.**
+
+**1. P0 bug fix — Thumbnail prompt truncation** (live-demo killer)
+- Symptom: clicking a cover concept chip on the Thumbnails page loaded
+  `[matches "Why Your Conference Room..."]` (57 chars) instead of the
+  full ~770 char prompt body.
+- Root cause: `extractCoverPrompts` in `/app/frontend/src/utils/parser.js`
+  used a single-line regex `^N. [label] ... — prompt$` that assumed the
+  prompt body was on the SAME line as the number. Claude's current
+  template puts label on line 1 and body on lines 2-N. The regex
+  backtracked out of the bracket-label capture group and grabbed the
+  `[matches "..."]` line itself as the "prompt."
+- Fix: split the section into numbered entries first (using a header
+  regex per line), then for each entry concatenate any same-line tail +
+  every line below it into the prompt body. Backwards compatible with
+  the legacy single-line format. Unit test confirms 57 → 773 chars on
+  the exact text from Charity's failing screenshot.
+
+**2. Admin-editable Roadmap (Mongo-backed)**
+- NEW `/app/backend/roadmap_routes.py`:
+  - `GET  /api/roadmap` — public, returns 4 columns grouped by status.
+    Seeds defaults on first call so the page never renders blank.
+  - `POST /api/admin/roadmap/items` — admin-gated create
+  - `PATCH /api/admin/roadmap/items/{id}` — admin-gated edit
+  - `DELETE /api/admin/roadmap/items/{id}` — admin-gated delete
+  - `POST /api/admin/roadmap/reorder` — admin-gated within-column
+    reorder (ids[] array, server writes order=0..N)
+  - `POST /api/admin/roadmap/reseed` — emergency nuke + reseed
+- Every write goes through `require_admin` dependency — not just UI
+  hiding. Verified via curl: 401 without token, 200 with admin token,
+  full CRUD round-trip works.
+- Mongo collection `roadmap_items`. Item shape: `{id, column, title,
+  blurb, tag?, order, created_at, updated_at}`.
+- Frontend `Roadmap.jsx` rewritten to fetch from API. Admin mode shows
+  inline edit/delete + up/down reorder arrows on every card + "+ Add
+  item" button at the bottom of each column. Read-only for buyers.
+
+**3. Roadmap content expansion** (per GPT brain-dump triage)
+- Added to Planned: **Script Revision Tools (TOP REQUEST)**, Brand
+  Voice Profiles, Authority Content Templates, Content Series Builder.
+- Added to Considering: Approval Workflow, Multilingual Scripts,
+  Agency / White-label.
+- Skipped from GPT's list: items already shipped (Avatar/Faceless),
+  duplicates (Media Library = Brand Kits), too-vague items
+  (Voiceover Planning, Content Brief Intake).
+
+**4. Positioning subhead**
+- *"The AI studio for off-camera authority content — built for
+  consultants, coaches, experts, and speakers who need a video
+  presence without being on camera every day."*
+- Rendered as italic subhead on the roadmap hero, between H1 and
+  support email line. Reframes the product positioning for AppSumo
+  reviewers + new buyers.
+
+**5. Landing-page nav + public Changelog page + Scripts banner**
+- Added top-right nav on `/login`: Roadmap · Changelog · Sign in.
+  Position absolute so it sits above the centered hero stack without
+  breaking the existing layout.
+- NEW `frontend/src/pages/Changelog.jsx` (public, no auth) — timeline
+  view that reads from the same `changelog.js` the footer popup uses.
+- NEW `frontend/src/components/scripts/RoadmapBanner.jsx` — one-shot
+  "v1.18.1 just shipped" banner on the Scripts page with View Roadmap
+  CTA. Dismisses per version (localStorage key includes APP_VERSION),
+  so bumping the version makes every buyer see it fresh.
+
+**Files touched:**
+- NEW `/app/backend/roadmap_routes.py` (~250 lines)
+- NEW `/app/frontend/src/pages/Roadmap.jsx` (rewrote — was static
+  import, now API-fetched + admin UI)
+- NEW `/app/frontend/src/pages/Changelog.jsx`
+- NEW `/app/frontend/src/components/scripts/RoadmapBanner.jsx`
+- `/app/backend/server.py` (+ register_roadmap_routes wiring)
+- `/app/frontend/src/utils/parser.js` (extractCoverPrompts rewrite)
+- `/app/frontend/src/pages/Scripts.jsx` (+ banner mount + import)
+- `/app/frontend/src/pages/Login.jsx` (+ landing nav)
+- `/app/frontend/src/App.js` (+ /changelog route, + Changelog + Roadmap
+  page imports)
+- `/app/frontend/src/App.css` (+ ~390 lines for all of above, dark +
+  light)
+- `/app/frontend/src/changelog.js` (APP_VERSION bumped to 1.18.1)
+- `/app/memory/CHANGELOG.md` (synced)
+
+**Verification:**
+- Backend: curl-tested all 5 admin endpoints — 401 unauth, 200 with
+  admin token, full CRUD round-trip clean.
+- Parser: unit test on the exact text from Charity's failing
+  screenshot — concept #2 grew from 57 chars (bug) to 773 chars (fix).
+  Legacy single-line format still parses correctly.
+- UI: 3 smoke screenshots — login nav at top-right (y=65), admin
+  roadmap (banner + edit controls + add buttons + 13 Planned items),
+  public roadmap (no admin controls + 13 Planned items). Scripts
+  banner shows for v1.18.1, dismisses, persists across reload.
+- Lint: all new JS files pass eslint, roadmap_routes.py passes ruff.
+
+**Future / Backlog (unchanged):**
+- Cinematic Faceless (Veo) — parked
+- server.py (~4060 lines) + Scripts.jsx (~1550 lines) refactor pass 2
+- One real captioned Faceless QA render
+
+---
+
+
+
+### Iteration 44 (2026-06-30) — Public Roadmap page (/roadmap) v1.18.0
+
+**Why:** AppSumo reviewers vet apps by clicking around the live product, and a credible "what we've shipped + what's next" page signals serious momentum (not abandonware). User wanted it native to the app instead of an external Notion/Canny link.
+
+**Shape:**
+- 4-column layout: **Shipped (8) / In Progress (2) / Planned (9) / Considering (5)**
+- Public route (no `RequireAuth`) — reviewers can hit it pre-login
+- Display-only — no upvote/comment backend (deferred until post-launch demand justifies)
+- Tone: founder-honest. Customer-facing benefit language, no internal jargon (no "fal.ai", "HeyGen", "GridFS" — describes the result the buyer gets).
+- Tags: `THIS WEEK` (amber), `TOP REQUEST` (amber), `P0` (amber), `APPSUMO` (green), `PRO PLUS` (green).
+- **Canva integration** added per user request — sits at the top of Planned with TOP REQUEST chip.
+
+**Files:**
+- NEW `frontend/src/data/roadmap.js` — single source of truth for the 4 buckets. Edit-here-only pattern, mirrors changelog.js.
+- NEW `frontend/src/pages/Roadmap.jsx` — hero + 4-column grid + footnote. Uses lucide icons (CheckCircle2/Sparkles/ListChecks/Lightbulb) per column.
+- `frontend/src/App.js` — added `/roadmap` route + lazy import. Public (no `RequireAuth`).
+- `frontend/src/components/Footer.jsx` — added "Roadmap" link next to "Have a redemption code?"
+- `frontend/src/App.css` — appended ~210 lines (`.roadmap-*`) with full dark+light theme tokens. Hero gradient (white→lavender→copper) matches `.studio-title` and `.thumb-title`. Light-mode overrides go through `[data-theme="light"]` block — dark mode is byte-for-byte unchanged.
+- `frontend/src/changelog.js` — bumped APP_VERSION to 1.18.0 (Footer auto-pulses amber "What's New" dot for all current buyers).
+
+**Verification (smoke):**
+- Dark mode screenshot — all 4 columns render with proper icon colors (green=Shipped, amber=In Progress, accent=Planned, muted=Considering). Hero gradient renders. Canva TOP REQUEST chip visible.
+- Light mode screenshot — `.roadmap-column` bg = `rgb(255,255,255)` ✓; `.roadmap-eyebrow` color = `color(srgb 0.514 0.343 0.211)` (≈ deep copper rgb(131,87,54)) — exact match to v1.17.0 trilogy ✓.
+- Footer link `data-testid="footer-roadmap-link"` present on every authenticated page.
+- No JS lint warnings on either new file.
+
+**Open follow-ups:**
+- AppSumo launch: still gated on user re-clicking Deploy (iter 43 requirements.txt fix applies).
+- If buyers start emailing support@c3global.co requesting Considering items get promoted, manually move them to Planned in `roadmap.js`.
+
+---
+
+
+
+### Iteration 43 (2026-06-30) — Production deploy fix: missing requirements.txt entries
+
+**Symptom:** K8s production deploy failed with `deployment failed to become ready: timeout waiting for deployment to be ready`. Preview was 100% healthy.
+
+**Root cause (NOT what deployment_agent reported):** Two packages that the backend imports at module-load time were **missing from `/app/backend/requirements.txt`** — they existed only as transitive deps in the preview venv, so preview worked. On a fresh production container build, pip's resolver chose a transitive chain that didn't pull them in → `ModuleNotFoundError` on backend boot → uvicorn never binds to 8001 → K8s readiness probe times out → deploy fails.
+
+Missing packages:
+- `cryptography==48.0.0` — used by `byok_routes.py:33` (`from cryptography.fernet import Fernet, InvalidToken`)
+- `python-multipart==0.0.30` — required by FastAPI's `UploadFile`/`File` (used in `uploads_routes.py` + `thumbnails_routes.py` for image/audio uploads)
+
+**Fix:** appended both to `requirements.txt` with the verified versions matching the preview venv. Backend restarted clean, `/` returns 200 + `{"service":"F2F48 Studio API","status":"ok"}`, prewarm task fires normally.
+
+**Why deployment_agent didn't catch this:** it scans for hardcoded secrets, env-var leaks, CORS misconfigs, port mismatches, and ML/blockchain deps — not for missing pip declarations on transitive imports. Recommend filing this as a deployment_agent enhancement (run `python -c "import X"` for each known top-level import vs `pip freeze`).
+
+**Iter 42 work (BYOK_ENCRYPTION_KEY env var) remains valid** — the new Fernet key is in `.env` and works correctly once `cryptography` is properly declared.
+
+**Files touched:**
+- `/app/backend/requirements.txt` (+cryptography, +python-multipart)
+
+---
+
+
+
+### Iteration 42 (2026-06-30) — Pre-launch env hardening (BYOK_ENCRYPTION_KEY)
+
+**Context:** user said they cannot manually set env vars and asked agent to
+configure the 4 remaining production env vars before AppSumo launch. User
+clarified preferences:
+- `GHL_WEBHOOK_URL` = empty (paste later when GHL workflow is wired)
+- `GHL_WEBHOOK_AUTH_HEADER` = empty (95%-case default for GHL)
+- `APPSUMO_CAMPAIGN_END_AT` = empty (campaign not launched yet, upgrade
+  button hides silently — already exercised path)
+- `BYOK_ENCRYPTION_KEY` = **freshly generated Fernet key** (only one that
+  needed a real value)
+
+**What landed:**
+1. Generated a 32-byte url-safe base64 Fernet key via
+   `cryptography.fernet.Fernet.generate_key()` and pasted it into
+   `/app/backend/.env`. Backend restarted clean; `[byok]` warning about a
+   derived fallback key would have logged at startup if `BYOK_ENCRYPTION_KEY`
+   was missing or malformed — no such warning fires now (confirmed via
+   `tail /var/log/supervisor/backend.err.log`).
+2. End-to-end round-trip verified via curl: save anthropic key →
+   masked hint `sk-…cdef` returned → list shows `configured: true` →
+   delete cleans up. The same flow buyers will use in production.
+3. Deployment audit (deployment_agent): PASS. Only WARN was a false
+   positive — agent missed `/app/.gitignore` (which exists and properly
+   excludes `.env`, `.env.local`, `*.env`, `credentials.json`, `*.pem`,
+   `*.key`, `.credentials`).
+
+**Why this matters:** with the Fernet key set, every buyer's BYOK key is
+encrypted at rest with AES-128+HMAC instead of a deterministic
+process-derived fallback. Rotating `BYOK_ENCRYPTION_KEY` later would
+invalidate previously-saved keys (acceptable — buyers just re-paste),
+but starting production with a real key means no future rotation is
+needed for cryptographic strength.
+
+**Files touched:**
+- `/app/backend/.env` — added `BYOK_ENCRYPTION_KEY=<32-byte fernet key>`
+
+**Testing:** Single .env edit, deploy-audit + BYOK curl round-trip
+verified. No frontend change. Skipped testing_agent_v3_fork (single env
+change, well-exercised BYOK flow from iter 36).
+
+**Still open (deferred to user steer):**
+- Cinematic Faceless (Veo) pipeline — parked
+- `server.py` (4046 lines) + `Scripts.jsx` (1545 lines) refactor pass 2
+- One real captioned Faceless QA render (real $$, only fire on user OK)
+
+---
+
+
+
+### Iteration 41 (2026-06-30) — Light-mode polish trilogy completed (v1.17.0)
+
+**User-reported:** screenshots showed (a) Studio + Thumbnails hero eyebrow
+("FACELESS TO FINISHED · VIDEO ENGINE" / "THUMBNAIL ENGINE · V1")
+barely readable in light mode, (b) "Owner · unlimited renders" pill
+washed out, and the iter_40 testing agent had flagged Settings/Keys
+cards as the same class of bug.
+
+**Fixed via App.css L6735-6870 — single [data-theme='light'] block:**
+- `.studio-eyebrow` → deep copper via `color-mix(in srgb, var(--warning)
+  78%, #000 22%)` ≈ rgb(131,87,54). 4.5:1+ contrast on the lavender bg.
+  Same for Studio's avatar/faceless mode overrides + Thumbnails eyebrow.
+- `.quota-pill-unlimited` → cream-on-white gradient with full-saturation
+  copper border. Crown SVG → `--warning`. Mirror for
+  `.thumb-quota-unlimited`.
+- Settings/Keys page (`/settings/keys`) — every dark surface fixed:
+  `.settings-keys-hero` soft accent+warning wash; `.settings-key-card`
+  pure white with token border; `.is-saved` state uses warm cream;
+  `.settings-key-input` uses `--bg`; `.settings-key-save-btn` uses
+  `--warning` (copper-on-white CTA). All text routes through
+  `--text` / `--muted` / `--warning`.
+
+**Testing**: iteration_41.json — 9/9 PASS via `getComputedStyle`
+inspection. Dark-mode regression byte-for-byte verified
+(`.studio-eyebrow` stays `rgb(201,149,108)`, `.settings-key-card` stays
+`rgba(15,10,30,0.55)`). v1.16.0 thumbnails fixes still working.
+
+**Testing-agent forward suggestions (parked):**
+- App.css is now 6870+ lines. Recommend per-page CSS modules
+  (`studio.css`, `thumbnails.css`, `settings.css`) so the next card
+  component doesn't need a quadrilogy.
+- Consider a shared `.surface-card` utility (`bg=var(--surface)`,
+  `border=1px solid var(--border)`, `shadow=var(--shadow-card)`) so new
+  cards auto-theme-switch. Would eliminate the recurring pattern of
+  hardcoded `rgba(15,10,30,0.55)` leaking into light mode.
+
+---
+
+
+
+### Iteration 39 (2026-06-30) — Refactor + CORS fix (v1.15.0)
+
+**3 backlog items shipped together — zero regressions:**
+
+1. **Cross-origin auth-me fixed.** Previous CORS config had
+   `allow_origins=["*"] + allow_credentials=True` — silently invalid per
+   W3C spec. Browsers MUST reject the combination on credentialed
+   requests, which manifested as failing `/api/auth/me` calls when the
+   deployed frontend lives on a different host. Fix: drop
+   `allow_credentials=True` (frontend uses bearer JWT, not cookies), use
+   `allow_origin_regex=".*"` by default, with explicit `FRONTEND_ORIGINS`
+   env-var whitelist for production. Verified end-to-end: cross-origin
+   GET `/api/auth/me` with `Origin: https://different.test` returns 200
+   + valid CORS headers + correct user JSON.
+2. **server.py refactor pass 1.** Caption burn-in pipeline extracted to
+   `backend/caption_burn_in.py` (158 lines, single public surface, soft-
+   fails to None, BYOK-aware `fal_key_provider` callable). server.py
+   compat shim re-exports for any legacy import path. 7-test pytest
+   regression suite locks the contract through the extraction. server.py
+   shrunk from ~4144 → 4046 lines.
+3. **Scripts.jsx refactor pass 1.** Constants (`MODES`, `STEPS`,
+   `LENGTHS`, `PLATFORMS`, `TAGLINES`, `LONG_PHASES`, `SHORTS_PHASES`,
+   `SPRINT_PHASES`, `angleKey`, `currentStreamingPhase`) extracted to
+   `components/scripts/scriptsConstants.js`. The platform-accent
+   side-effect (mirrors active platform onto
+   `documentElement[data-platform]`) extracted to
+   `hooks/usePlatformAccent.js`. Scripts.jsx shrunk from 1618 → 1545
+   lines. No behavioural change — same data-testids, same renders,
+   contrast fix for TikTok cyan still works (CTA computed color
+   = rgb(11, 26, 26)).
+
+**Testing**: iteration_39.json — 13/13 PASS, 7/7 caption pytest, 100%
+frontend assertions. Testing agent flagged 3 non-blocking refactor
+opportunities for future passes: (a) server.py still 4046 lines —
+extract render pipelines next; (b) `@app.on_event` → lifespan handlers
+migration overdue; (c) `regex=` Query args should migrate to `pattern=`
+in admin_routes.py.
+
+---
+
+
+
+### Iteration 38 (2026-06-30) — User bug batch + carry-over tasks (v1.14.0)
+
+**Bugs reported by user:**
+1. Cloudflare 502 "origin web server returned an invalid or incomplete
+   response" on Thumbnails rewriter + generator. RCA: iter_37 backend was
+   restarted 4× during the GHL test suite; user happened to hit those
+   endpoints during the brief unavailability windows. Endpoints themselves
+   are healthy (8–11s typical response, 200 OK).
+2. ESLint "Send is not defined" compile error in BuyersTab.jsx. RCA: stale
+   hot-reload snapshot; the import is correct in HEAD.
+3. Light mode polish: footer "Have a redemption code?" link washed out;
+   pill hover states invisible; TikTok platform pill (cyan #25F4EE) had
+   white text — unreadable on the bright cyan fill.
+
+**Fixes shipped:**
+- `Thumbnails.jsx::friendlyError()` now layers status → network → detail
+  sniffing. 502/503/504 + Cloudflare HTML leaks render as "Our render
+  server is warming back up — give it ~30 seconds and try again, your
+  prompt is preserved." Network errors map to "Couldn't reach the render
+  server."
+- `App.css` `.cta-btn.is-platform` + `.platform-card.is-selected .length-name`
+  use a new `--platform-fg` CSS variable. `[data-platform="tiktok"]`
+  overrides it to `#0B1A1A` (near-black). Scripts.jsx mirrors the active
+  platform onto `document.documentElement[data-platform]` so the global
+  CTA inherits correctly.
+- `index.css` light-theme `--surface-hover` bumped from 5% → 9% so card
+  hover states are visible.
+- `App.css` `.footer-link` rewired to design-token `--muted` color so it
+  tracks both themes; light-mode override anchors to a 60/40
+  text/bg mix.
+
+**Carry-over tasks user reminded me of (now shipped):**
+- **Render regen soft-cap (5 per script)**: Studio.jsx tracks
+  `f48_regen:<mode>:<script-prefix>` in localStorage. After 5 regens of
+  the same source, further clicks show a "try tweaking instead" inline
+  error. Owners + Founders bypass via `/me/quota.unlimited`.
+- **Caption burn-in regression suite**: new
+  `backend/tests/test_caption_burn_in.py` — 7 tests verify
+  `_burn_in_captions` exists, soft-fails cleanly, and that the
+  style/position preset maps are intact. Httpx is monkey-patched so the
+  suite costs $0 to run.
+
+**Testing**: iteration_38.json — 18/18 (7 pytest + 11 frontend
+assertions). No action items, no regressions.
+
+---
+
+
+
+### Iteration 37 (2026-06-30) — Group F: GoHighLevel (GHL) outbound integration
+
+**What landed:**
+1. **New module** `backend/ghl_integration.py` — encapsulated outbound push
+   helper. Reads `GHL_WEBHOOK_URL` + optional `GHL_WEBHOOK_AUTH_HEADER` at
+   call-time (kill switch via env, no code redeploy needed). Stable, flat
+   payload schema documented in module docstring; tags taxonomy is
+   additive-only. Fire-and-forget — failures land in `db.activity` as
+   `ghl_push_failed`, never raised to the caller.
+2. **Two automatic call sites**:
+   - `admin_routes.py:_process_pinball_event` — fires after a Pinball
+     webhook actually grants new entitlements (skipped on duplicate/reprocessed
+     events).
+   - `licenses_routes.py:redeem` — fires after a successful AppSumo code
+     redemption (source tag = `appsumo_redemption`).
+3. **Three admin endpoints**:
+   - `GET /api/admin/ghl/status` — returns `{configured, url_host,
+     auth_header_set}`. NEVER leaks the URL itself; only the host portion.
+   - `POST /api/admin/ghl/test` — sends a sentinel payload to verify the
+     workflow without touching any buyer record.
+   - `POST /api/admin/ghl/push-buyer {email}` — manual replay (used for
+     legacy buyers / outage recovery).
+4. **Admin Buyers tab UI**: connection pill (`GHL: connected | off`,
+   amber/green), `Test GHL` button (disabled when not configured), per-buyer
+   Send icon in row Actions column (hidden when not configured).
+5. **Env**: `GHL_WEBHOOK_URL` + `GHL_WEBHOOK_AUTH_HEADER` added to
+   `/app/backend/.env`. Both currently empty — Charity pastes her GHL inbound
+   webhook URL when she's ready to flip the switch.
+
+**Testing**: iteration_37.json — 13/13 backend tests + frontend Playwright
+both states (unconfigured + live mock GHL on 127.0.0.1:9989). One cosmetic
+finding (Buyers toolbar wrapping) was fixed in-line by `margin-left: auto`
+on the GHL pill.
+
+**Files touched:**
+- `backend/ghl_integration.py` (NEW)
+- `backend/admin_routes.py` (+pinball GHL hook, +3 admin endpoints, +import)
+- `backend/licenses_routes.py` (+redeem GHL hook)
+- `backend/.env` (+GHL_WEBHOOK_URL, +GHL_WEBHOOK_AUTH_HEADER)
+- `backend/tests/mock_ghl_server.py` (NEW — test-only mock)
+- `frontend/src/components/admin/BuyersTab.jsx` (+ghl state, pill, test btn,
+  per-row push, lucide `Send` import)
+- `frontend/src/App.css` (+`.admin-pill` + variants)
+- `frontend/src/changelog.js` (v1.13.0)
+- `memory/CHANGELOG.md` (v1.13.0 entry)
+
+---
+
+
+
+### Iteration 36 (2026-06-30) — Group E ships + 2 user-requested follow-ups
+
+**What landed:**
+1. **Group E (BYOK) complete**. Pro Plus + Founder users can save their own
+   Anthropic / OpenAI / HeyGen / fal.ai keys via a new `/settings/keys` page
+   reachable from the Profile menu. Keys are Fernet-encrypted at rest (AES-128
+   + HMAC) and never returned to the client after save — only a masked
+   `sk-…0abc` hint. Render paths use `_override_*_key_ctx` ContextVar to swap
+   keys for the duration of a single render coroutine without touching
+   process-wide env vars.
+2. **Anthropic added as a 4th BYOK service** (user request). When a buyer
+   saves `sk-ant-…`, the Script Engine streaming worker (`_run_script_job`),
+   single-shot completions (`_claude_complete`), thumbnail rewriter, and
+   thumbnail concepts-from-script all route through `httpx →
+   https://api.anthropic.com/v1/messages` directly instead of the Emergent
+   universal LLM key. Falls back silently on lookup failure or rotated key.
+3. **Thumbnail full-screen lightbox** (user request). Clicking any thumbnail
+   in the gallery opens a modal preview with Download + Copy prompt actions.
+   Dismisses via X, backdrop click, or ESC.
+4. **Thumbnails fully wired into Admin usage stats** (user request). New
+   sortable Thumbnails column in `/admin/usage`, Premium/Fast split in the
+   per-buyer drilldown, footer total, new Stats tile, and 4 new CSV export
+   columns.
+
+**Bug fixes:**
+- `/api/me/quota` early-return dicts (owner/grant/founder) now include
+  `byok_allowed:True` so the ProfileMenu API keys link shows up for non-
+  buyer admins (iter_35 HIGH bug).
+- `admin_routes.py` sort_by regex extended to accept `thumbnails_total` —
+  was missing in the validator while `sort_key_map` already had the lambda.
+- `UsageTab.jsx` now coerces FastAPI 422 error array shapes through an
+  `extractErrMsg()` helper so any future Pydantic validation error never
+  crashes the React tree with "Objects are not valid as a React child".
+
+**Files touched (server-side):**
+- `backend/server.py` (BYOK ContextVar, render-path BYOK lookups, Anthropic
+  direct httpx calls, me_quota byok_allowed, _claude_complete + _run_script_job
+  user_email plumbing)
+- `backend/byok_routes.py` (Anthropic added as 1st SERVICE entry)
+- `backend/thumbnails_routes.py` (rewrite-prompt + concepts-from-script BYOK
+  Anthropic branches)
+- `backend/admin_routes.py` (thumbs_by_email aggregation, stitched into
+  buyer rows, total_thumbnails stat, sort_by regex, CSV columns)
+
+**Files touched (frontend):**
+- `frontend/src/pages/SettingsKeys.jsx` (NEW — full BYOK settings page)
+- `frontend/src/pages/Thumbnails.jsx` (lightbox state + modal + zoom hint)
+- `frontend/src/components/ProfileMenu.jsx` (API keys link gated on
+  quota.byok_allowed)
+- `frontend/src/components/admin/UsageTab.jsx` (Thumbnails column, drilldown
+  card, totals, extractErrMsg guard, colSpan fix)
+- `frontend/src/components/admin/StatsTab.jsx` (Thumbnails generated tile)
+- `frontend/src/App.js` (new /settings/keys route)
+- `frontend/src/App.css` (settings-keys-*, thumb-lightbox-*, thumb-tile-img-btn)
+- `frontend/src/changelog.js` (v1.12.0)
+- `memory/CHANGELOG.md` (v1.12.0)
+
+**Testing:** Iteration 36 ran 16 pytest cases (15 pass, 1 surfaced both bugs
+above; all fixed and verified end-to-end via screenshot + curl).
+
+---
+
+
+
+**Hard rule for every agent working on this app:**
+
+1. **Every shipped change must add or extend an entry in `/app/frontend/src/changelog.js` AND `/app/memory/CHANGELOG.md`** — in the SAME action as the code edit. Not "later". Not "before deploy". Same atomic batch as the feature/fix.
+2. If the change is small enough to fold into the most recent entry, extend that entry's `changes: []` array. If it's a meaningful new release-worthy bundle, bump `APP_VERSION` and add a new top-level entry.
+3. **Voice = customer-facing.** No webhooks, admin tools, migration scaffolding, env vars, internal refactors, or backend plumbing in the public changelog. Those go here in PRD.md, NOT in changelog.js. The customer-facing rule of thumb: if a normal buyer wouldn't directly notice or benefit from it, don't put it in changelog.js.
+4. **Dates are real dates** — pull from `git log` if you don't know. Do not invent dates that pre-date the project's actual lifespan (project started 2026-05-21).
+5. **The footer popup in the app reads from `changelog.js`** — verifying the customer sees the right text means clicking the version pill in the footer and reading what shows up. There is no separate "publish step."
+6. Internal-only changes (admin panel, webhooks, refactors, env config, test infrastructure) still get documented — but here in `PRD.md`, NOT in the public changelog.
+
+
+## 2026-06-30 — Group D (AppSumo License Redemption + Tier Rename + Founder Treatment) SHIPPED
+**Status:** SHIPPED. Iter 34: 27/27 backend pytest GREEN + 100% frontend Playwright GREEN. Zero bugs found.
+
+### Customer-facing surface (the part the user obsessed over)
+**AppSumo is INVISIBLE in-app.** Three redemption entry points (footer link, login toggle, Profile dropdown) all land on a generic `/redeem` page that says nothing about AppSumo. Tier names are pricing-style: **Starter / Creator / Pro / Pro Plus**. The word "Founder" is hard-reserved for the legacy `founders: true` flag — NEVER an AppSumo-redeemable tier (enforced via `REDEEMABLE_TIER_IDS` frozenset at both the bulk-create AND redeem code paths).
+
+When the AppSumo 60-day campaign ends, nothing in the in-app UI changes. The `/api/me/upgrade-target` endpoint auto-flips from `APPSUMO_STACK_URL` → `OWN_PRICING_URL` based on the `APPSUMO_CAMPAIGN_END_AT` env var. With all three env vars blank, the Upgrade button quietly hides instead of pointing somewhere broken.
+
+### What's in
+1. **`licenses_routes.py`** (~545 LOC, self-contained) — endpoints:
+   - `POST /api/licenses/redeem` (customer) — atomic find_one_and_update on `{_id, status: "available"}` is the race lock; same-user re-redeem returns `{ok, already_redeemed: true}`; different-user 409; voided 410; nonexistent 404; protected users (dev_bypass / studio_grant / founders=true) burn the code WITHOUT being demoted; T3+ buyer redeeming a T1 code burns the code WITHOUT downgrade
+   - `GET /api/me/upgrade-target` (customer) — auto-flips between AppSumo stack URL and own pricing URL based on `APPSUMO_CAMPAIGN_END_AT`. Hides for dev_bypass / founders / T4 / no_url_configured
+   - `POST /api/admin/licenses/bulk-create` — accepts EITHER `{codes: [...]}` or `{csv: "..."}`. Idempotent on duplicate codes (skipped not errored). Rejects 'founder' tier with `reason: "tier"`
+   - `GET /api/admin/licenses?status=&tier=&source=&batch_id=&q=` — list with totals aggregation
+   - `POST /api/admin/licenses/{code}/void`
+   - `POST /api/admin/buyers/{email}/upgrade-tier` — manual fallback for Stripe/direct buyers
+2. **`tier_config.py` rename** — T1 → "Starter", T2 → "Creator", T3 → "Pro", T4 → "Pro Plus". `REDEEMABLE_TIER_IDS = frozenset({"t1","t2","t3","t4"})` excludes founder. Top-level `require_admin` dep extracted to `server.py:325-340` (shared by admin_routes + licenses_routes)
+3. **`/redeem` standalone page** (`Redeem.jsx`) — copper KeyRound icon, monospace input, success state w/ "Open dashboard" CTA. Pre-auth: stashes code in localStorage + bounces to `/login?redeem=…`
+4. **`ProfileMenu.jsx`** — replaces flat header email + sign-out button. Email + tier label chip + conditional copper Founder badge. Items: Upgrade plan (only when visible from backend), Redeem code, Sign out. Click-outside dismiss. Also stamps `document.body.dataset.founder` for the theme accent
+5. **Three entry points wired** — footer "Have a redemption code?" link, login toggle "I have a redemption code instead", Profile dropdown "Redeem code"
+6. **Login deep-link replay** — `/login?redeem=<code>` shows pending-redeem chip + "Sign in to redeem." title + "Sign in & redeem" CTA. After successful auth, auto-replays POST /api/licenses/redeem and lands on /redeem with the success/error state already populated
+7. **Quota popover upgrade button** — `StudioQuotaPill` now fetches `/me/upgrade-target` alongside `/me/quota`. Button renders ONLY when `(isLow || isExhausted) && upgrade.visible` — quiet by default
+8. **Founder copper theme accent** — `body[data-founder="true"]` CSS overrides swap purple `--accent` to copper (#C9956C / #F5D9B6) for nav active state, quota pill border, header buttons, focus rings. Subtle, exclusive, no shouting
+9. **Admin Licenses tab** (`LicensesTab.jsx`) — between Usage and Activity. Search + status/tier filters + batch tracking. Bulk-create panel accepts either CSV or comma-separated lines (auto-detected). Void button per row with confirm()
+10. **3 new env vars** in `/app/backend/.env`: `APPSUMO_STACK_URL`, `OWN_PRICING_URL`, `APPSUMO_CAMPAIGN_END_AT` (all blank by default)
+11. **Changelog v1.11.0** — customer-friendly copy. No mention of AppSumo
+
+### Files touched / new
+- NEW: `/app/backend/licenses_routes.py` (545 LOC)
+- NEW: `/app/frontend/src/pages/Redeem.jsx` (~115 LOC)
+- NEW: `/app/frontend/src/components/ProfileMenu.jsx` (~140 LOC)
+- NEW: `/app/frontend/src/components/admin/LicensesTab.jsx` (~230 LOC)
+- NEW: `/app/backend/tests/test_iter34_licenses.py` (27 pytest cases)
+- MODIFIED: `tier_config.py` (label rename + REDEEMABLE_TIER_IDS), `server.py` (require_admin extract + register_license_routes), `Header.jsx` (use ProfileMenu), `Footer.jsx` (redemption link), `Login.jsx` (pending-redeem deep-link replay + toggle), `StudioQuotaPill.jsx` (upgrade button), `Admin.jsx` (Licenses tab), `App.js` (Redeem route), `App.css` (~300 LOC new for ProfileMenu / Redeem / Founder theme / Quota upgrade button / Licenses tab styling)
+- `changelog.js` + `/app/memory/CHANGELOG.md` v1.11.0
+
+### Open follow-ups
+- When AppSumo deal goes live, set `APPSUMO_STACK_URL` + `APPSUMO_CAMPAIGN_END_AT` in `.env` and restart backend. To launch direct sales, set `OWN_PRICING_URL`.
+- gpt-image-2 still pending Emergent Universal LLM key support — earmarked for Group E (BYOK) when buyers bring their own OpenAI keys.
+
+---
+
+## 2026-06-30 — Iter 33: Cover-prompt picker for long-form + Viral-style suffix
+**Status:** SHIPPED. Iter 33 backend 6/6 GREEN (frontend code-review GREEN — Playwright auth was WAF-blocked but iter 32 had already verified base picker infra + I smoke-tested the new UI manually).
+
+### Problem
+User reported two real issues with v1.10.0 Thumbnail Engine:
+1. **Long-form scripts had NO cover prompts.** Only Shorts/Sprint emitted `### 🖼️ TITLE / THUMBNAIL VARIANTS` + `### 🎨 COVER IMAGE PROMPTS`. So "Make thumbnail" from a long script handoff fell back to chopping the first 280 chars of narration mid-sentence — bad UX.
+2. **gpt-image-1 output looked "not viral at all".** User asked about gpt-image-2 (released April 21, 2026) — but Emergent's Universal LLM key only supports gpt-image-1 + dall-e-3 today. gpt-image-2 access is deferred to Group E (BYOK).
+
+### Fixes shipped
+1. **Long-form template now emits cover prompts** — added `### 🖼️ TITLE / THUMBNAIL VARIANTS` + `### 🎨 COVER IMAGE PROMPTS` sections to `build_long_system_prompt` in `prompts.py`. Each cover prompt is 60-120 words and ends with `--ar 16:9 --no text` (frontend strips those flags before sending to image model).
+2. **Parser updated** — `LONG_SECTION_ORDER` now includes `titleVariants` + `coverPrompts` so they render in the bento grid. New helpers `extractCoverPrompts` + `extractTitleVariants` in `parser.js` — tolerate multiple Claude format drifts (`1.` / `1)`, `**[label]**` / `[label]`, em-dash / colon).
+3. **Cover-prompt picker UI** — new `.thumb-picker` panel on the Thumbnails page renders when handoff `choices.length > 0`. Three cards (one per concept) show `index → label → title → prompt preview`. Auto-selects first option. Clicking another card swaps the prompt textarea. Aspect auto-defaults to 16:9 for long-mode, 9:16 for shorts/sprint.
+4. **"Generate all 3" batch flow** — fires 3 sequential renders (gpt-image-1 has rate limits, so no parallel). Shows live progress ("Generating 2 of 3…"). 402 mid-batch short-circuits remaining calls (avoids wasted attempts). Partial success surfaces as "X of 3 succeeded".
+5. **Cost-confirmation modal** — `data-testid='thumb-confirm-modal'` opens for non-unlimited tiers when "Generate all" is clicked. Shows projected remaining quota ("you'll have N left after"). Founders/owner/grant SKIP this entirely.
+6. **Massively upgraded rewriter system prompt** (`thumbnails_routes.py`) — explicit `MUST INCLUDE` block: expressive human focal subject (with named facial expression), bold high-saturation color palette, dramatic cinematic lighting (rim/godrays/key-light), curiosity gap visual element, explicit negative space side, "top YouTube creator" production quality. `MUST AVOID` block: no on-image typography, no generic stock-photo phrasing, no neutral compositions, no cluttered backgrounds. Word count bumped from 60-120 → 90-160. Live test produced 91-word prompt hitting 6/10 viral keywords on a 5-word input.
+7. **VIRAL_STYLE_SUFFIX** — non-negotiable style anchor appended to every final image prompt before it hits gpt-image-1/Gemini. 3-layer composition: `{user_prompt}\n\n{aspect_hint}\n\n{viral_suffix}`. Suffix verified to land at the end of every persisted prompt via end-to-end test.
+8. **Backwards compat** — legacy long-form scripts (generated before this update) have no cover prompts. `extractCoverPrompts` returns `[]` for them, `sendToThumbnails` falls through to the seed-based handoff (narration hook), and Thumbnails.jsx Path B handles it with the same "Pre-filled from your script" UX as before.
+
+### Files touched
+- `/app/backend/prompts.py` — added TITLE/THUMBNAIL VARIANTS + COVER IMAGE PROMPTS to long-form template
+- `/app/backend/thumbnails_routes.py` — `VIRAL_STYLE_SUFFIX` const; upgraded `ASPECT_HINTS` with negative-space cue; massively expanded rewriter system prompt; 3-layer composed_prompt assembly
+- `/app/frontend/src/utils/parser.js` — `LONG_SECTION_ORDER` update; `extractCoverPrompts` + `extractTitleVariants` helpers
+- `/app/frontend/src/pages/Scripts.jsx` — `sendToThumbnails` rewritten to stitch coverPrompts + titleVariants by index into a `choices` array
+- `/app/frontend/src/pages/Thumbnails.jsx` — new state (coverChoices, selectedChoiceIndex, batchStatus, confirmBatch); handoff consumer Path A (picker) + Path B (legacy seed); `generateAll` sequential handler; cover-prompt picker JSX + cost-confirmation modal
+- `/app/frontend/src/App.css` — `.thumb-picker`, `.thumb-choice`, `.thumb-genall-btn`, `.thumb-modal*` styles
+- `/app/frontend/src/changelog.js` + `/app/memory/CHANGELOG.md` — v1.10.1 entry with customer-facing copy
+
+### Open follow-up
+- **gpt-image-2 → Group E (BYOK)** — when Emergent adds gpt-image-2 to the Universal key, swap with a one-line `model="gpt-image-2"` change. Until then, T4/Founder users who bring their own OpenAI key in Group E will get a "Premium 2" engine option that routes directly through their key.
+- **Auto-backfill cover prompts on legacy long scripts** — user chose Option B (only fix going forward), so legacy scripts stay as-is. The legacy fallback handoff (narration hook) covers them gracefully.
+
+---
+
+## 2026-06-30 — Group C2 (Thumbnail Engine) SHIPPED
+**Status:** SHIPPED on preview, iter 32 ALL GREEN (17/17 backend, 100% frontend).
+
+### What's in
+1. **Thumbnail Engine** — standalone top-level page at `/thumbnails`. Two providers via Emergent Universal LLM key (no user keys needed):
+   - **Premium** → OpenAI `gpt-image-1` with `quality="hd"`. Best for hero YouTube thumbnails.
+   - **Fast** → Gemini `gemini-3.1-flash-image-preview` (Nano Banana). Best for quick A/B variations.
+2. **Three aspect ratios** — 16:9 (YouTube), 9:16 (Shorts/Reels/TikTok), 1:1 (Instagram). Encoded as prompt hints since the image-gen libs don't expose size params; format cues land 100% reliably in our tested A/B prompts.
+3. **Prompt rewriter** — `POST /api/thumbnails/rewrite-prompt` calls Claude Sonnet 4.5 to upgrade casual user input into a punchy, visual prompt. Takes 3-8s; full system prompt explicitly forbids in-image typography (keeps room for overlay text in editor).
+4. **Quota infrastructure** — separate `thumbnailsThisCycle` counter on the buyer doc. T1=20/mo (Fast only), T2=50/mo (both), T3+/Founder=unlimited. `_thumbnail_quota_gate_or_402` mirrors the render quota pattern — atomic `find_one_and_update` decrement, friendly 402 messages, idempotent `_refund_thumbnail_slot` on generation failure. Premium-locked path returns a distinct `reason: 'thumbnail_premium_locked'` so the UI can bounce T1 users to Fast automatically without showing them a generic quota error.
+5. **GridFS persistence** — separate `thumbnails` bucket (isolated from `uploads`). Dedicated `/api/thumbnails/file/{id}` streamer with `Cache-Control: public, max-age=86400`. Soft-delete via `db.thumbnails.deleted=true`.
+6. **Standalone `/thumbnails` page** — single-purpose composer + history grid. Quota pill in hero. Engine + aspect segmented controls with lock icons for locked tiers. Inline error + toast banners. Aspect-aware tile grid (16:9 tiles wider than tall, 9:16 taller than wide, 1:1 square).
+7. **In-Scripts integration** — new "Make thumbnail" button on the Scripts result toolbar (`data-testid='scripts-make-thumbnail'`). Extracts the script topic + narration hook (~280 chars) and stashes them in `localStorage.f48_handoff_thumbnail`. Thumbnails.jsx consumes + clears the handoff on mount.
+8. **/me/quota extended** — non-founder payload now includes `thumbnails_used`, `thumbnails_total`, `thumbnails_remaining`, `thumbnail_premium_allowed`. Founders / owner / studio-grant still get `{unlimited: true}` shorthand.
+9. **Header nav** — new "Thumbnails" link between Studio and Resources (`data-testid='nav-thumbnails'`).
+10. **Customer-facing changelog** — `APP_VERSION` bumped to 1.10.0 with friendly plain-English copy about the new Thumbnail Engine. Mirrored in `/app/memory/CHANGELOG.md`.
+
+### Files touched
+- `/app/backend/thumbnails_routes.py` — NEW (~580 lines, single self-contained module)
+- `/app/backend/server.py` — added `register_thumbnail_routes` wiring; extended `/me/quota` payload with thumbnail fields
+- `/app/frontend/src/pages/Thumbnails.jsx` — NEW (~450 lines, composer + history grid + handoff consumer)
+- `/app/frontend/src/pages/Scripts.jsx` — added `Image as ImageIcon` import, `sendToThumbnails`/`useInThumbnails` helpers, "Make thumbnail" button on result toolbar
+- `/app/frontend/src/App.js` — `/thumbnails` route + RequireAuth guard
+- `/app/frontend/src/components/Header.jsx` — `nav-thumbnails` NavLink between Studio and Resources
+- `/app/frontend/src/App.css` — full `.thumbnails-main`, `.thumb-card`, `.thumb-segmented`, `.thumb-quota*`, `.thumb-tile*` styles
+- `/app/frontend/src/changelog.js` — APP_VERSION → 1.10.0
+- `/app/memory/CHANGELOG.md` — mirror entry
+
+### Verified by testing agent (iter 32)
+- `/api/thumbnails/rewrite-prompt` rewrites 14-char input → 740-char visual prompt via Claude
+- `/api/thumbnails/generate` (Fast) produces 895KB PNG in ~30s, persists to GridFS, streams back at expected URL
+- T1 quota gate: 20 → 402 with `reason=thumbnail_quota_exhausted` + friendly message
+- T1 premium lock: returns 402 with `reason=thumbnail_premium_locked` regardless of remaining count
+- Refund-on-failure: deliberate 502 keeps `thumbnailsThisCycle` flat instead of incrementing
+- Soft-delete: `DELETE /api/thumbnails/{id}` 200s, subsequent GET excludes it, streamer 404s
+- Auth gating: all endpoints 401 without JWT; file streamer is intentionally no-auth
+- `/me/quota` exposes new thumbnail fields only for non-founder paying buyers; founder/owner/grant get unchanged `{unlimited: true}`
+- Frontend: nav-thumbnails link, all 10 composer testids, engine + aspect toggles, rewriter end-to-end, Fast generation + tile actions, Scripts handoff via localStorage
+- Smoke nav across all 5 routes: 0 console errors
+- Test file: `/app/backend/tests/test_iter32_thumbnail_engine.py` (17/17 pass)
+- Total cost across testing: 1 Gemini Nano Banana call + ~6 Claude rewriter calls (Premium gpt-image-1 was NOT exercised to save real $ — engine routing verified at quota-gate layer only)
+
+### Still open (P1+ for AppSumo launch)
+- **In-Studio parallel pipeline** — fire-and-forget thumbnail during video render. Currently deferred — the Scripts handoff covers the primary "I just wrote a script, now I need a thumbnail" UX. Studio integration is an enhancement, not a blocker.
+- Group D: License code redemption + bulk provisioning + tier upgrade buttons.
+- Group E: BYOK Fernet-encrypted vault.
+- Group F: GHL webhook handoff (P2). Scene-regen soft cap (P2).
+- server.py refactor — split into modular routes/services (deferred until post-launch).
+
+---
+
+## 2026-06-30 — Group B (Quota Infrastructure) COMPLETED + Group C (Usage tab + Studio Quota Pill + Activity logging) SHIPPED
+**Status:** SHIPPED on preview, testing-agent iter 31 ALL PASS (15/15 backend, 14/15 frontend — the one un-exercised frontend path is the Scripts copy→activity log which simply lacks a seeded script in the dev DB; backend allow-list + persistence verified directly).
+
+### What's in
+1. **Both-aspects quota gate + refund** — `studio_render_both_aspects` now gates EACH aspect through `_quota_gate_or_402`. Tracks slot consumption in a `gated_aspects: list[tuple[str, int]]`. If the second gate-call raises (e.g. user has 1 render left + clicks "Render both"), the first slot is refunded via `_refund_quota_slot` so the user isn't silently charged for an un-fired render. Same refund happens on the circuit-breaker trip mid-batch.
+2. **`GET /api/me/quota`** — drives the Studio header pill. Returns `unlimited: true` for dev-bypass + studio-grant emails + buyers with `founders: true`. For regular buyers returns `{tier_id, tier_label, renders_used, renders_total, renders_remaining, avatar_used, avatar_cap, avatar_remaining, cycle_started_at, cycle_resets_at, byok_allowed}`. The silent cost-cap kill switch is NEVER exposed in this payload.
+3. **`POST /api/activity/log`** — lightweight engagement tracker with hard allow-list: `script_copied`, `script_sent_to_studio`, `video_played`, `script_opened_from_history`. Unknown types are quietly dropped (`{ok: false}` rather than 4xx). Detail dict is trimmed to 8 keys max. Frontend wires from Scripts.jsx (copyAll, copyAllShorts, sendToStudio, loadFromHistory) + Studio.jsx (history play button + inline render-card video onPlay).
+4. **`GET /api/admin/buyers/export` + `GET /api/admin/usage/export`** — admin-gated CSV streams. Filename format `F2F48-buyers-YYYY-MM-DD-export.csv` / `F2F48-usage-YYYY-MM-DD-export.csv` (ISO date, sorts cleanly). Bodies start with UTF-8 BOM so Excel auto-detects encoding. Lists are pipe-joined, nested fields are flat. Usage export reuses the same `$group` aggregations as `/admin/usage` so CSV numbers match the UI 1:1.
+5. **`StudioQuotaPill.jsx`** (new component) — anchored top-right of the Studio hero (new `.studio-hero-top` flex container). Three states: `unlimited` (Crown icon + "Owner/Founder · unlimited renders", non-clickable), normal (Zap icon + "X of Y renders · resets Mon Day"), low/exhausted (amber/red variants). Click opens an inline popover (data-testid='studio-quota-pop') with: renders bar, optional avatar sub-cap bar, exact reset date + days-until, and an exhaustion CTA when remaining=0. Refreshes on mount, every 60s, and after each render via a `quotaBump` counter the parent increments in `fireRender` / `renderBothAspects` / regenerate.
+6. **`UsageTab.jsx`** (new) — fourth admin tab between Buyers and Activity. Sortable columns (Email / Scripts / Renders / Spend / Last seen / Joined), Tier chips (T1=teal, T2=blue, T3=copper, T4=gold, Founder=purple), per-row drilldown with 4 cards (Scripts breakdown by mode, Renders breakdown by status/mode, Spend breakdown with buyer total + login count, Entitlements list).
+7. **CSV export buttons** in Buyers tab + Usage tab — call /admin/{kind}/export with `responseType: 'blob'`, render via `<a download>` trick so files land in Downloads folder directly (not a JSON blob in the network tab).
+8. **402 friendly copy** in `friendlyRenderError` — detects `status === 402 && detail.message` from the backend quota gate and surfaces it directly. No more raw 402 strings shown to users.
+
+### Files touched
+- `/app/backend/server.py` — `studio_render_both_aspects` (added per-aspect quota gate + refund), new `/me/quota` endpoint, new `/activity/log` endpoint + `UserActivityRequest` model + `_USER_ACTIVITY_TYPES` allow-list
+- `/app/backend/admin_routes.py` — added `StreamingResponse` import, `_csv_escape` / `_csv_row` / `_csv_filename` helpers, `admin_export_buyers` + `admin_export_usage` endpoints
+- `/app/frontend/src/components/StudioQuotaPill.jsx` — NEW (full component, ~160 lines)
+- `/app/frontend/src/components/admin/UsageTab.jsx` — NEW (full component, ~260 lines)
+- `/app/frontend/src/pages/Studio.jsx` — wired `StudioQuotaPill`, `quotaBump` state, `bumpQuota()` calls after render dispatches, video play activity logs, friendly 402 copy
+- `/app/frontend/src/pages/Scripts.jsx` — activity log fire-and-forget on copyAll / copyAllShorts / sendToStudio / loadFromHistory
+- `/app/frontend/src/pages/Admin.jsx` — added Usage tab + UsageTab import (4 tabs total now)
+- `/app/frontend/src/components/admin/BuyersTab.jsx` — added Download icon import, `downloadBuyersCSV` handler + `exporting` state, Export CSV button
+- `/app/frontend/src/App.css` — new sections for `.studio-hero-top`, `.quota-pill*` (incl. unlimited / is-low / is-exhausted variants), `.quota-pop*` (popover + bars), `.ent-chip-t{1,2,3,4}` + `.ent-chip-founder`, `.usage-table`, `.usage-drilldown*`
+- `/app/frontend/src/changelog.js` — bumped APP_VERSION to 1.9.0 with customer-facing copy about the new pill
+- `/app/memory/CHANGELOG.md` — mirrored v1.9.0 entry
+
+### Verified by testing agent (iter 31)
+- `/api/me/quota` returns correct unlimited payload for dev_bypass (`drcharitycampbell@gmail.com`) and full quota snapshot for seeded T3 buyer
+- `/api/activity/log` accepts all 4 allow-listed types, rejects others with `{ok: false}`, persists rows in `db.activity`
+- Both-aspects quota gate: with `renderQuotaMonthly=2 / rendersThisCycle=1`, first aspect succeeds, second 402s, `rendersThisCycle` correctly refunds back to 1 after the failed batch
+- Both CSV endpoints return 200 with correct `Content-Disposition` filename + UTF-8 BOM + expected header rows
+- Non-admin (`directkynections@gmail.com`, STUDIO_GRANT but not ADMIN) receives 403 on `/admin/buyers/export` + `/admin/usage/export`
+- Studio header renders `data-testid='studio-quota-pill'` correctly for owner ("Owner · unlimited renders" + Crown)
+- Admin tabs render in order: Buyers → Usage → Activity → Stats. Usage drilldown opens 4 cards on row click. Sort indicators flip ↓/↑.
+- CSV downloads triggered via Playwright download event API land with exact ISO filename
+- Test file: `/app/backend/tests/test_iter31_group_b_c.py` (15 tests, 100% pass)
+
+### What this unblocks
+- AppSumo launch P0 is now de-risked on the cost front. Buyers will hit a soft quota cap, not a silent cost ceiling, and admins have CSV exports for accounting + customer-success workflows.
+- Group C UI (quota visibility) is live — buyers can self-serve "how many renders do I have left?" without contacting support.
+
+### Still open (Group C2 onward, P0 for AppSumo)
+- **Thumbnail Engine** — OpenAI "Premium" + Gemini "Fast" image gen (Scripts page generator, Studio parallel pipeline, standalone top-nav tool).
+- License code redemption flow (Group D, P1).
+- BYOK Fernet-encrypted key vault (Group E, P1).
+- GHL webhook handoff (Group F, P2).
+- Scene regen soft cap (Quality Safety Net, P2).
+
+---
+
+## 2026-06-29 — Group A foundation shipped + What's New amber dot
+**Status:** SHIPPED on preview, ready for testing-agent verification + deploy.
+
+### What's in
+1. **What's New amber dot** — `Footer.jsx` reads `APP_VERSION` against `localStorage.f48_changelog_seen_v1`; pulses an amber dot beside the version pill until the user opens the popup once. Dismisses immediately on `<details>` open. Pure CSS animation (`@keyframes footerDotPulse`), no JS interval.
+2. **Group A1 — `lastLoginAt` fix on `/auth/check`**: new `_stamp_last_login()` helper writes `lastLoginAt`, `updatedAt`, and `$inc loginCount` on EVERY successful sign-in path (dev bypass, manual grant, buyer lookup). `upsert=False` so dev/grant emails without a buyer record don't create one. Try/except wraps the write so telemetry failure can NEVER block sign-in.
+3. **Group A2 — `tier_config.py`** new module: 5 frozen `Tier` dataclasses (T1 $49 / T2 $99 / T3 $179 / T4 $349 / FOUNDER). Encodes sticker prices, monthly render quotas (5 / 10 / 15 / 40), Avatar sub-caps (0 / 0 / 5 / 10), thumbnail quotas (20 / 50 / 9999 / 9999), monthly cost kill-switch caps in cents (500 / 1000 / 2000 / 5000), and BYOK eligibility (T4 + Founder only). Helpers: `get_tier(id)` + `tier_for_entitlements(ents)` for pre-migration buyers.
+4. **Group A3 — `GET /api/admin/usage`**: per-customer leaderboard endpoint. MongoDB aggregation joins `db.scripts` + `db.renders` keyed by `user_email`, stitches results with `db.buyers` rows, derives `tier` via `tier_for_entitlements` when not yet migrated, computes `last_seen` as `max(lastLoginAt, last_script_at, last_render_at, addedAt)`. Sort columns: `email`, `scripts_total`, `renders_total`, `spend_cents`, `last_seen`, `added_at`. Manual smoke-test with 3 seeded buyers + 11 scripts + 12 renders verified all aggregations (founder→t4, studio→t3, base→t1) and sort.
+
+### Files touched
+- `/app/frontend/src/components/Footer.jsx` — added `lastSeen` state, `handleToggle` to write localStorage on expand, amber-dot JSX
+- `/app/frontend/src/changelog.js` — bumped `APP_VERSION` to `1.8.1`, added entry
+- `/app/frontend/src/App.css` — `.footer-version.has-unseen` styling + `.footer-version-dot` + `@keyframes footerDotPulse`
+- `/app/memory/CHANGELOG.md` — mirrored entry
+- `/app/backend/server.py` — `_stamp_last_login()` helper inside `auth_check`, called from all 3 successful resolution paths
+- `/app/backend/tier_config.py` — NEW file, 165 lines, pure data + helpers
+- `/app/backend/admin_routes.py` — new `GET /admin/usage` endpoint with `$facet`-style aggregation
+
+### Smoke results
+- `usage-test-founder@example.com` (5 scripts, 8 renders, 320 spend) → tier=t4, founder=true ✓
+- `usage-test-t3@example.com` (6 scripts: 3 long / 2 shorts / 1 sprint, 4 renders: 3 faceless 1 avatar / 3 complete 1 failed, 203 spend) → tier=t3 ✓
+- `lastLoginAt` write: signing in as `usage-test-t3` bumped loginCount 7 → 8 + stamped timestamp ✓
+
+### Not yet in this batch
+- Quota gating on render endpoints (Group B5)
+- Cycle-reset cron (Group B6)
+- Cost kill-switch breaker on render endpoints (Group B7)
+- Buyer doc migration to stamp `tier` + `founders=true` on existing 39 buyers
+- Usage admin tab UI (Group C8)
+- All these depend on Group A landing solidly. Will pick up after testing-agent green-light + user OK.
+
+
+**Why this exists**: the user explicitly asked for the changelog to update automatically every deploy because they want customers to see momentum. Failing to update the changelog on a deploy = an undocumented release = a customer who thinks the app is stale. Treat this rule as binding.
+
 
 
 ## 2026-02-23 — P0 Faceless render regression fixed: TTS client-lifecycle bug ("Cannot send a request, as the client has been closed")

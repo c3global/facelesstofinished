@@ -549,6 +549,177 @@
   color: var(--card-accent, var(--accent));
 }
 
+/* =====================================================================
+   Site footer — ports the legacy Netlify footer (Footer.jsx +
+   styles.css line ~768) into the new Emergent app. Version pill is a
+   native <details> element that pops the changelog above the pill on
+   click; closes when the user clicks outside or selects another
+   <details> (browser default behavior).
+
+   Uses the new app's design tokens (--surface, --border-soft, --muted,
+   --accent) instead of the legacy --header-bg / --header-border so
+   light + dark mode both inherit correctly.
+   ===================================================================== */
+.site-footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 24px 24px 28px;
+  margin-top: auto;
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  border-top: 1px solid var(--border-soft);
+  background: transparent;
+}
+.footer-mark {
+  display: block;
+  height: 28px;
+  width: auto;
+  border-radius: 6px;
+  opacity: 0.85;
+}
+.footer-text { text-align: left; line-height: 1.4; }
+.footer-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.footer-changelog {
+  display: inline-block;
+  position: relative;
+}
+.footer-version {
+  cursor: pointer;
+  list-style: none;
+  display: inline-block;
+  padding: 3px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  background: var(--surface);
+  transition: color .15s, border-color .15s, background .15s;
+}
+.footer-version::-webkit-details-marker { display: none; }
+.footer-version:hover {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+}
+.footer-changelog[open] .footer-version {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 70%, transparent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+}
+
+/* "What's New" amber dot — shown when this browser's last-seen changelog
+   version (read from localStorage) is older than the current APP_VERSION.
+   The pill becomes a soft animated nudge after a deploy so returning
+   customers notice there's something new to read. The dot dismisses
+   immediately when the user clicks the pill (state managed in Footer.jsx). */
+.footer-version.has-unseen {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 65%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+}
+.footer-version-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-left: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 60%, transparent);
+  animation: footerDotPulse 1.6s ease-out infinite;
+  vertical-align: middle;
+}
+@keyframes footerDotPulse {
+  0%   { box-shadow: 0 0 0 0   color-mix(in srgb, var(--accent) 60%, transparent); }
+  70%  { box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 0%,  transparent); }
+  100% { box-shadow: 0 0 0 0   color-mix(in srgb, var(--accent) 0%,  transparent); }
+}
+
+.footer-changelog-panel {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  right: 0;
+  width: min(440px, 90vw);
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 18px 20px;
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: 14px;
+  box-shadow: 0 18px 48px -16px rgba(0, 0, 0, 0.55);
+  text-align: left;
+  z-index: 50;
+  color: var(--text);
+}
+.footer-changelog-panel h4 {
+  margin: 0 0 14px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.footer-changelog-entry {
+  margin-bottom: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px dashed var(--border-soft);
+}
+.footer-changelog-entry:last-child {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+}
+.footer-changelog-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+.footer-changelog-head strong {
+  color: var(--text);
+  font-weight: 700;
+}
+.footer-changelog-date {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+.footer-changelog-entry ul {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text);
+}
+.footer-changelog-entry li {
+  margin: 4px 0;
+  color: var(--muted);
+}
+
+@media (max-width: 720px) {
+  .site-footer {
+    flex-direction: column;
+    gap: 10px;
+    text-align: center;
+    padding: 20px 16px 24px;
+  }
+  .footer-text { text-align: center; }
+  .footer-changelog-panel {
+    right: 50%;
+    transform: translateX(50%);
+    width: min(420px, 92vw);
+  }
+}
 
 
 [data-theme="light"] .studio-title {
@@ -633,6 +804,22 @@
 
 /* ---------- Script area ---------- */
 .script-block { display: flex; flex-direction: column; gap: 10px; }
+.script-header-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+.script-limit-hint {
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.01em;
+}
+.script-limit-hint b {
+  color: var(--text);
+  font-weight: 600;
+}
 .script-area {
   width: 100%;
   min-height: 180px;
@@ -646,9 +833,26 @@
 }
 .script-area::placeholder { color: var(--muted); opacity: 0.7; }
 .script-meta {
-  display: flex; justify-content: space-between;
-  font-size: 12px; color: var(--muted);
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  font-size: 12px;
+  color: var(--muted);
 }
+/* Live Avatar-mode 5,000-char counter. Three states escalate as the
+   writer approaches HeyGen's cap so the failure is prevented at the
+   textarea, not at the /45%-progress-bar/red-error moment. */
+.script-chars {
+  margin-left: auto;               /* push to the right edge of the row */
+  font-variant-numeric: tabular-nums;
+  transition: color 160ms;
+}
+.script-chars-ok     { color: var(--muted); }
+.script-chars-warn   { color: var(--warning); font-weight: 600; }
+.script-chars-danger { color: #e26060; font-weight: 700; }
+[data-theme="light"] .script-chars-warn   { color: color-mix(in srgb, var(--warning) 78%, #000 22%); }
+[data-theme="light"] .script-chars-danger { color: #c14040; }
 
 /* ---------- Chip row ---------- */
 .chip-row {
@@ -2172,6 +2376,10 @@
 /* ---------- Platform-themed CTA + cards (Shorts only) ---------- */
 .cta-btn.is-platform {
   background: linear-gradient(135deg, var(--platform-accent) 0%, color-mix(in srgb, var(--platform-accent) 70%, #000 30%) 100%);
+  /* v1.14.0 — match platform-card.is-selected: dark ink on TikTok cyan,
+     white on Reels/YouTube. Otherwise "SHOW ME 5 ANGLES" disappears on the
+     bright TikTok bg. */
+  color: var(--platform-fg, #fff);
   box-shadow:
     0 1px 0 rgba(255,255,255,0.12) inset,
     0 18px 40px -10px color-mix(in srgb, var(--platform-accent) 55%, transparent),
@@ -2181,14 +2389,32 @@
 /* v1.8.0 — selected platform pill: full brand-color fill + white text.
    The earlier 12%-transparent fill produced near-white-on-white text in
    light mode. Forcing background to the raw accent and locking the inner
-   .length-name to white guarantees contrast in both themes. */
+   .length-name to white guarantees contrast in both themes.
+
+   v1.14.0 — TikTok's brand cyan #25F4EE is too light for white text. We
+   resolve the foreground per platform via `--platform-fg` (defaults to
+   #fff; overridden to near-black for TikTok and any future light accent).
+   This also covers the description text via --platform-fg-soft. */
 .platform-card.is-selected {
   border-color: var(--platform-accent) !important;
   background: var(--platform-accent) !important;
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--platform-accent) 22%, transparent) !important;
 }
-.platform-card.is-selected .length-name { color: #fff !important; }
-.platform-card.is-selected .length-desc { color: rgba(255,255,255,0.86) !important; }
+.platform-card.is-selected .length-name {
+  color: var(--platform-fg, #fff) !important;
+}
+.platform-card.is-selected .length-desc {
+  color: var(--platform-fg-soft, rgba(255,255,255,0.86)) !important;
+}
+/* Per-platform contrast overrides — set wherever the card sets
+   --platform-accent. Bright accents (TikTok cyan) need dark ink. The
+   [data-platform="tiktok"] selector applies whether it's on the card
+   itself OR on the document root (set globally by Scripts.jsx so any
+   .cta-btn.is-platform inherits the correct foreground). */
+[data-platform="tiktok"] {
+  --platform-fg: #0B1A1A;
+  --platform-fg-soft: rgba(11,26,26,0.78);
+}
 
 /* ---------- Shorts bento layout (Option A) ----------
    Phone hero anchored at top center; auxiliary cards flow underneath in a
@@ -4671,3 +4897,2626 @@
 .nav-link:hover .nav-upgrade-pill {
   filter: brightness(1.08);
 }
+
+/* ============================================================================
+ * Studio quota pill — anchored top-right of the Studio hero. Lives in its
+ * own positioned wrapper so the popover (.quota-pop) can absolute-position
+ * relative to the trigger without disturbing the hero layout.
+ * ========================================================================= */
+.studio-hero-top {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  width: 100%;
+}
+.quota-pill-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.quota-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(127,119,221,0.35);
+  background: rgba(15, 10, 30, 0.45);
+  color: var(--text-muted, #B5ADCE);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.quota-pill:hover { background: rgba(127,119,221,0.18); color: #E8E1F8; }
+.quota-pill .quota-pill-text { color: #E8E1F8; }
+.quota-pill .quota-pill-reset { opacity: 0.65; font-weight: 500; }
+.quota-pill.is-low {
+  border-color: rgba(224,164,88,0.55);
+  background: rgba(224,164,88,0.12);
+  color: #F5D9B6;
+}
+.quota-pill.is-low .quota-pill-text { color: #F5D9B6; }
+.quota-pill.is-exhausted {
+  border-color: rgba(229, 99, 99, 0.55);
+  background: rgba(229,99,99,0.14);
+  color: #FFC4C4;
+}
+.quota-pill.is-exhausted .quota-pill-text { color: #FFC4C4; }
+.quota-pill-unlimited {
+  background: linear-gradient(135deg, rgba(201,149,108,0.16), rgba(127,119,221,0.16));
+  border-color: rgba(201,149,108,0.45);
+  color: #F5D9B6;
+  cursor: default;
+}
+.quota-pill-unlimited:hover { filter: brightness(1.04); }
+
+.quota-pop {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 30;
+  min-width: 280px;
+  max-width: 320px;
+  padding: 14px 14px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(127,119,221,0.35);
+  background: #0F0A1E;
+  box-shadow: 0 16px 40px rgba(0,0,0,0.45);
+  color: #E8E1F8;
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: left;
+}
+.quota-pop-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  color: #C9956C;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.quota-pop-close {
+  background: none; border: none; color: rgba(216,210,234,0.55);
+  cursor: pointer; padding: 2px; border-radius: 6px;
+}
+.quota-pop-close:hover { color: #E8E1F8; background: rgba(127,119,221,0.12); }
+.quota-pop-row {
+  display: flex; justify-content: space-between; align-items: baseline;
+  font-size: 13px;
+}
+.quota-pop-row b { font-weight: 700; color: #FAFAFF; }
+.quota-pop-bar {
+  margin-top: 6px;
+  height: 6px; width: 100%;
+  border-radius: 999px;
+  background: rgba(127,119,221,0.18);
+  overflow: hidden;
+}
+.quota-pop-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #7F77DD, #C9956C);
+  transition: width 0.3s ease;
+}
+.quota-pop-bar-fill.is-avatar {
+  background: linear-gradient(90deg, #C9956C, #E0A458);
+}
+.quota-pop-foot {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(127,119,221,0.18);
+  color: rgba(216,210,234,0.7);
+  font-size: 12px;
+}
+.quota-pop-foot b { color: #E8E1F8; font-weight: 600; }
+.quota-pop-cta {
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: 8px;
+  background: rgba(229,99,99,0.10);
+  border: 1px solid rgba(229,99,99,0.35);
+  color: #FFD0D0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+@media (max-width: 720px) {
+  .quota-pop { right: auto; left: 0; min-width: 240px; max-width: 90vw; }
+}
+
+/* ============================================================================
+ * Tier chips (T1/T2/T3/T4/Founder) shown in admin Usage tab.
+ * ========================================================================= */
+.ent-chip-t1      { background: rgba(120,200,180,0.18); color: #BFEFE3; border: 1px solid rgba(120,200,180,0.4); }
+.ent-chip-t2      { background: rgba(120,170,230,0.18); color: #C8DEFF; border: 1px solid rgba(120,170,230,0.4); }
+.ent-chip-t3      { background: rgba(201,149,108,0.20); color: #F5D9B6; border: 1px solid rgba(201,149,108,0.45); }
+.ent-chip-t4      { background: rgba(224,164,88,0.22);  color: #FFEAD0; border: 1px solid rgba(224,164,88,0.55); }
+.ent-chip-founder { background: rgba(127,119,221,0.22); color: #DCD5FF; border: 1px solid rgba(127,119,221,0.5); font-weight: 700; }
+
+/* ============================================================================
+ * Usage tab — sortable headers + drilldown row.
+ * ========================================================================= */
+.usage-table .usage-th-sortable {
+  cursor: pointer;
+  user-select: none;
+  transition: color 0.15s ease;
+}
+.usage-table .usage-th-sortable:hover { color: var(--accent); }
+.usage-table .usage-th-sortable.is-active { color: var(--accent); }
+.usage-row.is-open { background: rgba(127,119,221,0.06); }
+.usage-row:hover { background: rgba(127,119,221,0.08); }
+.usage-drilldown-row > td { padding: 0 !important; background: rgba(15,10,30,0.4); }
+.usage-drilldown {
+  padding: 18px 22px 22px;
+  border-bottom: 1px solid rgba(127,119,221,0.18);
+}
+.usage-drilldown-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+}
+.usage-card {
+  border-radius: 10px;
+  background: rgba(15,10,30,0.55);
+  border: 1px solid rgba(127,119,221,0.22);
+  padding: 14px;
+}
+.usage-card h4 {
+  margin: 0 0 8px;
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--accent);
+  font-weight: 700;
+}
+.usage-num {
+  font-size: 24px;
+  font-weight: 700;
+  color: #FAFAFF;
+  line-height: 1.1;
+}
+.usage-breakdown {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: rgba(216,210,234,0.78);
+}
+.usage-breakdown b { color: #E8E1F8; font-weight: 700; }
+.usage-mute {
+  font-size: 11px;
+  color: rgba(216,210,234,0.5);
+  margin-top: 10px;
+}
+@media (max-width: 980px) {
+  .usage-drilldown-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 600px) {
+  .usage-drilldown-grid { grid-template-columns: 1fr; }
+}
+
+
+/* ============================================================================
+ * Thumbnail Engine — standalone /thumbnails page.
+ * Reuses the Studio hero pattern for the header so navigation feels familiar.
+ * ========================================================================= */
+.thumbnails-main {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 28px 24px 80px;
+}
+
+/* Quota pill specific to the Thumbnails page (sized smaller than the Studio
+ * pill since it sits beside an eyebrow, not as a primary nav element). */
+.thumb-quota {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(127,119,221,0.35);
+  background: rgba(15,10,30,0.45);
+  color: #E8E1F8;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.thumb-quota.is-low {
+  border-color: rgba(224,164,88,0.55);
+  background: rgba(224,164,88,0.12);
+  color: #F5D9B6;
+}
+.thumb-quota.is-exhausted {
+  border-color: rgba(229,99,99,0.55);
+  background: rgba(229,99,99,0.14);
+  color: #FFC4C4;
+}
+.thumb-quota-unlimited {
+  background: linear-gradient(135deg, rgba(201,149,108,0.18), rgba(127,119,221,0.18));
+  border-color: rgba(201,149,108,0.45);
+  color: #F5D9B6;
+}
+
+/* ------------------------------ composer ------------------------------ */
+.thumb-card {
+  margin: 24px auto 28px;
+  padding: 24px 26px;
+  border-radius: 18px;
+  background: rgba(15,10,30,0.55);
+  border: 1px solid rgba(127,119,221,0.22);
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.thumb-row { display: flex; flex-direction: column; gap: 8px; }
+.thumb-row-double {
+  flex-direction: row;
+  gap: 22px;
+  flex-wrap: wrap;
+}
+.thumb-row-double > .thumb-control-group { flex: 1 1 320px; }
+
+.thumb-label {
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #C9956C;
+  font-weight: 700;
+}
+.thumb-optional {
+  color: rgba(216,210,234,0.55);
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: none;
+  margin-left: 6px;
+}
+
+.thumb-card input,
+.thumb-card textarea {
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(127,119,221,0.28);
+  background: rgba(8,5,20,0.6);
+  color: #F0EBFF;
+  font-size: 14px;
+  line-height: 1.5;
+  resize: vertical;
+  font-family: inherit;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+.thumb-card input:focus,
+.thumb-card textarea:focus {
+  outline: none;
+  border-color: rgba(201,149,108,0.65);
+  background: rgba(8,5,20,0.85);
+}
+
+.thumb-prompt-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 4px;
+}
+.thumb-rewrite-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(127,119,221,0.5);
+  background: rgba(127,119,221,0.15);
+  color: #E8E1F8;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+.thumb-rewrite-btn:hover:not(:disabled) {
+  background: rgba(127,119,221,0.28);
+  border-color: rgba(201,149,108,0.65);
+}
+.thumb-rewrite-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.thumb-char-count {
+  font-size: 11px;
+  color: rgba(216,210,234,0.55);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Segmented controls for engine + aspect — bigger than typical chips because
+ * the sublabels need room. Disabled state for locked Premium uses a lock icon. */
+.thumb-segmented {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.thumb-seg {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(127,119,221,0.28);
+  background: rgba(8,5,20,0.6);
+  color: rgba(216,210,234,0.78);
+  cursor: pointer;
+  min-width: 120px;
+  position: relative;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.thumb-seg > svg {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  opacity: 0.8;
+}
+.thumb-seg:hover:not(:disabled) {
+  border-color: rgba(201,149,108,0.55);
+  color: #F0EBFF;
+}
+.thumb-seg.is-active {
+  background: linear-gradient(135deg, rgba(201,149,108,0.22), rgba(127,119,221,0.22));
+  border-color: rgba(201,149,108,0.7);
+  color: #FFFAEC;
+}
+.thumb-seg.is-locked { cursor: not-allowed; opacity: 0.55; }
+.thumb-seg-label {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.thumb-seg-sub {
+  font-size: 11px;
+  color: rgba(216,210,234,0.6);
+  letter-spacing: 0.02em;
+}
+
+.thumb-actions { display: flex; justify-content: flex-end; }
+.thumb-generate-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 22px;
+  border-radius: 999px;
+  border: 1px solid rgba(201,149,108,0.55);
+  background: linear-gradient(135deg, #C9956C, #8E6B4D);
+  color: #1B0F2A;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: transform 0.1s ease, filter 0.15s ease;
+}
+.thumb-generate-btn:hover:not(:disabled) { filter: brightness(1.08); transform: translateY(-1px); }
+.thumb-generate-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; filter: none; }
+
+.thumb-error {
+  margin-top: 4px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: rgba(229,99,99,0.10);
+  border: 1px solid rgba(229,99,99,0.4);
+  color: #FFD0D0;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.thumb-toast {
+  margin-top: 4px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: rgba(120,200,180,0.10);
+  border: 1px solid rgba(120,200,180,0.45);
+  color: #BFEFE3;
+  font-size: 13px;
+}
+
+@keyframes thumb-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+.thumb-spin { animation: thumb-spin 1s linear infinite; }
+
+/* ------------------------------ history grid -------------------------- */
+.thumb-history { margin-top: 32px; }
+.thumb-history-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+.thumb-history-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 17px;
+  font-weight: 700;
+  color: #F0EBFF;
+  margin: 0;
+}
+.thumb-refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 7px;
+  border-radius: 8px;
+  border: 1px solid rgba(127,119,221,0.28);
+  background: rgba(15,10,30,0.45);
+  color: #E8E1F8;
+  cursor: pointer;
+}
+.thumb-refresh-btn:hover:not(:disabled) { background: rgba(127,119,221,0.18); }
+.thumb-empty {
+  padding: 40px 28px;
+  text-align: center;
+  border-radius: 14px;
+  border: 1px dashed rgba(127,119,221,0.3);
+  background: rgba(8,5,20,0.4);
+  color: rgba(216,210,234,0.6);
+  font-size: 13px;
+}
+
+.thumb-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 18px;
+}
+.thumb-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-radius: 14px;
+  background: rgba(15,10,30,0.55);
+  border: 1px solid rgba(127,119,221,0.22);
+  overflow: hidden;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+.thumb-tile:hover { border-color: rgba(201,149,108,0.45); transform: translateY(-2px); }
+.thumb-tile-img-wrap {
+  position: relative;
+  width: 100%;
+  background: #08051C;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.thumb-tile-16_9 .thumb-tile-img-wrap { aspect-ratio: 16 / 9; }
+.thumb-tile-9_16 .thumb-tile-img-wrap { aspect-ratio: 9 / 16; max-height: 360px; }
+.thumb-tile-1_1  .thumb-tile-img-wrap { aspect-ratio: 1 / 1; }
+.thumb-tile-img-btn {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background: transparent;
+  cursor: zoom-in;
+  display: block;
+}
+.thumb-tile-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.thumb-tile-zoom-hint {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  width: 28px; height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: rgba(8,5,20,0.65);
+  border: 1px solid rgba(255,255,255,0.18);
+  color: rgba(245,217,182,0.9);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  pointer-events: none;
+  backdrop-filter: blur(6px);
+}
+.thumb-tile:hover .thumb-tile-zoom-hint { opacity: 1; }
+.thumb-tile-overlay {
+  position: absolute;
+  inset: auto 0 0 0;
+  padding: 10px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  background: linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.55) 100%);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.thumb-tile:hover .thumb-tile-overlay,
+.thumb-tile:focus-within .thumb-tile-overlay { opacity: 1; }
+.thumb-tile-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px; height: 30px;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.18);
+  background: rgba(15,10,30,0.85);
+  color: #F0EBFF;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+.thumb-tile-action:hover { background: rgba(127,119,221,0.45); border-color: rgba(201,149,108,0.7); }
+.thumb-tile-action-danger:hover { background: rgba(229,99,99,0.45); border-color: rgba(229,99,99,0.7); }
+.thumb-tile-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px;
+  font-size: 11px;
+  color: rgba(216,210,234,0.7);
+  font-variant-numeric: tabular-nums;
+}
+.thumb-tile-engine {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.thumb-tile-engine-premium {
+  background: rgba(201,149,108,0.22);
+  color: #F5D9B6;
+  border: 1px solid rgba(201,149,108,0.5);
+}
+.thumb-tile-engine-fast {
+  background: rgba(127,119,221,0.22);
+  color: #DCD5FF;
+  border: 1px solid rgba(127,119,221,0.5);
+}
+.thumb-tile-aspect { font-weight: 600; }
+.thumb-tile-date { margin-left: auto; }
+.thumb-tile-prompt {
+  margin: 4px 14px 14px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: rgba(216,210,234,0.7);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+@media (max-width: 720px) {
+  .thumb-row-double { flex-direction: column; gap: 14px; }
+}
+
+
+/* ============================================================================
+ * Cover-prompt picker — shown only when the user arrives from Scripts via
+ * "Make thumbnail" and we have 3 picked-apart cover prompts. Acts as a
+ * pre-composer panel that auto-populates the prompt textarea below it.
+ * ========================================================================= */
+.thumb-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 14px;
+  background: rgba(127,119,221,0.06);
+  border: 1px solid rgba(127,119,221,0.28);
+}
+.thumb-picker-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.thumb-picker-head .thumb-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.thumb-genall-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(201,149,108,0.55);
+  background: linear-gradient(135deg, rgba(201,149,108,0.18), rgba(127,119,221,0.18));
+  color: #FFFAEC;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease, filter 0.15s ease;
+}
+.thumb-genall-btn:hover:not(:disabled) { filter: brightness(1.1); border-color: rgba(201,149,108,0.85); }
+.thumb-genall-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+.thumb-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+.thumb-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(127,119,221,0.22);
+  background: rgba(8,5,20,0.55);
+  color: rgba(216,210,234,0.78);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.thumb-choice:hover {
+  border-color: rgba(201,149,108,0.55);
+  color: #F0EBFF;
+}
+.thumb-choice.is-active {
+  border-color: rgba(201,149,108,0.85);
+  background: linear-gradient(135deg, rgba(201,149,108,0.16), rgba(127,119,221,0.16));
+  color: #FFFAEC;
+}
+.thumb-choice-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #C9956C;
+  font-weight: 700;
+}
+.thumb-choice-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: rgba(201,149,108,0.25);
+  color: #F5D9B6;
+  font-size: 11px;
+  font-weight: 700;
+}
+.thumb-choice-label { color: rgba(216,210,234,0.6); font-weight: 600; }
+.thumb-choice-check { margin-left: auto; color: #C9956C; }
+.thumb-choice-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #F0EBFF;
+  line-height: 1.35;
+}
+.thumb-choice-prompt {
+  font-size: 12px;
+  line-height: 1.45;
+  color: rgba(216,210,234,0.7);
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.thumb-picker-hint {
+  margin: 0;
+  font-size: 12px;
+  color: rgba(216,210,234,0.55);
+  line-height: 1.5;
+}
+.thumb-picker-hint b { color: #E8E1F8; font-weight: 700; }
+
+/* Cost-confirmation modal for paying users hitting "Generate all". */
+.thumb-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(5, 3, 12, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+.thumb-modal {
+  width: 100%;
+  max-width: 440px;
+  border-radius: 14px;
+  background: #0F0A1E;
+  border: 1px solid rgba(127,119,221,0.4);
+  padding: 22px 24px 18px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.55);
+  color: #E8E1F8;
+}
+.thumb-modal-title {
+  margin: 0 0 12px;
+  font-size: 16px;
+  font-weight: 700;
+  color: #FFFAEC;
+}
+.thumb-modal-body {
+  margin: 0 0 18px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: rgba(216,210,234,0.85);
+}
+.thumb-modal-body b { color: #F5D9B6; font-weight: 700; }
+.thumb-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.thumb-modal-btn {
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid rgba(127,119,221,0.4);
+  background: transparent;
+  color: #E8E1F8;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+.thumb-modal-btn:hover { background: rgba(127,119,221,0.18); }
+.thumb-modal-btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-color: rgba(201,149,108,0.7);
+  background: linear-gradient(135deg, #C9956C, #8E6B4D);
+  color: #1B0F2A;
+}
+.thumb-modal-btn-primary:hover { filter: brightness(1.08); }
+
+
+/* ============================================================================
+ * Group D — License redemption / Profile dropdown / Founder theme accent
+ * ========================================================================= */
+
+/* ---- Profile dropdown (top-right of header) -------------------------- */
+.profile-menu-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.profile-menu-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px 6px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(127,119,221,0.28);
+  background: rgba(15,10,30,0.45);
+  color: #E8E1F8;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+.profile-menu-trigger:hover { background: rgba(127,119,221,0.18); border-color: rgba(127,119,221,0.5); }
+.profile-menu-trigger.is-founder {
+  border-color: rgba(201,149,108,0.55);
+  background: linear-gradient(135deg, rgba(201,149,108,0.14), rgba(127,119,221,0.10));
+}
+.profile-menu-trigger.is-founder:hover {
+  border-color: rgba(201,149,108,0.85);
+  background: linear-gradient(135deg, rgba(201,149,108,0.22), rgba(127,119,221,0.14));
+}
+.profile-menu-email {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.profile-menu-caret {
+  transition: transform 0.15s ease;
+  opacity: 0.7;
+}
+.profile-menu-caret.is-open { transform: rotate(180deg); }
+
+.profile-founder-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #C9956C, #8E6B4D);
+  color: #1B0F2A;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.profile-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 240px;
+  max-width: 320px;
+  z-index: 50;
+  border-radius: 12px;
+  border: 1px solid rgba(127,119,221,0.4);
+  background: #0F0A1E;
+  box-shadow: 0 18px 50px rgba(0,0,0,0.5);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+}
+.profile-menu-head {
+  padding: 10px 12px 12px;
+  border-bottom: 1px solid rgba(127,119,221,0.2);
+  margin-bottom: 6px;
+}
+.profile-menu-email-full {
+  font-size: 12px;
+  color: rgba(216,210,234,0.7);
+  word-break: break-all;
+  line-height: 1.4;
+}
+.profile-menu-tier {
+  margin-top: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(127,119,221,0.35);
+  background: rgba(127,119,221,0.12);
+  color: #DCD5FF;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.profile-menu-tier.is-founder {
+  border-color: rgba(201,149,108,0.55);
+  background: linear-gradient(135deg, rgba(201,149,108,0.22), rgba(127,119,221,0.12));
+  color: #F5D9B6;
+}
+.profile-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: none;
+  background: none;
+  color: #E8E1F8;
+  font-size: 13px;
+  cursor: pointer;
+  text-decoration: none;
+  width: 100%;
+  text-align: left;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+.profile-menu-item:hover { background: rgba(127,119,221,0.18); color: #FFFAEC; }
+.profile-menu-item-upgrade {
+  color: #F5D9B6;
+  font-weight: 700;
+}
+.profile-menu-item-upgrade:hover {
+  background: linear-gradient(135deg, rgba(201,149,108,0.22), rgba(127,119,221,0.16));
+  color: #FFFAEC;
+}
+.profile-menu-item-signout {
+  color: rgba(255,180,180,0.85);
+  border-top: 1px solid rgba(127,119,221,0.2);
+  margin-top: 4px;
+  border-radius: 0 0 8px 8px;
+}
+.profile-menu-item-signout:hover { background: rgba(229,99,99,0.18); color: #FFC4C4; }
+
+/* ---- Footer redemption link ------------------------------------------ */
+.footer-link {
+  /* v1.14.0 — use the design-token muted color so the link tracks light
+     and dark themes properly. The earlier hardcoded lavender disappeared
+     against the pale lavender light-mode background. */
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  margin: 0 12px;
+  transition: color 0.15s ease;
+}
+.footer-link:hover { color: var(--accent); }
+[data-theme="light"] .footer-link {
+  color: color-mix(in srgb, var(--text) 60%, var(--bg) 40%);
+}
+[data-theme="light"] .footer-link:hover { color: var(--accent); }
+
+/* ---- Login page: pending redeem banner + redeem toggle --------------- */
+.login-pending-redeem {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  margin: 0 0 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(201,149,108,0.45);
+  background: linear-gradient(135deg, rgba(201,149,108,0.14), rgba(127,119,221,0.10));
+  color: #F5D9B6;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+.login-pending-redeem b {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11.5px;
+  color: #FFFAEC;
+  letter-spacing: 0.04em;
+}
+.login-redeem-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 14px;
+  font-size: 12px;
+  color: rgba(216,210,234,0.6);
+  text-decoration: none;
+  letter-spacing: 0.02em;
+  transition: color 0.15s ease;
+  align-self: center;
+}
+.login-redeem-toggle:hover { color: #C9956C; }
+
+/* ---- Redeem page ----------------------------------------------------- */
+.redeem-main {
+  min-height: calc(100vh - 200px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+}
+.redeem-card {
+  width: 100%;
+  max-width: 440px;
+  padding: 32px 28px 24px;
+  border-radius: 16px;
+  border: 1px solid rgba(127,119,221,0.28);
+  background: rgba(15,10,30,0.7);
+  box-shadow: 0 20px 60px rgba(0,0,0,0.45);
+  text-align: center;
+}
+.redeem-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px; height: 56px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, rgba(201,149,108,0.22), rgba(127,119,221,0.16));
+  border: 1px solid rgba(201,149,108,0.55);
+  color: #C9956C;
+  margin-bottom: 16px;
+}
+.redeem-title {
+  font-size: 24px;
+  font-weight: 700;
+  color: #FFFAEC;
+  margin: 0 0 8px;
+}
+.redeem-sub {
+  font-size: 14px;
+  color: rgba(216,210,234,0.7);
+  margin: 0 0 24px;
+  line-height: 1.5;
+}
+.redeem-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  text-align: left;
+}
+.redeem-label {
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #C9956C;
+  font-weight: 700;
+}
+.redeem-form input {
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(127,119,221,0.3);
+  background: rgba(8,5,20,0.7);
+  color: #FFFAEC;
+  font-size: 14px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  letter-spacing: 0.06em;
+  text-align: center;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+.redeem-form input:focus {
+  outline: none;
+  border-color: rgba(201,149,108,0.7);
+  background: rgba(8,5,20,0.9);
+}
+.redeem-submit-btn {
+  margin-top: 8px;
+  padding: 12px 18px;
+  border-radius: 999px;
+  border: 1px solid rgba(201,149,108,0.6);
+  background: linear-gradient(135deg, #C9956C, #8E6B4D);
+  color: #1B0F2A;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: filter 0.15s ease, transform 0.1s ease;
+}
+.redeem-submit-btn:hover:not(:disabled) { filter: brightness(1.1); transform: translateY(-1px); }
+.redeem-submit-btn:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
+.redeem-error {
+  margin-top: 4px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(229,99,99,0.10);
+  border: 1px solid rgba(229,99,99,0.4);
+  color: #FFD0D0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  text-align: left;
+}
+.redeem-success {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 24px 16px 20px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(120,200,180,0.12), rgba(127,119,221,0.10));
+  border: 1px solid rgba(120,200,180,0.5);
+  color: #BFEFE3;
+}
+.redeem-success > svg { color: #BFEFE3; }
+.redeem-success strong {
+  display: block;
+  font-size: 16px;
+  color: #FFFAEC;
+  margin-bottom: 4px;
+}
+.redeem-success p {
+  margin: 0;
+  font-size: 13px;
+
+/* ---- Admin Licenses tab --------------------------------------------- */
+.admin-select {
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(127,119,221,0.3);
+  background: rgba(8,5,20,0.7);
+  color: #E8E1F8;
+  font-size: 12px;
+  cursor: pointer;
+}
+.admin-select:focus {
+  outline: none;
+  border-color: rgba(201,149,108,0.65);
+}
+.admin-textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(127,119,221,0.3);
+  background: rgba(8,5,20,0.6);
+  color: #F0EBFF;
+  font-size: 12.5px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  line-height: 1.5;
+  resize: vertical;
+  margin: 10px 0;
+}
+.admin-textarea:focus {
+  outline: none;
+  border-color: rgba(201,149,108,0.65);
+  background: rgba(8,5,20,0.85);
+}
+.admin-create-panel {
+  margin: 14px 0 18px;
+  padding: 16px 18px;
+  border-radius: 12px;
+  border: 1px solid rgba(127,119,221,0.3);
+  background: rgba(15,10,30,0.55);
+}
+.admin-create-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  gap: 12px;
+}
+.admin-create-head h4 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: #FFFAEC;
+  letter-spacing: 0.04em;
+  flex: 1 1 auto;
+}
+.admin-create-head .admin-icon-btn {
+  flex: 0 0 auto;
+}
+.admin-create-hint {
+  margin: 0 0 6px;
+  font-size: 12px;
+  color: rgba(216,210,234,0.6);
+  line-height: 1.6;
+}
+.admin-create-hint code {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11.5px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(127,119,221,0.12);
+  color: #DCD5FF;
+}
+.admin-create-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+}
+.admin-create-row > label {
+  display: flex !important;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 160px;
+  flex: 1 1 200px;
+}
+.admin-create-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: #C9956C;
+  font-weight: 700;
+}
+.admin-create-row input {
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(127,119,221,0.3);
+  background: rgba(8,5,20,0.7);
+  color: #F0EBFF;
+  font-size: 12.5px;
+  font-family: inherit;
+}
+.admin-create-row input:focus {
+  outline: none;
+  border-color: rgba(201,149,108,0.65);
+}
+.admin-td-code {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11.5px;
+  letter-spacing: 0.04em;
+  color: #F0EBFF;
+}
+.licenses-status {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.licenses-status-available {
+  background: rgba(120,200,180,0.18);
+  color: #BFEFE3;
+  border: 1px solid rgba(120,200,180,0.45);
+}
+.licenses-status-redeemed {
+  background: rgba(127,119,221,0.22);
+  color: #DCD5FF;
+  border: 1px solid rgba(127,119,221,0.5);
+}
+.licenses-status-void {
+  background: rgba(229,99,99,0.14);
+  color: #FFC4C4;
+  border: 1px solid rgba(229,99,99,0.45);
+}
+.admin-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px; height: 26px;
+  border-radius: 6px;
+  border: 1px solid rgba(127,119,221,0.3);
+  background: transparent;
+  color: rgba(216,210,234,0.7);
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.admin-icon-btn:hover { background: rgba(229,99,99,0.18); color: #FFC4C4; border-color: rgba(229,99,99,0.45); }
+
+  color: rgba(216,210,234,0.85);
+  line-height: 1.45;
+}
+.redeem-go-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 18px;
+  margin-top: 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(201,149,108,0.6);
+  background: linear-gradient(135deg, #C9956C, #8E6B4D);
+  color: #1B0F2A;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  text-decoration: none;
+}
+.redeem-go-btn:hover { filter: brightness(1.1); }
+.redeem-foot {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(127,119,221,0.2);
+}
+.redeem-foot-link {
+  color: rgba(216,210,234,0.55);
+  font-size: 12px;
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+.redeem-foot-link:hover { color: #C9956C; }
+
+/* ---- Quota popover upgrade button ------------------------------------ */
+.quota-pop-upgrade-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  margin-top: 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(201,149,108,0.6);
+  background: linear-gradient(135deg, #C9956C, #8E6B4D);
+  color: #1B0F2A;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  text-decoration: none;
+  transition: filter 0.15s ease;
+}
+.quota-pop-upgrade-btn:hover { filter: brightness(1.1); }
+
+/* ============================================================================
+ * Founder theme accent — flipped via body[data-founder="true"] when the
+ * ProfileMenu detects the legacy `founders: true` flag. Swaps the dominant
+ * purple `--accent` to copper across the most visible surfaces. Non-founders
+ * see the existing purple theme; founders see a quiet copper highlight that
+ * makes the app feel exclusive without being shouty.
+ *
+ * We DO NOT swap every color token — only the ones that read as "brand
+ * accent" (focus rings, primary CTA fills, nav active underline, quota pill
+ * border). Component-specific copper accents (.thumb-modal-btn-primary, etc)
+ * keep their copper regardless since copper is already a brand color.
+ * ========================================================================= */
+body[data-founder="true"] .nav-link.is-active {
+  color: #F5D9B6;
+}
+body[data-founder="true"] .nav-link.is-active::after {
+  background: linear-gradient(90deg, #C9956C, #E0A458) !important;
+}
+body[data-founder="true"] .quota-pill:not(.quota-pill-unlimited):not(.is-low):not(.is-exhausted) {
+  border-color: rgba(201,149,108,0.45);
+}
+body[data-founder="true"] .quota-pill:not(.quota-pill-unlimited):hover {
+  background: rgba(201,149,108,0.18);
+}
+body[data-founder="true"] .quota-pill .quota-pill-text {
+  color: #F5D9B6;
+}
+body[data-founder="true"] .header-btn {
+  border-color: rgba(201,149,108,0.5);
+}
+body[data-founder="true"] .header-btn:hover {
+  background: rgba(201,149,108,0.18);
+}
+body[data-founder="true"] a:focus-visible,
+body[data-founder="true"] button:focus-visible,
+body[data-founder="true"] input:focus-visible,
+body[data-founder="true"] textarea:focus-visible {
+  outline-color: rgba(201,149,108,0.7);
+}
+
+
+
+/* ============================================================
+   BYOK Settings page (/settings/keys)
+   ============================================================ */
+.settings-keys-main {
+  min-height: calc(100vh - 120px);
+  padding: 48px 24px 80px;
+  display: flex;
+  justify-content: center;
+}
+.settings-keys-shell {
+  width: 100%;
+  max-width: 760px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+.settings-keys-loading {
+  margin: 80px auto;
+  color: rgba(216,210,234,0.6);
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.settings-keys-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: rgba(216,210,234,0.7);
+  text-decoration: none;
+  font-size: 13px;
+  width: fit-content;
+  padding: 4px 0;
+}
+.settings-keys-back:hover { color: var(--accent); }
+
+.settings-keys-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 28px 28px 32px;
+  border-radius: 20px;
+  background: linear-gradient(135deg, rgba(127,119,221,0.10), rgba(201,149,108,0.08));
+  border: 1px solid rgba(127,119,221,0.20);
+}
+.settings-keys-hero-icon { color: #C9956C; }
+.settings-keys-title {
+  font-size: 30px;
+  font-weight: 700;
+  margin: 0;
+  color: #F0EBFF;
+  letter-spacing: -0.01em;
+}
+.settings-keys-sub {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.55;
+  color: rgba(216,210,234,0.78);
+  max-width: 560px;
+}
+.settings-keys-sub strong { color: #F5D9B6; font-weight: 600; }
+.settings-keys-trust {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 4px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(15,10,30,0.5);
+  border: 1px solid rgba(127,119,221,0.22);
+  color: rgba(216,210,234,0.7);
+  font-size: 11.5px;
+}
+.settings-keys-trust svg { color: #7C5CF0; }
+
+.settings-keys-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.settings-key-card {
+  padding: 22px 24px 24px;
+  border-radius: 16px;
+  background: rgba(15,10,30,0.55);
+  border: 1px solid rgba(127,119,221,0.22);
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+.settings-key-card.is-saved {
+  border-color: rgba(201,149,108,0.42);
+  background: rgba(20,14,38,0.65);
+}
+.settings-key-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.settings-key-card-title {
+  margin: 0 0 4px;
+  font-size: 16px;
+  font-weight: 600;
+  color: #F0EBFF;
+}
+.settings-key-card-purpose {
+  margin: 0;
+  font-size: 13px;
+  color: rgba(216,210,234,0.65);
+}
+.settings-key-card-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: rgba(201,149,108,0.14);
+  border: 1px solid rgba(201,149,108,0.42);
+  color: #F5D9B6;
+  font-size: 11.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.settings-key-card-body { display: flex; flex-direction: column; gap: 8px; }
+.settings-key-label {
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #C9956C;
+  font-weight: 700;
+}
+.settings-key-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+.settings-key-input {
+  flex: 1 1 auto;
+  padding: 11px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(127,119,221,0.28);
+  background: rgba(8,5,20,0.65);
+  color: #F0EBFF;
+  font-size: 13.5px;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  letter-spacing: 0.02em;
+}
+.settings-key-input:focus {
+  outline: none;
+  border-color: rgba(201,149,108,0.65);
+  background: rgba(8,5,20,0.85);
+}
+.settings-key-save-btn {
+  padding: 10px 18px;
+  border-radius: 10px;
+  border: 1px solid rgba(201,149,108,0.55);
+  background: rgba(201,149,108,0.18);
+  color: #F5D9B6;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.15s ease, transform 0.1s ease;
+  white-space: nowrap;
+}
+.settings-key-save-btn:hover:not(:disabled) {
+  background: rgba(201,149,108,0.28);
+  transform: translateY(-1px);
+}
+.settings-key-save-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.settings-key-delete-btn {
+  width: 40px;
+  border-radius: 10px;
+  border: 1px solid rgba(220,80,80,0.32);
+  background: rgba(220,80,80,0.10);
+  color: #FF9E9E;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.15s ease;
+}
+.settings-key-delete-btn:hover:not(:disabled) {
+  background: rgba(220,80,80,0.22);
+}
+.settings-key-ok {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #7BD994;
+  margin-top: 4px;
+}
+.settings-key-err {
+  font-size: 12.5px;
+  color: #FF9E9E;
+  margin-top: 4px;
+}
+
+.settings-keys-foot {
+  margin-top: 8px;
+  font-size: 12.5px;
+  color: rgba(216,210,234,0.55);
+  text-align: center;
+}
+.settings-keys-foot a {
+  color: var(--accent);
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.settings-keys-foot a:hover { text-decoration: underline; }
+
+/* Founder copper accent */
+body[data-founder="true"] .settings-key-save-btn {
+  background: rgba(201,149,108,0.22);
+  border-color: rgba(201,149,108,0.65);
+}
+
+/* ============================================================
+   Thumbnail full-screen lightbox preview
+   ============================================================ */
+.thumb-lightbox-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  background: rgba(4,2,12,0.85);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 24px;
+  cursor: zoom-out;
+  animation: thumbLightboxFade 0.18s ease-out;
+}
+@keyframes thumbLightboxFade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.thumb-lightbox-close {
+  position: absolute;
+  top: 20px;
+  right: 24px;
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.18);
+  background: rgba(15,10,30,0.7);
+  color: #F0EBFF;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 2;
+  transition: background-color 0.15s ease, transform 0.1s ease;
+}
+.thumb-lightbox-close:hover {
+  background: rgba(30,20,50,0.85);
+  transform: scale(1.05);
+}
+
+.thumb-lightbox {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  max-width: min(1100px, 92vw);
+  max-height: calc(100vh - 64px);
+  cursor: default;
+  border-radius: 14px;
+  overflow: hidden;
+  background: #08051C;
+  border: 1px solid rgba(127,119,221,0.25);
+  box-shadow: 0 40px 100px -30px rgba(0,0,0,0.7);
+  margin: 0;
+  animation: thumbLightboxRise 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes thumbLightboxRise {
+  from { opacity: 0; transform: translateY(12px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.thumb-lightbox-img {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: calc(100vh - 220px);
+  object-fit: contain;
+  background: #08051C;
+}
+
+.thumb-lightbox-9_16 .thumb-lightbox-img { max-height: calc(100vh - 200px); }
+
+.thumb-lightbox-caption {
+  padding: 16px 20px 18px;
+  border-top: 1px solid rgba(127,119,221,0.18);
+  background: rgba(15,10,30,0.85);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.thumb-lightbox-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  font-size: 11.5px;
+}
+.thumb-lightbox-prompt {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: rgba(216,210,234,0.82);
+  max-height: 120px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+}
+.thumb-lightbox-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+.thumb-lightbox-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 9px;
+  border: 1px solid rgba(127,119,221,0.32);
+  background: rgba(127,119,221,0.14);
+  color: #F0EBFF;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+.thumb-lightbox-btn:hover {
+  background: rgba(127,119,221,0.24);
+  border-color: rgba(201,149,108,0.45);
+}
+
+@media (max-width: 720px) {
+  .thumb-lightbox { max-height: calc(100vh - 32px); }
+  .thumb-lightbox-img { max-height: calc(100vh - 260px); }
+  .thumb-lightbox-close { top: 12px; right: 12px; width: 36px; height: 36px; }
+}
+
+
+/* ============================================================
+   Admin toolbar pill — GHL connection status, etc
+   ============================================================ */
+.admin-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
+  border: 1px solid transparent;
+  white-space: nowrap;
+  cursor: default;
+}
+.admin-pill.is-ok {
+  background: rgba(123,217,148,0.12);
+  border-color: rgba(123,217,148,0.45);
+  color: #9CE0B0;
+}
+.admin-pill.is-warn {
+  background: rgba(245,178,80,0.10);
+  border-color: rgba(245,178,80,0.40);
+  color: #F5B250;
+}
+.admin-pill.is-err {
+  background: rgba(220,80,80,0.10);
+  border-color: rgba(220,80,80,0.40);
+  color: #FF9E9E;
+}
+
+
+/* ============================================================
+   v1.16.0 — LIGHT MODE FIXES for Thumbnails + adjacent surfaces.
+   Originals were authored against the dark palette only, so on
+   [data-theme="light"] they rendered as gray-purple boxes on a
+   pale background with low-contrast text. We override only the
+   problem surfaces, leaving the dark-mode look untouched.
+   ============================================================ */
+
+/* --- Form card + nested inputs/textarea -------------------- */
+[data-theme="light"] .thumb-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-card);
+}
+[data-theme="light"] .thumb-card input,
+[data-theme="light"] .thumb-card textarea {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+[data-theme="light"] .thumb-card input::placeholder,
+[data-theme="light"] .thumb-card textarea::placeholder {
+  color: var(--muted);
+}
+[data-theme="light"] .thumb-card input:focus,
+[data-theme="light"] .thumb-card textarea:focus {
+  background: var(--surface);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+[data-theme="light"] .thumb-optional { color: var(--muted); }
+
+/* --- Rewrite button (subtle, secondary) -------------------- */
+[data-theme="light"] .thumb-rewrite-btn {
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  color: var(--accent);
+}
+[data-theme="light"] .thumb-rewrite-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 18%, var(--surface));
+}
+
+/* --- Engine + Aspect segmented chips ----------------------- */
+[data-theme="light"] .thumb-seg {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+[data-theme="light"] .thumb-seg:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--text);
+}
+[data-theme="light"] .thumb-seg.is-active {
+  background: linear-gradient(135deg,
+    color-mix(in srgb, var(--warning) 14%, var(--surface)),
+    color-mix(in srgb, var(--accent) 14%, var(--surface)));
+  border-color: var(--warning);
+  color: var(--text);
+}
+[data-theme="light"] .thumb-seg-sub { color: var(--muted); }
+
+/* --- Generate primary CTA (warm copper on light) ----------- */
+[data-theme="light"] .thumb-generate-btn {
+  background: var(--warning);
+  border-color: var(--warning);
+  color: #FFFFFF;
+}
+[data-theme="light"] .thumb-generate-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--warning) 88%, #000 12%);
+}
+[data-theme="light"] .thumb-generate-btn:disabled { opacity: 0.5; }
+
+/* --- Cover-prompt picker panel (when arriving from Scripts) - */
+[data-theme="light"] .thumb-picker {
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+/* --- Gallery tiles ----------------------------------------- */
+[data-theme="light"] .thumb-tile {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-card);
+}
+[data-theme="light"] .thumb-tile:hover {
+  border-color: var(--warning);
+  box-shadow: 0 4px 14px -4px color-mix(in srgb, var(--warning) 40%, transparent);
+}
+/* Image well: keep a soft neutral behind portrait/landscape mismatches */
+[data-theme="light"] .thumb-tile-img-wrap {
+  background: var(--surface-soft);
+}
+[data-theme="light"] .thumb-tile-prompt,
+[data-theme="light"] .thumb-tile-meta { color: var(--muted); }
+[data-theme="light"] .thumb-tile-aspect { color: var(--text); }
+
+/* Tile floating actions overlay: white pill on hover, dark icon */
+[data-theme="light"] .thumb-tile-action {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+[data-theme="light"] .thumb-tile-action:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+[data-theme="light"] .thumb-tile-action-danger:hover {
+  background: var(--danger-soft);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+[data-theme="light"] .thumb-tile-zoom-hint {
+  background: rgba(255,255,255,0.92);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+/* Engine pills inside tiles — keep them branded but bump contrast */
+[data-theme="light"] .thumb-tile-engine-premium {
+  background: color-mix(in srgb, var(--warning) 14%, var(--surface));
+  color: color-mix(in srgb, var(--warning) 75%, var(--text));
+  border-color: color-mix(in srgb, var(--warning) 55%, transparent);
+}
+[data-theme="light"] .thumb-tile-engine-fast {
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  color: color-mix(in srgb, var(--accent) 80%, var(--text));
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+/* History header refresh button + title sit on light bg cleanly */
+[data-theme="light"] .thumb-history-title { color: var(--text); }
+
+/* --- Hero subtitle + label (already designed for muted, but
+   the eyebrow uses a hardcoded warm copper. In light it's fine
+   — keep — only soften the body subtitle so headings dominate.) */
+[data-theme="light"] .thumb-hero-sub { color: var(--muted); }
+
+/* --- Lightbox (full-screen preview) ------------------------ */
+/* The lightbox itself stays dark — that's intentional (a viewer
+   should focus on the image). Just bump the caption text contrast
+   in light theme so the prompt + buttons read crisply on the
+   lightbox's dark surface. (No override needed — the lightbox
+   is dark in both themes, by design.) */
+
+
+
+/* ============================================================
+   v1.17.0 — More LIGHT MODE polish:
+     (1) Hero eyebrow ("FACELESS TO FINISHED · VIDEO ENGINE")
+         — copper at 11px on lavender was barely readable.
+     (2) Owner / unlimited pill — 16% gradient washed out on
+         pale bg.
+     (3) Settings/Keys page cards — same rgba(15,10,30,0.55)
+         pattern as the thumbnails bug fixed in v1.16.0.
+   ============================================================ */
+
+/* --- Hero eyebrow text ------------------------------------- */
+/* In dark mode the copper has good contrast on the deep purple
+   page. In light mode the same copper hex melts into the pale
+   lavender bg, so we deepen + add weight + soften the tracking. */
+[data-theme="light"] .studio-eyebrow {
+  color: color-mix(in srgb, var(--warning) 78%, #000 22%);
+  font-weight: 700;
+  letter-spacing: 0.28em;
+}
+[data-theme="light"] .studio-main[data-mode="avatar"]   .studio-eyebrow,
+[data-theme="light"] .studio-main[data-mode="faceless"] .studio-eyebrow {
+  color: color-mix(in srgb, var(--warning) 78%, #000 22%);
+}
+
+/* --- Quota / Owner pill (header) --------------------------- */
+[data-theme="light"] .quota-pill {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text);
+}
+[data-theme="light"] .quota-pill-unlimited {
+  background: linear-gradient(135deg,
+    color-mix(in srgb, var(--warning) 18%, var(--surface)),
+    color-mix(in srgb, var(--accent) 14%, var(--surface)));
+  border-color: var(--warning);
+  color: color-mix(in srgb, var(--warning) 75%, var(--text));
+  font-weight: 600;
+}
+[data-theme="light"] .quota-pill-unlimited svg { color: var(--warning); }
+
+/* The quota popover (clicking the pill) — keep readable on light. */
+[data-theme="light"] .quota-pop {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text);
+  box-shadow: var(--shadow-modal);
+}
+
+/* Studio Quota pill on the page itself (not the header) */
+[data-theme="light"] .thumb-quota {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text);
+}
+[data-theme="light"] .thumb-quota-unlimited {
+  background: linear-gradient(135deg,
+    color-mix(in srgb, var(--warning) 18%, var(--surface)),
+    color-mix(in srgb, var(--accent) 14%, var(--surface)));
+  border-color: var(--warning);
+  color: color-mix(in srgb, var(--warning) 75%, var(--text));
+}
+
+/* --- Settings/Keys page (BYOK) ----------------------------- */
+[data-theme="light"] .settings-keys-hero {
+  background: linear-gradient(135deg,
+    color-mix(in srgb, var(--accent) 8%, var(--surface)),
+    color-mix(in srgb, var(--warning) 6%, var(--surface)));
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-card);
+}
+[data-theme="light"] .settings-keys-title { color: var(--text); }
+[data-theme="light"] .settings-keys-sub { color: var(--muted); }
+[data-theme="light"] .settings-keys-sub strong { color: color-mix(in srgb, var(--warning) 75%, var(--text)); }
+[data-theme="light"] .settings-keys-trust {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--muted);
+}
+[data-theme="light"] .settings-keys-trust svg { color: var(--accent); }
+[data-theme="light"] .settings-keys-back { color: var(--muted); }
+[data-theme="light"] .settings-keys-back:hover { color: var(--accent); }
+[data-theme="light"] .settings-keys-loading { color: var(--muted); }
+
+[data-theme="light"] .settings-key-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-card);
+}
+[data-theme="light"] .settings-key-card.is-saved {
+  border-color: var(--warning);
+  background: linear-gradient(135deg,
+    color-mix(in srgb, var(--warning) 6%, var(--surface)),
+    var(--surface));
+}
+[data-theme="light"] .settings-key-card-title { color: var(--text); }
+[data-theme="light"] .settings-key-card-purpose { color: var(--muted); }
+[data-theme="light"] .settings-key-card-badge {
+  background: color-mix(in srgb, var(--warning) 14%, var(--surface));
+  border-color: var(--warning);
+  color: color-mix(in srgb, var(--warning) 75%, var(--text));
+}
+[data-theme="light"] .settings-key-label {
+  color: color-mix(in srgb, var(--warning) 78%, #000 22%);
+}
+[data-theme="light"] .settings-key-input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+[data-theme="light"] .settings-key-input::placeholder { color: var(--muted); }
+[data-theme="light"] .settings-key-input:focus {
+  background: var(--surface);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+[data-theme="light"] .settings-key-save-btn {
+  background: var(--warning);
+  border-color: var(--warning);
+  color: #FFFFFF;
+}
+[data-theme="light"] .settings-key-save-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--warning) 88%, #000 12%);
+}
+[data-theme="light"] .settings-key-delete-btn {
+  background: var(--danger-soft);
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+  color: var(--danger);
+}
+[data-theme="light"] .settings-key-delete-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 18%, var(--surface));
+}
+[data-theme="light"] .settings-key-ok { color: var(--success); }
+[data-theme="light"] .settings-key-err { color: var(--danger); }
+[data-theme="light"] .settings-keys-foot { color: var(--muted); }
+[data-theme="light"] .settings-keys-foot a { color: var(--accent); }
+
+
+/* =====================================================================
+   Roadmap page (/roadmap) — public, no auth required. Mirrors the studio
+   + thumbnails hero treatment (eyebrow + gradient title) so AppSumo
+   reviewers landing here see a consistent brand language. Four columns
+   on desktop, single column on mobile. Theme tokens auto-switch.
+   ===================================================================== */
+.roadmap-main {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 28px 24px 96px;
+  color: var(--text);
+}
+.roadmap-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: center;
+  text-align: center;
+  padding: 8px 0 28px;
+}
+.roadmap-back {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  margin-bottom: 8px;
+  transition: color 120ms, border-color 120ms, background 120ms;
+}
+.roadmap-back:hover { color: var(--text); border-color: var(--accent); }
+.roadmap-eyebrow {
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  color: var(--warning);
+  margin: 0;
+}
+.roadmap-title {
+  font-weight: 700;
+  font-size: clamp(28px, 4.6vw, 48px);
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  margin: 0;
+  background: linear-gradient(135deg, #FFFFFF 0%, #E8E4FF 35%, #C9956C 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  max-width: 760px;
+}
+.roadmap-sub {
+  color: var(--muted);
+  font-size: 15px;
+  margin: 0;
+  max-width: 600px;
+  line-height: 1.65;
+}
+.roadmap-mail { color: var(--accent); text-decoration: none; font-weight: 500; }
+.roadmap-mail:hover { text-decoration: underline; }
+
+.roadmap-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 18px;
+  margin-top: 24px;
+}
+@media (max-width: 1100px) {
+  .roadmap-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 640px) {
+  .roadmap-grid { grid-template-columns: 1fr; }
+  .roadmap-main { padding: 20px 16px 72px; }
+}
+
+.roadmap-column {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 18px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-shadow: var(--shadow-card, 0 1px 3px rgba(0,0,0,0.06));
+}
+.roadmap-column-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 10px;
+}
+.roadmap-column-head svg { color: var(--accent); flex-shrink: 0; }
+.roadmap-column-shipped     .roadmap-column-head svg { color: var(--success, #1d9e75); }
+.roadmap-column-inProgress  .roadmap-column-head svg { color: var(--warning); }
+.roadmap-column-planned     .roadmap-column-head svg { color: var(--accent); }
+.roadmap-column-considering .roadmap-column-head svg { color: var(--muted); }
+
+.roadmap-column-title {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin: 0;
+  color: var(--text);
+  flex: 1;
+}
+.roadmap-column-count {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 8px;
+  min-width: 24px;
+  text-align: center;
+}
+.roadmap-column-note {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 0;
+  line-height: 1.5;
+}
+.roadmap-list {
+  list-style: none;
+  padding: 0;
+  margin: 6px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.roadmap-item {
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg) 60%, transparent);
+  transition: border-color 140ms, transform 140ms, background 140ms;
+}
+.roadmap-item:hover {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+  transform: translateY(-1px);
+}
+.roadmap-item-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.roadmap-item-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0;
+  color: var(--text);
+  line-height: 1.35;
+}
+.roadmap-item-tag {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.roadmap-item-tag[data-tag="p0"],
+.roadmap-item-tag[data-tag="top-request"] {
+  background: color-mix(in srgb, var(--warning) 22%, transparent);
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 38%, transparent);
+}
+.roadmap-item-tag[data-tag="appsumo"],
+.roadmap-item-tag[data-tag="pro-plus"] {
+  background: color-mix(in srgb, var(--success, #1d9e75) 22%, transparent);
+  color: var(--success, #1d9e75);
+  border-color: color-mix(in srgb, var(--success, #1d9e75) 38%, transparent);
+}
+.roadmap-item-tag[data-tag="this-week"] {
+  background: color-mix(in srgb, var(--warning) 28%, transparent);
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 50%, transparent);
+}
+.roadmap-item-blurb {
+  font-size: 13px;
+  color: var(--muted);
+  margin: 0;
+  line-height: 1.55;
+}
+
+.roadmap-footnote {
+  margin-top: 36px;
+  padding: 20px 24px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--border));
+  text-align: center;
+}
+.roadmap-footnote p {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text);
+  line-height: 1.65;
+  max-width: 720px;
+  margin-inline: auto;
+}
+
+/* Light-mode polish — matches the v1.17.0 trilogy. Goes through design
+   tokens (var(--surface), var(--text), var(--muted), var(--warning),
+   var(--accent), var(--border)) so dark mode stays untouched. */
+[data-theme="light"] .roadmap-eyebrow {
+  color: color-mix(in srgb, var(--warning) 78%, #000 22%);
+}
+[data-theme="light"] .roadmap-title {
+  background: linear-gradient(135deg, #1a1530 0%, #4a3f7a 45%, #a86b45 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+[data-theme="light"] .roadmap-column { background: #ffffff; }
+[data-theme="light"] .roadmap-item { background: var(--bg); }
+[data-theme="light"] .roadmap-column-count { background: #ffffff; }
+[data-theme="light"] .roadmap-footnote {
+  background: linear-gradient(135deg,
+    color-mix(in srgb, var(--accent) 10%, #ffffff),
+    color-mix(in srgb, var(--warning) 8%, #ffffff));
+}
+
+/* =====================================================================
+   v1.18.1 additions — roadmap admin edit + landing nav + scripts banner
+   + public changelog page. All dark+light token-driven.
+   ===================================================================== */
+
+/* --- Roadmap positioning subhead + admin banner ----------------------- */
+.roadmap-positioning {
+  font-style: italic;
+  color: var(--text);
+  font-size: 14px;
+  margin: 0;
+  max-width: 640px;
+  line-height: 1.6;
+  opacity: 0.85;
+}
+.roadmap-admin-banner {
+  margin-top: 8px;
+  padding: 8px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warning) 32%, transparent);
+  border-radius: 999px;
+  letter-spacing: 0.02em;
+}
+.roadmap-loading,
+.roadmap-error {
+  text-align: center;
+  padding: 40px 20px;
+  color: var(--muted);
+  font-size: 14px;
+}
+.roadmap-error {
+  color: #e26060;
+  background: color-mix(in srgb, #e26060 8%, var(--surface));
+  border: 1px solid color-mix(in srgb, #e26060 28%, var(--border));
+  border-radius: 10px;
+  margin: 20px 0;
+}
+
+/* --- Admin per-card action buttons ----------------------------------- */
+.roadmap-item-admin {
+  display: flex;
+  gap: 4px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed color-mix(in srgb, var(--border) 80%, transparent);
+}
+.roadmap-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  cursor: pointer;
+  transition: color 120ms, border-color 120ms, background 120ms;
+}
+.roadmap-icon-btn:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.roadmap-icon-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.roadmap-icon-btn-danger:hover:not(:disabled) {
+  color: #e26060;
+  border-color: color-mix(in srgb, #e26060 55%, var(--border));
+  background: color-mix(in srgb, #e26060 10%, transparent);
+}
+
+/* --- Inline editor --------------------------------------------------- */
+.roadmap-item-editor {
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+  border-radius: 10px;
+  padding: 14px;
+}
+.roadmap-editor-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.roadmap-editor-row { display: flex; flex-direction: column; gap: 4px; }
+.roadmap-editor-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.roadmap-editor-input,
+.roadmap-editor-select,
+.roadmap-editor-textarea {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 8px 10px;
+  font-size: 13px;
+  color: var(--text);
+  font-family: inherit;
+  transition: border-color 120ms;
+}
+.roadmap-editor-input:focus,
+.roadmap-editor-select:focus,
+.roadmap-editor-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.roadmap-editor-textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
+.roadmap-editor-tag-row { display: flex; flex-direction: column; gap: 6px; }
+.roadmap-editor-tag-presets { display: flex; flex-wrap: wrap; gap: 4px; }
+.roadmap-tag-preset {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: color 120ms, border-color 120ms;
+}
+.roadmap-tag-preset:hover { color: var(--text); border-color: var(--accent); }
+.roadmap-editor-error { color: #e26060; font-size: 12px; margin: 0; }
+.roadmap-editor-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.roadmap-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 7px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background 120ms, color 120ms, border-color 120ms;
+}
+.roadmap-btn-ghost { background: transparent; color: var(--muted); border-color: var(--border); }
+.roadmap-btn-ghost:hover { color: var(--text); }
+.roadmap-btn-primary { background: var(--accent); color: #ffffff; }
+.roadmap-btn-primary:hover { filter: brightness(1.06); }
+.roadmap-btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* --- Add-item button -------------------------------------------------- */
+.roadmap-add-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 10px;
+  align-self: flex-start;
+  background: transparent;
+  color: var(--accent);
+  border: 1px dashed color-mix(in srgb, var(--accent) 60%, var(--border));
+  border-radius: 8px;
+  padding: 7px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 120ms, border-color 120ms;
+}
+.roadmap-add-btn:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-style: solid;
+}
+
+/* --- Scripts-page release banner ------------------------------------- */
+.roadmap-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  margin: 0 0 16px;
+  border-radius: 10px;
+  background: linear-gradient(135deg,
+    color-mix(in srgb, var(--accent) 18%, var(--surface)),
+    color-mix(in srgb, var(--warning) 12%, var(--surface)));
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--border));
+  color: var(--text);
+  font-size: 13px;
+  animation: roadmapBannerSlide 380ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+@keyframes roadmapBannerSlide {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.roadmap-banner-icon { color: var(--warning); flex-shrink: 0; }
+.roadmap-banner-body { flex: 1; line-height: 1.4; }
+.roadmap-banner-title { font-weight: 600; color: var(--text); }
+.roadmap-banner-sub   { color: var(--muted); }
+.roadmap-banner-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--accent);
+  color: #ffffff !important;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  flex-shrink: 0;
+  transition: filter 120ms;
+}
+.roadmap-banner-cta:hover { filter: brightness(1.08); }
+.roadmap-banner-dismiss {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 6px;
+  transition: color 120ms, background 120ms;
+  flex-shrink: 0;
+}
+.roadmap-banner-dismiss:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+
+/* --- Public landing nav (lives in Header.jsx for non-signed-in users) -- */
+.site-public-nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 4px;
+}
+.public-nav-link {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted);
+  text-decoration: none;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  transition: color 120ms, border-color 120ms, background 120ms;
+}
+.public-nav-link:hover {
+  color: var(--text);
+  border-color: var(--border);
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+}
+.public-nav-cta {
+  font-size: 13px;
+  font-weight: 600;
+  color: #ffffff;
+  text-decoration: none;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: var(--accent);
+  border: 1px solid transparent;
+  transition: filter 120ms, transform 80ms;
+}
+.public-nav-cta:hover { filter: brightness(1.08); }
+.public-nav-cta:active { transform: translateY(1px); }
+@media (max-width: 640px) {
+  .site-public-nav { gap: 2px; }
+  .public-nav-link { padding: 5px 9px; font-size: 12px; }
+  .public-nav-cta { padding: 5px 11px; font-size: 12px; }
+}
+[data-theme="light"] .public-nav-link:hover {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+/* --- Public /changelog page ----------------------------------------- */
+.changelog-main {
+  max-width: 820px;
+  margin: 0 auto;
+  padding: 28px 24px 96px;
+  color: var(--text);
+}
+.changelog-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 12px;
+  padding: 8px 0 32px;
+}
+.changelog-timeline {
+  list-style: none;
+  padding: 0;
+  margin: 24px 0 0;
+  position: relative;
+}
+.changelog-timeline::before {
+  content: "";
+  position: absolute;
+  left: 7px;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  background: var(--border);
+}
+.changelog-entry {
+  position: relative;
+  padding-left: 32px;
+  margin-bottom: 28px;
+}
+.changelog-marker {
+  position: absolute;
+  left: 0;
+  top: 6px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 3px solid var(--bg);
+  box-shadow: 0 0 0 1px var(--border);
+}
+.changelog-entry:first-child .changelog-marker { background: var(--warning); }
+.changelog-entry-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.changelog-version {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin: 0;
+  color: var(--text);
+}
+.changelog-date {
+  font-size: 12px;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.changelog-latest-pill {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--warning) 22%, transparent);
+  color: var(--warning);
+  border: 1px solid color-mix(in srgb, var(--warning) 40%, transparent);
+}
+.changelog-changes {
+  list-style: disc;
+  padding-left: 20px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.65;
+}
+.changelog-changes li { margin-bottom: 6px; }
+.changelog-changes li::marker { color: var(--accent); }
+
+/* --- Light-mode overrides for v1.18.1 ------------------------------- */
+[data-theme="light"] .roadmap-positioning { color: var(--text); opacity: 0.78; }
+[data-theme="light"] .roadmap-admin-banner {
+  background: color-mix(in srgb, var(--warning) 14%, #ffffff);
+  color: color-mix(in srgb, var(--warning) 75%, #000);
+}
+[data-theme="light"] .roadmap-item-editor { background: color-mix(in srgb, var(--accent) 6%, #ffffff); }
+[data-theme="light"] .roadmap-editor-input,
+[data-theme="light"] .roadmap-editor-select,
+[data-theme="light"] .roadmap-editor-textarea { background: #ffffff; }
+[data-theme="light"] .roadmap-tag-preset { background: #ffffff; }
+[data-theme="light"] .roadmap-banner {
+  background: linear-gradient(135deg,
+    color-mix(in srgb, var(--accent) 10%, #ffffff),
+    color-mix(in srgb, var(--warning) 8%, #ffffff));
+}
+[data-theme="light"] .changelog-marker { border-color: #ffffff; }
+

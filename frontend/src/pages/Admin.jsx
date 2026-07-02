@@ -1,13 +1,17 @@
 import React, { useEffect, useState } from "react";
 import { Navigate } from "react-router-dom";
 import { useAuth } from "../App";
-import { Users, Activity as ActivityIcon, BarChart3 } from "lucide-react";
+import { Users, Activity as ActivityIcon, BarChart3, TrendingUp, KeyRound } from "lucide-react";
 import BuyersTab from "../components/admin/BuyersTab";
 import ActivityTab from "../components/admin/ActivityTab";
 import StatsTab from "../components/admin/StatsTab";
+import UsageTab from "../components/admin/UsageTab";
+import LicensesTab from "../components/admin/LicensesTab";
 
 const TABS = [
   { key: "buyers", label: "Buyers", Icon: Users },
+  { key: "usage", label: "Usage", Icon: TrendingUp },
+  { key: "licenses", label: "Licenses", Icon: KeyRound },
   { key: "activity", label: "Activity", Icon: ActivityIcon },
   { key: "stats", label: "Stats", Icon: BarChart3 },
 ];
@@ -58,6 +62,8 @@ export default function Admin() {
       </div>
       <div className="admin-tab-body">
         {tab === "buyers" && <BuyersTab />}
+        {tab === "usage" && <UsageTab />}
+        {tab === "licenses" && <LicensesTab />}
         {tab === "activity" && <ActivityTab />}
         {tab === "stats" && <StatsTab />}
       </div>

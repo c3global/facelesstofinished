@@ -52,8 +52,9 @@ from prompts import (
 load_dotenv()
 
 from admin_routes import register_admin_routes  # noqa: E402
-from appsumo_routes import get_buyer_appsumo_limits, register_appsumo_routes  # noqa: E402
 from uploads_routes import register_uploads_routes  # noqa: E402
+import auth_magic_link  # noqa: E402  – magic-link token storage + helpers
+import ghl_integration  # noqa: E402  – outbound webhook to GHL (magic link email)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("f48")
@@ -64,6 +65,23 @@ DB_NAME = os.environ["DB_NAME"]
 EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
 HEYGEN_API_KEY = os.environ.get("HEYGEN_API_KEY", "")
 FAL_API_KEY = os.environ.get("FAL_API_KEY", "")
+
+# BYOK runtime overrides — set at the top of each render path when the
+# buyer has saved a customer API key. Helpers read via the
+# `_effective_*_key()` accessors so platform defaults stay in place for
+# everything outside the active render coroutine (avatar listings, TTS
+# preloads, storage uploads, etc).
+import contextvars  # noqa: E402  – kept beside the env reads for grouping
+_override_heygen_key_ctx: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("override_heygen_key", default=None)
+_override_fal_key_ctx: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("override_fal_key", default=None)
+
+
+def _effective_heygen_key() -> str:
+    return _override_heygen_key_ctx.get() or HEYGEN_API_KEY
+
+
+def _effective_fal_key() -> str:
+    return _override_fal_key_ctx.get() or FAL_API_KEY
 PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY", "")
 PIXABAY_API_KEY = os.environ.get("PIXABAY_API_KEY", "")
 JWT_SECRET = os.environ.get("JWT_SECRET", "dev-secret-change-me")
@@ -98,13 +116,38 @@ mongo = AsyncIOMotorClient(MONGO_URL)
 db = mongo[DB_NAME]
 
 app = FastAPI(title="F2F48 Studio API", version="0.1.0")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS — v1.15.0 — switched from `allow_origins=["*"] + allow_credentials=True`
+# (which is invalid per the W3C CORS spec — browsers silently reject the
+# combination on cross-origin /auth/me calls from the deployed frontend)
+# to either:
+#   - an explicit whitelist via FRONTEND_ORIGINS env var, OR
+#   - a regex wildcard when no whitelist is set (still safe because our
+#     auth boundary is the bearer JWT, not the origin).
+# `allow_credentials=False` because the frontend ships JWT in the
+# Authorization header, not in cookies. This fixes the previously-broken
+# cross-origin /api/auth/me + /api/me/quota path when frontend is served
+# from a different host than the backend (e.g. on the production domain
+# vs the kubernetes preview URL).
+_frontend_origins = (os.environ.get("FRONTEND_ORIGINS") or "").strip()
+if _frontend_origins:
+    _origins_list = [o.strip() for o in _frontend_origins.split(",") if o.strip()]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_origins_list,
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+        expose_headers=["Content-Disposition"],
+    )
+else:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=".*",
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+        expose_headers=["Content-Disposition"],
+    )
 
 api = FastAPI()  # mounted at /api below
 
@@ -145,6 +188,77 @@ async def _prewarm_heygen_caches() -> None:
     # Detach so startup returns immediately. The container is "ready" the
     # moment the API can serve /health; the cache fills in the background.
     asyncio.create_task(_warm())
+
+
+# ---------------------------------------------------------------------------
+# Cycle reset loop — Group B of the AppSumo launch plan.
+#
+# Every hour, scan buyers whose anniversary cycle is due and roll their
+# counters forward. Founders bypass entirely (no quota → no cycle). Wrapped
+# in try/except so a transient Mongo error never crashes the loop.
+#
+# Uses asyncio.sleep + asyncio.create_task instead of apscheduler so the
+# codebase stays dependency-free. The 1-hour interval is fine for monthly
+# cycles — a buyer whose cycle was due at 03:17 just gets reset at the next
+# hourly tick by 04:00 worst-case. Under 1-hour drift on a 30-day cycle.
+# ---------------------------------------------------------------------------
+@app.on_event("startup")
+async def _start_cycle_reset_loop() -> None:
+    from tier_config import fresh_cycle_payload  # local import — avoids cycle risk
+
+    async def _reset_due_cycles() -> int:
+        """Advance every buyer whose cycleResetsAt has passed. Returns the
+        number of buyers reset (used for log volume management — only log on
+        non-zero days)."""
+        now_iso = datetime.now(timezone.utc).isoformat()
+        query = {
+            "cycleResetsAt": {"$lte": now_iso},
+            "$or": [{"founders": {"$ne": True}}, {"founders": {"$exists": False}}],
+        }
+        # Snapshot count + iterate so we can log who was reset (Activity row
+        # per reset for the admin Activity tab — keeps reset history auditable).
+        emails: list[str] = []
+        async for b in db.buyers.find(query, {"email": 1}):
+            emails.append(b["email"])
+        if not emails:
+            return 0
+        payload = fresh_cycle_payload()
+        await db.buyers.update_many(
+            {"email": {"$in": emails}},
+            {"$set": payload},
+        )
+        # Compact single activity row covering this batch — beats N rows on
+        # the 1st of each month when ~all buyers reset at once.
+        try:
+            await db.activity.insert_one({
+                "id": str(uuid.uuid4()),
+                "ts": now_iso,
+                "type": "cycle_reset_batch",
+                "email": "system",
+                "detail": {"count": len(emails), "emails": emails[:20], "truncated": len(emails) > 20},
+            })
+        except Exception:
+            pass  # telemetry only — never block the reset itself
+        return len(emails)
+
+    async def _loop() -> None:
+        # Wait 30s after startup so the warm-up tasks complete first before
+        # we start hitting Mongo with the cycle scan. Subsequent ticks run
+        # every hour.
+        await asyncio.sleep(30)
+        while True:
+            try:
+                n = await _reset_due_cycles()
+                if n:
+                    logger.info(f"[cycle-reset] advanced {n} buyer(s)")
+            except Exception as exc:  # noqa: BLE001 — keep loop alive forever
+                logger.warning(f"[cycle-reset] tick failed: {type(exc).__name__}: {exc}")
+            await asyncio.sleep(3600)  # 1 hour
+
+    import asyncio  # noqa: PLC0415
+    asyncio.create_task(_loop())
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -254,48 +368,13 @@ def require_studio(user: AuthUser) -> None:
         raise HTTPException(status_code=403, detail="Studio entitlement required")
 
 
-async def _enforce_appsumo_render_quota(user: AuthUser, mode: str, jobs: int = 1) -> None:
-    """AppSumo tier quota gate for Studio renders (approved by Charity
-    2026-07-02). No-op for non-AppSumo customers — get_buyer_appsumo_limits
-    returns None for Pinball/admin-granted buyers, keeping them unlimited.
-
-    AppSumo tiers include a fixed number of Studio videos per calendar month
-    (UTC): Tier 2 = 3 Faceless; Tier 3 = 10 Faceless + 3 Avatar. Composite
-    renders use a HeyGen avatar so they draw from the Avatar quota. Failed
-    renders don't count against the quota."""
-    limits = await get_buyer_appsumo_limits(db, user.email)
-    if limits is None:
-        return
-    is_avatar = mode in ("avatar", "composite")
-    quota = int(limits.get("avatar_per_month" if is_avatar else "faceless_per_month") or 0)
-    label = "Avatar" if is_avatar else "Faceless"
-    if quota <= 0:
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                f"{label} videos aren't included in your AppSumo tier "
-                f"(Tier {limits['tier']}). Upgrade your license on AppSumo to unlock them."
-            ),
-        )
-    # created_at is a UTC isoformat string, so string comparison is safe here.
-    month_start = datetime.now(timezone.utc).replace(
-        day=1, hour=0, minute=0, second=0, microsecond=0
-    ).isoformat()
-    used = await db.renders.count_documents({
-        "user_email": user.email,
-        "mode": {"$in": ["avatar", "composite"]} if is_avatar else "faceless",
-        "status": {"$ne": "failed"},
-        "created_at": {"$gte": month_start},
-    })
-    if used + jobs > quota:
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                f"You've used {used} of the {quota} {label} videos included in your "
-                f"AppSumo tier this month. Your quota resets on the 1st — or upgrade "
-                f"your license on AppSumo for more."
-            ),
-        )
+async def require_admin(user: AuthUser = Depends(current_user)) -> AuthUser:
+    """Top-level admin dependency. `admin_routes.py` defines its own inner
+    copy for historical reasons; this one is shared with `licenses_routes.py`
+    and any future modular routers that need the same gate."""
+    if not (user.is_admin or user.email.lower() in ADMIN_EMAILS):
+        raise HTTPException(status_code=403, detail="Admin only")
+    return user
 
 
 # ---------------------------------------------------------------------------
@@ -306,30 +385,37 @@ async def health():
     return {"ok": True}
 
 
-@api.post("/auth/check")
-async def auth_check(payload: LoginPayload):
-    """Verify a user has Studio access.
+async def _resolve_signin(email: str) -> Optional[dict]:
+    """Shared post-authentication resolver — turns a verified email into a
+    (token, user, welcome?) response tuple by checking DEV_BYPASS,
+    STUDIO_GRANT, and `db.buyers` in order. Returns None when the email
+    has no path to a token (unknown buyer / no entitlements).
 
-    Resolution order (first match wins):
-      1. `DEV_BYPASS_EMAIL` — preview/local-only single-email bypass so devs
-         can hit the Studio UI without touching production data. Set ONLY in
-         the preview .env; never in production env vars.
-      2. `STUDIO_GRANT_EMAILS` — comma-separated list of hand-onboarded
-         founders that get instant access. Permanent admin backstop.
-      3. `db.buyers` lookup — admin-added buyers (Admin → Buyers UI) and
-         Pinball-webhook buyers (auto-populated on paid orders). LIVE
-         source of truth for paying customers since the Netlify→Emergent
-         migration. Returns a one-time `welcome` field on first sign-in
-         after a Pinball auto-grant so the UI can celebrate.
+    IMPORTANT: this helper trusts that the caller has ALREADY proven the
+    user owns the email address (via a valid magic-link token). It is
+    NOT safe to call from an unverified `/auth/check` request.
     """
-    email = payload.email.strip().lower()
-    if not email:
-        raise HTTPException(status_code=400, detail="Email required")
+    async def _stamp_last_login() -> None:
+        try:
+            now_iso = datetime.now(timezone.utc).isoformat()
+            await db.buyers.update_one(
+                {"email": email},
+                {
+                    "$set": {"lastLoginAt": now_iso, "updatedAt": now_iso},
+                    "$inc": {"loginCount": 1},
+                },
+                upsert=False,
+            )
+        except Exception:
+            pass
 
-    # 1) Dev bypass — preview env only.
+    # 1) Dev bypass — preview env only. STILL requires the magic-link flow
+    # in production; this branch just means the dev doesn't need an entry
+    # in db.buyers.
     if DEV_BYPASS_EMAIL and email == DEV_BYPASS_EMAIL:
         is_admin = email in ADMIN_EMAILS
         token = issue_jwt(email, KNOWN_ENTITLEMENTS, is_admin=is_admin)
+        await _stamp_last_login()
         return {
             "token": token,
             "user": {"email": email, "entitlements": KNOWN_ENTITLEMENTS, "isAdmin": is_admin},
@@ -339,30 +425,20 @@ async def auth_check(payload: LoginPayload):
     if email in STUDIO_GRANT_EMAILS:
         is_admin = email in ADMIN_EMAILS
         token = issue_jwt(email, KNOWN_ENTITLEMENTS, is_admin=is_admin)
+        await _stamp_last_login()
         return {
             "token": token,
             "user": {"email": email, "entitlements": KNOWN_ENTITLEMENTS, "isAdmin": is_admin},
         }
 
-    # 3) Database-backed buyer lookup — admin-added buyers + Pinball-webhook
-    #    buyers. This is the SOURCE OF TRUTH for paying customers since the
-    #    Netlify→Emergent migration. The admin Buyers UI writes here, and the
-    #    Pinball webhook auto-populates this collection on every paid order.
+    # 3) Database-backed buyer lookup — source of truth for paying customers.
     buyer = await db.buyers.find_one({"email": email})
     if buyer:
         ents = list(buyer.get("entitlements") or [])
         is_admin = email in ADMIN_EMAILS
-        # Admins can sign in even with no entitlements (so an owner without
-        # a purchase record can still use the app). Everyone else needs at
-        # least one entitlement on file. Empty-entitlement buyers are
-        # treated as "revoked" — admin can re-grant via the Buyers UI.
         if is_admin and not ents:
             ents = list(KNOWN_ENTITLEMENTS)
         if ents:
-            # First-sign-in welcome flag — set by the Pinball webhook when it
-            # auto-provisions a buyer. We read it ONCE on first sign-in and
-            # clear it atomically so the frontend can show a "Welcome — access
-            # granted" toast exactly once per Pinball grant.
             welcome = None
             if buyer.get("pending_welcome"):
                 welcome = {
@@ -374,6 +450,7 @@ async def auth_check(payload: LoginPayload):
                     {"$unset": {"pending_welcome": "", "pending_welcome_ents": ""}},
                 )
             token = issue_jwt(email, ents, is_admin=is_admin)
+            await _stamp_last_login()
             response = {
                 "token": token,
                 "user": {"email": email, "entitlements": ents, "isAdmin": is_admin},
@@ -381,13 +458,229 @@ async def auth_check(payload: LoginPayload):
             if welcome:
                 response["welcome"] = welcome
             return response
+    return None
 
-    # 4) No remaining resolution path. The cross-origin Netlify auth-me
-    #    handshake was retired with the Netlify site itself — db.buyers is
-    #    now the single source of truth. Anyone who can't sign in here
-    #    either hasn't been admin-granted or hasn't completed a Pinball
-    #    purchase (or used a different email at checkout).
-    raise HTTPException(status_code=401, detail="Could not sign in. Use the email you bought with.")
+
+# ---------------------------------------------------------------------------
+# Magic-link auth (P0 security fix — replaces the previous "type-your-email-
+# and-you're-in" flow with a real passwordless email verification loop).
+#
+# Flow:
+#   POST /api/auth/request-magic-link  { email }
+#     → Generates a 32-byte token, stores it in db.magic_link_tokens with a
+#       15-minute expiry, and pushes an outbound webhook to GHL. GHL's
+#       workflow sends the actual email via her transactional-email node.
+#     → Returns { ok: true } ALWAYS (anti-enumeration).
+#
+#   GET /api/auth/verify-magic-link?token=<token>
+#     → Validates the token (atomic single-use consume), runs the shared
+#       _resolve_signin() helper to derive entitlements + JWT, and
+#       302-redirects to `<app_base>/auth/callback#jwt=<JWT>&email=<email>`
+#     → Frontend AuthCallback.jsx page reads the fragment, stores the
+#       token, and navigates to /scripts.
+# ---------------------------------------------------------------------------
+
+class MagicLinkRequest(BaseModel):
+    email: str
+
+
+@app.on_event("startup")
+async def _magic_link_indexes() -> None:
+    await auth_magic_link.ensure_indexes(db)
+
+
+@api.post("/auth/request-magic-link")
+async def request_magic_link(request: Request, payload: MagicLinkRequest):
+    """Generate and email (via GHL) a single-use sign-in link.
+
+    Returns `{ok: true, sent: true}` regardless of whether the email is on
+    file — this prevents email enumeration. If GHL is unconfigured we log
+    the magic link so the operator can retrieve it manually while the
+    webhook is being wired.
+    """
+    email = (payload.email or "").strip().lower()
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="Enter a valid email address.")
+
+    # Rate-limit BEFORE we hit downstream so a hostile client can't burn
+    # our GHL webhook budget hammering one address.
+    if await auth_magic_link.is_rate_limited(db, email):
+        # Log but still return generic success. The real user will see
+        # "check your email" and the earlier link is still valid.
+        try:
+            await db.activity.insert_one({
+                "id": str(uuid.uuid4()),
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "type": "magic_link_rate_limited",
+                "email": email,
+                "detail": {"ip": request.client.host if request.client else ""},
+            })
+        except Exception:
+            pass
+        return {"ok": True, "sent": True}
+
+    ip = request.client.host if request.client else ""
+    token, expires = await auth_magic_link.create_token(db, email=email, ip=ip)
+    base_url = auth_magic_link.resolve_base_url(request)
+    magic_link_url = auth_magic_link.build_magic_link_url(base_url, token)
+
+    # Log the outbound attempt for admin visibility. If GHL is off we
+    # ALSO log the magic link at INFO so the operator can grab it from
+    # backend logs (last-resort fallback while GHL is being wired).
+    ghl_configured = ghl_integration.is_configured()
+    if not ghl_configured:
+        logger.info(
+            "[magic-link] GHL unconfigured — link for %s (expires %s): %s",
+            email, expires.isoformat(), magic_link_url,
+        )
+
+    push_result = {"status": "skipped"}
+    if ghl_configured:
+        async def _log(t, e, d):
+            try:
+                await db.activity.insert_one({
+                    "id": str(uuid.uuid4()),
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "type": t, "email": e, "detail": d,
+                })
+            except Exception:
+                pass
+        push_result = await ghl_integration.push_magic_link(
+            email=email,
+            magic_link_url=magic_link_url,
+            expires_at_iso=expires.isoformat(),
+            ttl_minutes=auth_magic_link.MAGIC_LINK_TTL_MINUTES,
+            log_activity=_log,
+        )
+
+    try:
+        await db.activity.insert_one({
+            "id": str(uuid.uuid4()),
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "type": "magic_link_requested",
+            "email": email,
+            "detail": {
+                "ghl_status": push_result.get("status"),
+                "ttl_minutes": auth_magic_link.MAGIC_LINK_TTL_MINUTES,
+                "ip": ip,
+            },
+        })
+    except Exception:
+        pass
+
+    return {"ok": True, "sent": True, "ttl_minutes": auth_magic_link.MAGIC_LINK_TTL_MINUTES}
+
+
+@api.get("/auth/verify-magic-link")
+async def verify_magic_link(request: Request, token: str = Query(...)):
+    """Consume the magic-link token and 302 to the frontend callback.
+
+    On failure (invalid / expired / already-used) we redirect to /login
+    with an `?err=...` query param so the user sees a friendly explanation
+    instead of a JSON 4xx dump.
+    """
+    from fastapi.responses import RedirectResponse
+
+    base_url = auth_magic_link.resolve_base_url(request)
+    email = await auth_magic_link.consume_token(db, token=token)
+    if not email:
+        try:
+            await db.activity.insert_one({
+                "id": str(uuid.uuid4()),
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "type": "magic_link_invalid",
+                "email": "",
+                "detail": {"ip": request.client.host if request.client else ""},
+            })
+        except Exception:
+            pass
+        return RedirectResponse(
+            url=f"{base_url}/login?err=expired_or_invalid_link",
+            status_code=302,
+        )
+
+    resolved = await _resolve_signin(email)
+    if not resolved:
+        try:
+            await db.activity.insert_one({
+                "id": str(uuid.uuid4()),
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "type": "magic_link_no_access",
+                "email": email,
+                "detail": {"reason": "no entitlements on file"},
+            })
+        except Exception:
+            pass
+        return RedirectResponse(
+            url=f"{base_url}/login?err=no_access_for_this_email",
+            status_code=302,
+        )
+
+    callback_url = auth_magic_link.build_callback_url(
+        base_url, resolved["token"], email=email,
+    )
+    try:
+        await db.activity.insert_one({
+            "id": str(uuid.uuid4()),
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "type": "magic_link_verified",
+            "email": email,
+            "detail": {"ip": request.client.host if request.client else ""},
+        })
+    except Exception:
+        pass
+    return RedirectResponse(url=callback_url, status_code=302)
+
+
+@api.post("/auth/check")
+async def auth_check(payload: LoginPayload):
+    """Verify a user has Studio access — LOCAL DEV ONLY.
+
+    v1.19.0 (P0 security fix): this endpoint now REJECTS every request
+    except `DEV_BYPASS_EMAIL` — production sign-in goes through the
+    magic-link flow (`/auth/request-magic-link` → email → `/auth/verify-
+    magic-link` → JWT). The previous behaviour let anyone who knew a
+    paying customer's email address log in as them, which was
+    unacceptable ahead of the AppSumo launch.
+    """
+    email = payload.email.strip().lower()
+    if not email:
+        raise HTTPException(status_code=400, detail="Email required")
+
+    # DEV_BYPASS_EMAIL still short-circuits (single email, only set on
+    # preview .env — never in production). Everyone else must use the
+    # magic-link flow.
+    if DEV_BYPASS_EMAIL and email == DEV_BYPASS_EMAIL:
+        is_admin = email in ADMIN_EMAILS
+        token = issue_jwt(email, KNOWN_ENTITLEMENTS, is_admin=is_admin)
+        try:
+            now_iso = datetime.now(timezone.utc).isoformat()
+            await db.buyers.update_one(
+                {"email": email},
+                {"$set": {"lastLoginAt": now_iso, "updatedAt": now_iso},
+                 "$inc": {"loginCount": 1}},
+                upsert=False,
+            )
+        except Exception:
+            pass
+        return {
+            "token": token,
+            "user": {"email": email, "entitlements": KNOWN_ENTITLEMENTS, "isAdmin": is_admin},
+        }
+
+    # Everyone else: force magic-link. Anti-enumeration friendly copy so
+    # the response doesn't reveal whether the address is on file.
+    raise HTTPException(
+        status_code=403,
+        detail="Sign-in without a magic link is disabled. Please request an email link.",
+    )
+
+
+# ---------------------------------------------------------------------------
+# (Legacy /auth/check body removed in v1.19.0 — magic-link is now the sole
+# production path. Sole exception: DEV_BYPASS_EMAIL handled above.)
+# ---------------------------------------------------------------------------
+
 
 
 @api.get("/auth/me")
@@ -397,6 +690,111 @@ async def auth_me(user: AuthUser = Depends(current_user)):
         "entitlements": user.entitlements,
         "isAdmin": user.is_admin,
     }
+
+
+# ---------------------------------------------------------------------------
+# Quota status — drives the Studio header pill ("12 of 15 renders · resets…")
+# ---------------------------------------------------------------------------
+# Returns a customer-facing snapshot of the buyer's current cycle: their tier
+# label, how many renders they've used vs their cap, the avatar sub-cap, when
+# the cycle resets, and a boolean `unlimited` flag for founders / dev / grant
+# emails so the UI can hide the pill entirely (no caps to display).
+#
+# Internal-only fields (cost cents, kill-switch ceiling) are NOT exposed —
+# the cost cap is a SILENT backstop per the AppSumo launch spec.
+# ---------------------------------------------------------------------------
+@api.get("/me/quota")
+async def me_quota(user: AuthUser = Depends(current_user)):
+    from tier_config import get_tier, tier_for_entitlements
+
+    # Dev bypass / studio-grant emails are treated as unlimited in the pill.
+    if (DEV_BYPASS_EMAIL and user.email == DEV_BYPASS_EMAIL) or user.email in STUDIO_GRANT_EMAILS:
+        return {
+            "unlimited": True,
+            "tier_id": "owner",
+            "tier_label": "Owner",
+            "byok_allowed": True,
+        }
+
+    buyer = await db.buyers.find_one({"email": user.email}) or {}
+    if buyer.get("founders"):
+        return {
+            "unlimited": True,
+            "tier_id": "founder",
+            "tier_label": "Founder",
+            "byok_allowed": True,
+        }
+
+    tier_id = (buyer.get("tier") or "").strip().lower()
+    if not tier_id:
+        tier_id = tier_for_entitlements(list(buyer.get("entitlements") or [])).id
+    tier = get_tier(tier_id)
+
+    used_total  = int(buyer.get("rendersThisCycle") or 0)
+    used_avatar = int(buyer.get("avatarRendersThisCycle") or 0)
+    used_thumbs = int(buyer.get("thumbnailsThisCycle") or 0)
+    quota_total = int(buyer.get("renderQuotaMonthly") or tier.render_quota_monthly)
+    avatar_cap  = int(buyer.get("avatarSubCap") or tier.avatar_sub_cap)
+    thumb_quota = int(buyer.get("thumbnailQuotaMonthly") or tier.thumbnail_quota_monthly)
+    premium_ok  = bool(
+        buyer.get("thumbnailPremiumAllowed")
+        if buyer.get("thumbnailPremiumAllowed") is not None
+        else tier.thumbnail_premium_allowed
+    )
+
+    return {
+        "unlimited": False,
+        "tier_id": tier.id,
+        "tier_label": tier.label,
+        "renders_used": used_total,
+        "renders_total": quota_total,
+        "renders_remaining": max(0, quota_total - used_total),
+        "avatar_used": used_avatar,
+        "avatar_cap": avatar_cap,
+        "avatar_remaining": max(0, avatar_cap - used_avatar) if avatar_cap > 0 else 0,
+        "thumbnails_used": used_thumbs,
+        "thumbnails_total": thumb_quota,
+        "thumbnails_remaining": max(0, thumb_quota - used_thumbs),
+        "thumbnail_premium_allowed": premium_ok,
+        "cycle_started_at": buyer.get("cycleStartedAt"),
+        "cycle_resets_at": buyer.get("cycleResetsAt"),
+        "byok_allowed": bool(buyer.get("byokAllowed") if buyer.get("byokAllowed") is not None else tier.byok_allowed),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Lightweight activity logger — frontend pings this for soft engagement
+# events (script copied, script sent to Studio, video played, history opened)
+# so the Stats / Usage admin tabs can show real per-customer behavior.
+#
+# Strict allow-list on the type field so a leaky frontend can't pollute the
+# activity collection. Quietly drops unknown types (returns ok=False) rather
+# than 4xx-ing the UI.
+# ---------------------------------------------------------------------------
+_USER_ACTIVITY_TYPES = {
+    "script_copied",
+    "script_sent_to_studio",
+    "video_played",
+    "script_opened_from_history",
+}
+
+
+class UserActivityRequest(BaseModel):
+    type: str
+    detail: Optional[dict] = None
+
+
+@api.post("/activity/log")
+async def post_activity_log(payload: UserActivityRequest, user: AuthUser = Depends(current_user)):
+    if payload.type not in _USER_ACTIVITY_TYPES:
+        return {"ok": False, "reason": "type not allowed"}
+    detail = payload.detail or {}
+    # Trim payload to keep activity rows small. We mostly care about presence
+    # + frequency for engagement metrics, not deep context.
+    if isinstance(detail, dict):
+        detail = {k: detail[k] for k in list(detail.keys())[:8]}
+    await _log_activity(payload.type, user.email, detail)
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------
@@ -865,6 +1263,162 @@ async def _trim_stock_video(video_url: str, aspect: str, duration_ms: int, scene
 
 
 # ---------------------------------------------------------------------------
+# Scene still-image generation — Nano Banana primary, Flux fallback.
+# ---------------------------------------------------------------------------
+# Iter 49 (2026-07-01): Charity reported $100+ in fal.ai testing burn with
+# unsatisfactory Flux 1.1 Pro output quality for her professional audience
+# (consultants, coaches, executives). Replaced Flux as the DEFAULT scene
+# still engine with Gemini Nano Banana via the Emergent Universal LLM Key.
+# Advantages:
+#   - Higher photorealistic quality for professional aesthetic (already
+#     proven on the Fast thumbnail engine)
+#   - Cost comes off Universal Key balance (not fal.ai per-call bill)
+#   - Same content-hash cache pattern as before, new "nb:" prefix so we
+#     don't accidentally reuse old Flux outputs
+#   - Silent Flux fallback preserved for reliability — if Nano Banana
+#     returns nothing (rare rate-limit / quota), we don't fail the render
+# ---------------------------------------------------------------------------
+async def _generate_scene_image(
+    *,
+    prompt: str,
+    aspect: str,
+    scene_idx: int = 0,
+    fal_headers: dict | None = None,
+) -> str | None:
+    """Generate a photorealistic still image for one Faceless scene.
+
+    Returns a fal.ai storage URL that downstream ffmpeg-compose can consume.
+    Nano Banana primary → uploads base64 PNG to fal.ai storage → returns URL.
+    Falls back to Flux 1.1 Pro if Nano Banana yields nothing.
+
+    Content-hash cache: identical (prompt, aspect) requests return the
+    previously-generated URL instantly. Cache prefix `nb:` for the new
+    Nano Banana engine; old `flux:` entries stay put but aren't served
+    by this function.
+    """
+    import hashlib  # noqa: PLC0415
+    import base64 as _b64  # noqa: PLC0415
+
+    aspect_tag = "p" if aspect == "9_16" else "l"
+    cache_key = "nb:" + hashlib.sha256(f"{aspect_tag}|{prompt}".encode("utf-8")).hexdigest()[:32]
+    cached = await db.flux_cache.find_one({"_id": cache_key})
+    if cached and cached.get("url"):
+        return cached["url"]
+
+    # ---------- Attempt 1: Nano Banana via Emergent Universal Key ----------
+    nb_prompt = (
+        f"{prompt}. "
+        f"Aspect ratio: {'9:16 vertical portrait' if aspect == '9_16' else '16:9 horizontal landscape'}. "
+        f"Cinematic photograph, 8k, sharp focus, professional lighting, "
+        f"photorealistic, ultra detailed. No visible text or signage — "
+        f"if any text appears it must be clear, legible, perfectly spelled English only."
+    )
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage  # noqa: PLC0415
+
+        emergent_key = os.environ.get("EMERGENT_LLM_KEY")
+        if not emergent_key:
+            raise RuntimeError("EMERGENT_LLM_KEY not set")
+
+        # New chat instance per scene (playbook requirement).
+        chat = (
+            LlmChat(
+                api_key=emergent_key,
+                session_id=f"nb-scene-{scene_idx}-{cache_key[3:15]}",
+                system_message="You are a professional cinematic photographer.",
+            )
+            .with_model("gemini", "gemini-3.1-flash-image-preview")
+            .with_params(modalities=["image", "text"])
+        )
+        _, images = await chat.send_message_multimodal_response(
+            UserMessage(text=nb_prompt),
+        )
+        if images:
+            # Playbook: images[0]["data"] is base64-encoded PNG.
+            png_bytes = _b64.b64decode(images[0]["data"])
+            tmpdir = tempfile.mkdtemp(prefix="nb_")
+            dst = os.path.join(tmpdir, "scene.png")
+            try:
+                with open(dst, "wb") as f:
+                    f.write(png_bytes)
+                loop = asyncio.get_event_loop()
+                url = await loop.run_in_executor(None, fal_client.upload_file, dst)
+                if url:
+                    await db.flux_cache.update_one(
+                        {"_id": cache_key},
+                        {"$set": {
+                            "url": url,
+                            "prompt": prompt,
+                            "aspect": aspect,
+                            "engine": "nano-banana",
+                            "cached_at": datetime.now(timezone.utc).isoformat(),
+                        }},
+                        upsert=True,
+                    )
+                    logger.info(f"[nano-banana] scene={scene_idx} generated + cached ok")
+                    return url
+            finally:
+                try:
+                    if os.path.exists(dst):
+                        os.remove(dst)
+                    os.rmdir(tmpdir)
+                except Exception:
+                    pass
+        # else: fall through to Flux fallback
+        logger.warning(f"[nano-banana] scene={scene_idx} returned no images — falling back to Flux")
+    except Exception as exc:
+        # Rate limit, quota, network — any Nano Banana failure falls back to
+        # Flux so the render doesn't crash mid-pipeline. Logged so Charity
+        # can see when the primary engine is misbehaving.
+        logger.warning(f"[nano-banana] scene={scene_idx} exception: {type(exc).__name__}: {exc} — falling back to Flux")
+
+    # ---------- Attempt 2: Flux fallback (legacy path) ----------
+    if fal_headers is None:
+        # Callers that don't pass fal_headers can't use the Flux fallback.
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=120) as client:
+            ir = await client.post(
+                "https://fal.run/fal-ai/flux-pro/v1.1",
+                headers=fal_headers,
+                json={
+                    "prompt": (
+                        f"{prompt}. Cinematic photograph, 8k, sharp focus, "
+                        f"professional lighting, photorealistic, ultra detailed. "
+                        f"No visible text or signage — if any text appears it "
+                        f"must be clear, legible, perfectly spelled English only."
+                    ),
+                    "image_size": "portrait_16_9" if aspect == "9_16" else "landscape_16_9",
+                    "num_inference_steps": 32,
+                    "guidance_scale": 4.0,
+                    "output_format": "png",
+                },
+            )
+            if ir.status_code != 200:
+                return None
+            data = ir.json()
+            url = (data.get("images") or [{}])[0].get("url")
+            if url:
+                await db.flux_cache.update_one(
+                    {"_id": cache_key},
+                    {"$set": {
+                        "url": url,
+                        "prompt": prompt,
+                        "aspect": aspect,
+                        "engine": "flux-fallback",
+                        "cached_at": datetime.now(timezone.utc).isoformat(),
+                    }},
+                    upsert=True,
+                )
+                logger.info(f"[flux-fallback] scene={scene_idx} used as backup — check Nano Banana health")
+            return url
+    except Exception as exc:
+        logger.warning(f"[flux-fallback] scene={scene_idx} exception: {type(exc).__name__}: {exc}")
+        return None
+
+
+
+# ---------------------------------------------------------------------------
 # Stock-search query refinement.
 # Cinematic prompts (full sentences like "Wide overhead shot of hands chopping
 # vegetables on a wooden board, soft kitchen daylight, slow camera drift right")
@@ -1063,9 +1617,10 @@ async def _fal_t2v_generate(engine: str, prompt: str, aspect: str, duration_ms: 
     failure. Per-scene; the caller is expected to trim/scale/loop the result
     to the exact duration via `_trim_stock_video`."""
     cfg = T2V_ENGINES.get(engine)
-    if not cfg or not FAL_API_KEY:
+    fal_key = _effective_fal_key()
+    if not cfg or not fal_key:
         return None
-    fal_headers = {"Authorization": f"Key {FAL_API_KEY}"}
+    fal_headers = {"Authorization": f"Key {fal_key}"}
     payload = cfg["build_payload"](prompt, aspect, max(1.0, duration_ms / 1000.0))
     model_id = cfg["model"]
     max_wait_s = cfg["max_wait_s"]
@@ -1211,9 +1766,10 @@ async def _fal_kling_i2v_generate(
     the resulting MP4. Returns the raw MP4 URL or None on any failure.
     Same queue/poll pattern as `_fal_t2v_generate` — kept separate so the
     duration buckets + the cost telemetry stay clean per engine."""
-    if not FAL_API_KEY or not image_url:
+    fal_key = _effective_fal_key()
+    if not fal_key or not image_url:
         return None
-    fal_headers = {"Authorization": f"Key {FAL_API_KEY}"}
+    fal_headers = {"Authorization": f"Key {fal_key}"}
     # Kling supports 5 or 10 seconds only; round up so we always have at least
     # `duration_ms` of source material to trim from.
     duration_s_str = "10" if (duration_ms / 1000.0) > 5.5 else "5"
@@ -1336,123 +1892,27 @@ AUTO_SUBTITLE_MODEL = "fal-ai/workflow-utilities/auto-subtitle"
 CAPTION_BURN_COST_CENTS = 10  # ~$0.10/render
 CAPTION_BURN_MAX_WAIT_S = 600
 
-CAPTION_STYLE_PRESETS: dict[str, dict] = {
-    # Bold TikTok-ish bottom captions on a translucent box — the safe default.
-    "boxed": {
-        "font_name": "Montserrat",
-        "font_size": 92,
-        "font_weight": "bold",
-        "font_color": "white",
-        "highlight_color": "yellow",
-        "stroke_width": 2,
-        "stroke_color": "black",
-        "background_color": "black",
-        "background_opacity": 0.55,
-        "position": "bottom",
-        "y_offset": 90,
-        "words_per_subtitle": 4,
-        "enable_animation": True,
-    },
-    # Bold-ish karaoke style but smaller and at the user-chosen vertical slot.
-    # Three words at a time — fewer than "boxed" so it stays readable in
-    # the center where it overlaps the subject.
-    "tiktok": {
-        "font_name": "Poppins",
-        "font_size": 96,
-        "font_weight": "black",
-        "font_color": "white",
-        "highlight_color": "purple",
-        "stroke_width": 4,
-        "stroke_color": "black",
-        "background_color": "none",
-        "background_opacity": 0.0,
-        "position": "bottom",   # overridden by caption_position request field
-        "y_offset": 90,
-        "words_per_subtitle": 3,
-        "enable_animation": True,
-    },
-    # Minimal documentary-style captions — small, clean, no animation.
-    "minimal": {
-        "font_name": "Inter",
-        "font_size": 64,
-        "font_weight": "normal",
-        "font_color": "white",
-        "highlight_color": "white",
-        "stroke_width": 1,
-        "stroke_color": "black",
-        "background_color": "none",
-        "background_opacity": 0.0,
-        "position": "bottom",
-        "y_offset": 60,
-        "words_per_subtitle": 6,
-        "enable_animation": False,
-    },
-}
-
-# UI lets the user override the vertical placement of the captions regardless
-# of style. "top" places them near the top edge, "bottom" near the bottom
-# edge (the style default), "center" overlays them on the subject. Maps to
-# the auto-subtitle endpoint's `position` field. y_offset is also reset so
-# the captions sit at a sensible margin from the edge.
-CAPTION_POSITION_OVERRIDES: dict[str, dict] = {
-    "top":    {"position": "top",    "y_offset": 90},
-    "bottom": {"position": "bottom", "y_offset": 90},
-    "center": {"position": "center", "y_offset": 0},
-}
+# v1.15.0 — caption-burn-in pipeline moved into its own module so server.py
+# stays manageable. The presets + helper are re-exported here for any
+# legacy import path that still references them via `server.CAPTION_*` or
+# `server._burn_in_captions`.
+from caption_burn_in import (  # noqa: E402
+    CAPTION_STYLE_PRESETS,
+    CAPTION_POSITION_OVERRIDES,
+    burn_in_captions as _burn_in_captions_impl,
+)
 
 
 async def _burn_in_captions(video_url: str, style_key: str, position_key: str = "bottom") -> Optional[str]:
-    """Second pass through fal.ai's auto-subtitle workflow. Returns the URL
-    of the captioned MP4, or None on any error (caller falls back to the
-    uncaptioned video). Style is one of `CAPTION_STYLE_PRESETS` — unknown
-    keys silently fall back to `"boxed"`. Position overrides the preset's
-    vertical placement (top/bottom/center)."""
-    if not FAL_API_KEY or not video_url:
-        return None
-    style = dict(CAPTION_STYLE_PRESETS.get(style_key) or CAPTION_STYLE_PRESETS["boxed"])
-    pos_override = CAPTION_POSITION_OVERRIDES.get(position_key)
-    if pos_override:
-        style.update(pos_override)
-    payload = {"video_url": video_url, "language": "en", **style}
-    fal_headers = {"Authorization": f"Key {FAL_API_KEY}"}
-    try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            sub = await client.post(
-                f"https://queue.fal.run/{AUTO_SUBTITLE_MODEL}",
-                headers=fal_headers,
-                json=payload,
-            )
-            if sub.status_code not in (200, 202):
-                logger.warning(f"[captions] submit FAIL {sub.status_code}: {sub.text[:200]}")
-                return None
-            sub_body = sub.json()
-            status_url = sub_body.get("status_url")
-            result_url = sub_body.get("response_url")
-            if not status_url or not result_url:
-                logger.warning(f"[captions] submit malformed: {str(sub_body)[:200]}")
-                return None
-            deadline = asyncio.get_event_loop().time() + CAPTION_BURN_MAX_WAIT_S
-            while asyncio.get_event_loop().time() < deadline:
-                await asyncio.sleep(2)
-                stat = await client.get(status_url, headers=fal_headers)
-                if stat.status_code != 200:
-                    continue
-                st = stat.json().get("status", "")
-                if st == "COMPLETED":
-                    res = await client.get(result_url, headers=fal_headers)
-                    if res.status_code != 200:
-                        return None
-                    out = res.json()
-                    return (out.get("video") or {}).get("url") or out.get("video_url")
-                if st == "FAILED":
-                    logger.warning(f"[captions] FAILED: {stat.text[:200]}")
-                    return None
-            logger.warning(f"[captions] polling timed out after {CAPTION_BURN_MAX_WAIT_S}s")
-            return None
-    except Exception as exc:
-        logger.warning(f"[captions] exception: {type(exc).__name__}: {exc}")
-        return None
-
+    """Compat shim — delegates to caption_burn_in.burn_in_captions, injecting
+    the BYOK-aware fal key resolver so customer keys still take precedence
+    inside the active render coroutine."""
+    return await _burn_in_captions_impl(
+        video_url,
+        style_key,
+        position_key,
+        fal_key_provider=_effective_fal_key,
+    )
 
 # --- Sentence-aware script splitter ----------------------------------------
 # Each "beat" is one natural pause in the voiceover (sentence or em-dash/comma
@@ -1729,6 +2189,19 @@ async def _run_render(job_id: str):
             }},
         )
 
+    # Group B refund-on-failure. Re-read the job to see the FINAL status the
+    # pipeline persisted (the inner functions also set status=failed on
+    # their own error paths, not just the catch above). If the render
+    # didn't complete, refund the quota slot the gate consumed at queue
+    # time. Founders/dev/grant emails are no-op'd inside _refund_quota_slot.
+    final = await db.renders.find_one({"id": job_id}, {"status": 1, "user_email": 1, "mode": 1, "estimated_cost_cents": 1})
+    if final and final.get("status") == "failed":
+        await _refund_quota_slot(
+            email=final.get("user_email") or "",
+            mode=final.get("mode") or "",
+            estimated_cents=int(final.get("estimated_cost_cents") or 0),
+        )
+
 
 # ---------------------------------------------------------------------------
 # Cost estimation. Numbers below are conservative ceiling estimates derived
@@ -1831,7 +2304,20 @@ async def _run_render_avatar(job: dict):
     job_id = job["id"]
     actual_cost_cents = 0
 
-    if not HEYGEN_API_KEY:
+    # BYOK — if the buyer has saved their own HeyGen key, use it for THIS
+    # render only. Lookup failures fall back to the platform key silently
+    # so a stale/rotated user key never breaks the pipeline mid-flight.
+    try:
+        user_email = (job.get("user_email") or "").strip().lower()
+        if user_email:
+            user_heygen = await get_byok_key(db, user_email, "heygen")
+            if user_heygen:
+                _override_heygen_key_ctx.set(user_heygen)
+    except Exception as exc:
+        logger.warning(f"[byok] avatar key lookup failed: {type(exc).__name__}: {exc}")
+    heygen_key = _effective_heygen_key()
+
+    if not heygen_key:
         await _finalize(job_id, ok=False, url=None, actual_cost_cents=0)
         return
 
@@ -1866,7 +2352,7 @@ async def _run_render_avatar(job: dict):
         }
         r = await client.post(
             "https://api.heygen.com/v3/videos",
-            headers={"X-Api-Key": HEYGEN_API_KEY, "Accept": "application/json"},
+            headers={"X-Api-Key": heygen_key, "Accept": "application/json"},
             json=v3_body,
         )
         if r.status_code == 200:
@@ -1897,7 +2383,7 @@ async def _run_render_avatar(job: dict):
             }
             r2 = await client.post(
                 "https://api.heygen.com/v2/video/generate",
-                headers={"X-Api-Key": HEYGEN_API_KEY, "Accept": "application/json"},
+                headers={"X-Api-Key": heygen_key, "Accept": "application/json"},
                 json=v2_body,
             )
             if r2.status_code != 200:
@@ -1950,7 +2436,7 @@ async def _run_render_avatar(job: dict):
             if used_endpoint == "v3":
                 s = await client.get(
                     f"https://api.heygen.com/v3/videos/{video_id}",
-                    headers={"X-Api-Key": HEYGEN_API_KEY},
+                    headers={"X-Api-Key": heygen_key},
                 )
                 d = (s.json() or {}).get("data") or {}
                 if d.get("failure_code"):
@@ -1972,7 +2458,7 @@ async def _run_render_avatar(job: dict):
             else:  # v2 polling
                 s = await client.get(
                     f"https://api.heygen.com/v1/video_status.get?video_id={video_id}",
-                    headers={"X-Api-Key": HEYGEN_API_KEY},
+                    headers={"X-Api-Key": heygen_key},
                 )
                 d = (s.json() or {}).get("data") or {}
                 if d.get("status") == "completed":
@@ -2042,11 +2528,24 @@ async def _run_render_faceless(job: dict):
     )
     await asyncio.sleep(0.8)
 
-    if not FAL_API_KEY:
+    # BYOK — Faceless pipeline: customer's fal.ai key takes precedence when
+    # saved. Also flows into nested t2v / i2v / captions helpers via the
+    # _override_fal_key contextvar (set once here, inherited by tasks).
+    try:
+        user_email = (job.get("user_email") or "").strip().lower()
+        if user_email:
+            user_fal = await get_byok_key(db, user_email, "fal")
+            if user_fal:
+                _override_fal_key_ctx.set(user_fal)
+    except Exception as exc:
+        logger.warning(f"[byok] faceless key lookup failed: {type(exc).__name__}: {exc}")
+    fal_key = _effective_fal_key()
+
+    if not fal_key:
         await _finalize(job_id, ok=False, url=None, actual_cost_cents=0)
         return
 
-    fal_headers = {"Authorization": f"Key {FAL_API_KEY}", "Content-Type": "application/json"}
+    fal_headers = {"Authorization": f"Key {fal_key}", "Content-Type": "application/json"}
 
     async def _set_progress(progress: int, label: str, status: Optional[str] = None):
         update = {"progress": progress, "progress_label": label}
@@ -2193,61 +2692,18 @@ async def _run_render_faceless(job: dict):
         image_urls: list = [None] * len(scenes)
 
         async def gen_image(idx: int, prompt: str):
-            # Content-hash cache: identical (prompt, aspect) renders return
-            # the previously-generated Flux URL instantly. Re-renders with
-            # the same script/aspect become near-instant — Flux dominates
-            # the visuals phase, so this saves 20-60s on regen flows.
-            import hashlib  # noqa: PLC0415
-            aspect_tag = "p" if job["aspect"] == "9_16" else "l"
-            cache_key = "flux:" + hashlib.sha256(
-                f"{aspect_tag}|{prompt}".encode("utf-8")
-            ).hexdigest()[:32]
-            cached = await db.flux_cache.find_one({"_id": cache_key})
-            if cached and cached.get("url"):
-                return cached["url"]
-            ir = await client.post(
-                "https://fal.run/fal-ai/flux-pro/v1.1",
-                headers=fal_headers,
-                json={
-                    # Hardened prompt: anchors the cinematic style + forbids
-                    # the failure modes Charity flagged on 2026-02-23 — non-
-                    # English garbled signage, blurry/AI-generated giveaways.
-                    # `enable_safety_checker` stays default. `output_format`
-                    # PNG ensures we get crisp downstream feed-into-Kling.
-                    "prompt": (
-                        f"{prompt}. Cinematic photograph, 8k, sharp focus, "
-                        f"professional lighting, photorealistic, ultra detailed. "
-                        f"No visible text or signage — if any text appears it "
-                        f"must be clear, legible, perfectly spelled English only."
-                    ),
-                    "image_size": "portrait_16_9" if job["aspect"] == "9_16" else "landscape_16_9",
-                    "num_inference_steps": 32,         # vs default 28 — sharper outputs
-                    "guidance_scale": 4.0,             # tighter prompt adherence
-                    "output_format": "png",
-                },
+            # v1.18.4: delegates to _generate_scene_image which uses Nano
+            # Banana (via Emergent Universal Key) with a silent Flux 1.1
+            # Pro fallback. Content-hash cache and fal.ai storage upload
+            # happen inside the helper. Old cache prefix was `flux:`; the
+            # helper uses `nb:` so we don't accidentally serve old Flux
+            # outputs when the user regenerates a Faceless render.
+            return await _generate_scene_image(
+                prompt=prompt,
+                aspect=job["aspect"],
+                scene_idx=idx,
+                fal_headers=fal_headers,
             )
-            if ir.status_code != 200:
-                return None
-            data = ir.json()
-            url = (data.get("images") or [{}])[0].get("url")
-            if url:
-                # Write-through cache. fal.ai image URLs are signed with a
-                # 7-day TTL — record `expires_at` so a future sweep can
-                # purge stale entries. For now, every cache hit on a
-                # purged URL falls back gracefully (compose just 404s on
-                # that scene; downstream stitcher already handles missing
-                # frames).
-                await db.flux_cache.update_one(
-                    {"_id": cache_key},
-                    {"$set": {
-                        "url": url,
-                        "prompt": prompt,
-                        "aspect": job["aspect"],
-                        "cached_at": datetime.now(timezone.utc).isoformat(),
-                    }},
-                    upsert=True,
-                )
-            return url
 
         # Resolve URLs per scene.
         #   - AI scenes  → Flux 1.1 Pro (still image; we ken-burns it later)
@@ -2621,7 +3077,6 @@ async def studio_render(payload: RenderRequest, user: AuthUser = Depends(current
         raise HTTPException(status_code=400, detail="Bad mode")
     if not payload.script.strip():
         raise HTTPException(status_code=400, detail="Script required")
-    await _enforce_appsumo_render_quota(user, payload.mode)
 
     # Silent runaway-cost circuit-breaker. Not customer-facing cost
     # protection — exists to catch pathological inputs (malformed scripts,
@@ -2638,6 +3093,17 @@ async def studio_render(payload: RenderRequest, user: AuthUser = Depends(current
             status_code=400,
             detail="Render configuration is too large. Please contact support.",
         )
+
+    # Group B quota gate — atomically check + decrement the buyer's monthly
+    # render allowance before we kick off the background pipeline. Founders
+    # and dev_bypass admins are passed through unconditionally. Returns the
+    # snapshot of the buyer doc post-decrement so we can pass it to the
+    # background runner (used to refund the slot if the render fails).
+    _quota_snapshot = await _quota_gate_or_402(
+        email=user.email,
+        mode=payload.mode,
+        estimated_cents=estimated_cents,
+    )
 
     job_id = str(uuid.uuid4())
     doc = {
@@ -2691,6 +3157,198 @@ async def studio_render(payload: RenderRequest, user: AuthUser = Depends(current
     return doc
 
 
+# ---------------------------------------------------------------------------
+# Quota gate (Group B of the AppSumo launch plan)
+# ---------------------------------------------------------------------------
+# Atomic per-render check + decrement against the buyer's anniversary cycle.
+# Three failure modes, all surfaced as 402 Payment Required with a structured
+# body the frontend uses to render the friendly "You've used all X renders
+# this cycle. Resets in N days · upgrade →" prompt:
+#
+#   • render_quota_exhausted — buyer hit their total render cap
+#   • avatar_sub_cap_exhausted — buyer still has render budget but hit the
+#     tier's Avatar sub-cap (protects HeyGen spend on T3/T4)
+#   • cost_cap_exhausted — buyer's monthlyCostCents + estimate would breach
+#     the per-tier kill-switch ceiling. Same friendly copy on the wire (the
+#     differentiation lives only in the Activity log so admin can see why).
+#
+# Founders bypass all three checks. Dev_bypass and STUDIO_GRANT admins are
+# implicit founders for gating purposes — they should never be rate-limited
+# while developing/supporting the app.
+#
+# The check + decrement is atomic via $expr-conditioned findOneAndUpdate so
+# concurrent renders from the same user can't race past the cap.
+# ---------------------------------------------------------------------------
+async def _quota_gate_or_402(*, email: str, mode: str, estimated_cents: int) -> dict | None:
+    """Returns the post-decrement buyer snapshot when the render is allowed,
+    or raises HTTPException(402) with a frontend-friendly body otherwise.
+    Returns None for founders/dev/grant users so the caller knows to skip
+    the refund-on-failure path."""
+
+    # Dev bypass + STUDIO_GRANT_EMAILS skip the gate entirely. They aren't
+    # necessarily in db.buyers, and we never want our own owner email to
+    # get rate-limited while building/supporting the app.
+    if DEV_BYPASS_EMAIL and email == DEV_BYPASS_EMAIL:
+        return None
+    if email in STUDIO_GRANT_EMAILS:
+        return None
+
+    buyer = await db.buyers.find_one({"email": email})
+    if not buyer:
+        # No buyer record means /auth/check would have already rejected this
+        # request. If we still got here, treat it as a forbidden path rather
+        # than a quota issue — better signal for monitoring.
+        raise HTTPException(status_code=403, detail="Buyer record missing")
+    if buyer.get("founders"):
+        return None
+
+    # Tier-aware caps. For pre-migration buyers without a `tier` field yet,
+    # fall back to deriving from entitlements (same logic admin Usage uses).
+    from tier_config import get_tier, tier_for_entitlements
+    tier_id = (buyer.get("tier") or "").strip().lower()
+    if not tier_id:
+        tier_id = tier_for_entitlements(list(buyer.get("entitlements") or [])).id
+    tier = get_tier(tier_id)
+
+    used_total  = int(buyer.get("rendersThisCycle") or 0)
+    used_avatar = int(buyer.get("avatarRendersThisCycle") or 0)
+    cost_so_far = int(buyer.get("monthlyCostCents") or 0)
+    cost_cap    = int(buyer.get("monthlyCostCapCents") or tier.monthly_cost_cap_cents)
+    quota_total = int(buyer.get("renderQuotaMonthly") or tier.render_quota_monthly)
+    avatar_cap  = int(buyer.get("avatarSubCap") or tier.avatar_sub_cap)
+    cycle_ends  = buyer.get("cycleResetsAt")
+
+    # All three failure modes share a single 402 message so the user sees
+    # "You've used your renders, here's when more are available" regardless
+    # of WHY internally — keeps cost-cap math invisible. Admin can see the
+    # actual reason in the Activity log.
+    def _exhausted(reason: str, used: int, total: int) -> HTTPException:
+        days_left = ""
+        if cycle_ends:
+            try:
+                resets_at = datetime.fromisoformat(cycle_ends.replace("Z", "+00:00"))
+                d = max(0, (resets_at - datetime.now(timezone.utc)).days)
+                days_left = (
+                    f" Resets in {d} day{'s' if d != 1 else ''}."
+                    if d > 0 else " Resets within the next hour."
+                )
+            except Exception:
+                pass
+        from tier_config import TIERS_ORDERED
+        ordered_ids = [t.id for t in TIERS_ORDERED]
+        upgrade_to = None
+        try:
+            cur_idx = ordered_ids.index(tier_id)
+            if cur_idx < len(ordered_ids) - 1:
+                upgrade_to = TIERS_ORDERED[cur_idx + 1]
+        except ValueError:
+            pass
+        upgrade_msg = (
+            f" Upgrade to {upgrade_to.label} for {upgrade_to.render_quota_monthly} renders/month →"
+            if upgrade_to else ""
+        )
+        return HTTPException(
+            status_code=402,
+            detail={
+                "reason": reason,
+                "message": f"You've used all {total} renders this cycle.{days_left}{upgrade_msg}",
+                "quota_used": used,
+                "quota_total": total,
+                "cycle_resets_at": cycle_ends,
+                "tier": tier_id,
+                "upgrade_to": upgrade_to.id if upgrade_to else None,
+            },
+        )
+
+    # Defensive: tier with zero renders allowed is a misset; reject cleanly.
+    if quota_total <= 0:
+        await _log_activity("quota_blocked", email, {
+            "reason": "render_quota_zero", "tier": tier_id,
+        })
+        raise _exhausted("render_quota_exhausted", 0, 0)
+
+    # Check 1 — total render cap.
+    if used_total >= quota_total:
+        await _log_activity("quota_blocked", email, {
+            "reason": "render_quota_exhausted",
+            "tier": tier_id, "used": used_total, "total": quota_total,
+        })
+        raise _exhausted("render_quota_exhausted", used_total, quota_total)
+
+    # Check 2 — avatar sub-cap (only if user is attempting an avatar render).
+    if mode == "avatar" and used_avatar >= avatar_cap:
+        await _log_activity("quota_blocked", email, {
+            "reason": "avatar_sub_cap_exhausted",
+            "tier": tier_id, "used": used_avatar, "total": avatar_cap,
+        })
+        raise _exhausted("avatar_sub_cap_exhausted", used_avatar, avatar_cap)
+
+    # Check 3 — silent cost-cap kill-switch. Same friendly copy on the wire
+    # so customers don't see "you hit your monthly cost ceiling" — they see
+    # the standard quota-exhausted message and the internal reason hides in
+    # the activity log for admin visibility.
+    if cost_cap > 0 and (cost_so_far + estimated_cents) > cost_cap:
+        await _log_activity("quota_blocked", email, {
+            "reason": "cost_cap_exhausted",
+            "tier": tier_id, "cost_so_far": cost_so_far,
+            "estimated_cents": estimated_cents, "cap_cents": cost_cap,
+        })
+        raise _exhausted("cost_cap_exhausted", used_total, quota_total)
+
+    # Atomic decrement. The $expr clause guards against races where two
+    # concurrent renders both pass the pre-check above — only one will
+    # satisfy the condition and win the slot. Mongo's findOneAndUpdate is
+    # atomic at the document level, which is exactly what we need here.
+    avatar_inc = 1 if mode == "avatar" else 0
+    expr_clauses = [
+        {"$lt": [{"$ifNull": ["$rendersThisCycle", 0]}, quota_total]},
+    ]
+    if mode == "avatar":
+        expr_clauses.append(
+            {"$lt": [{"$ifNull": ["$avatarRendersThisCycle", 0]}, avatar_cap]},
+        )
+    updated = await db.buyers.find_one_and_update(
+        {"email": email, "$expr": {"$and": expr_clauses}},
+        {"$inc": {
+            "rendersThisCycle": 1,
+            "avatarRendersThisCycle": avatar_inc,
+            "monthlyCostCents": estimated_cents,
+        }},
+        return_document=True,
+    )
+    if not updated:
+        await _log_activity("quota_blocked", email, {
+            "reason": "race_lost", "tier": tier_id,
+        })
+        raise _exhausted("render_quota_exhausted", used_total, quota_total)
+    return updated
+
+
+async def _refund_quota_slot(*, email: str, mode: str, estimated_cents: int) -> None:
+    """Reverse a successful quota gate when a render fails. Mirrors the
+    gate's $inc but with negative values. Skipped for founders / dev /
+    STUDIO_GRANT (they never decremented in the first place — signaled by
+    the gate returning None instead of a buyer snapshot).
+    """
+    if DEV_BYPASS_EMAIL and email == DEV_BYPASS_EMAIL:
+        return
+    if email in STUDIO_GRANT_EMAILS:
+        return
+    avatar_dec = -1 if mode == "avatar" else 0
+    try:
+        await db.buyers.update_one(
+            {"email": email, "founders": {"$ne": True}},
+            {"$inc": {
+                "rendersThisCycle": -1,
+                "avatarRendersThisCycle": avatar_dec,
+                "monthlyCostCents": -estimated_cents,
+            }},
+        )
+    except Exception as exc:
+        logger.warning(f"[quota] refund failed for {email}: {type(exc).__name__}: {exc}")
+
+
+
 @api.post("/studio/render/both-aspects")
 async def studio_render_both_aspects(payload: RenderRequest, user: AuthUser = Depends(current_user)):
     """Fire TWO renders in parallel — one in 9:16 and one in 16:9 — using the
@@ -2702,10 +3360,13 @@ async def studio_render_both_aspects(payload: RenderRequest, user: AuthUser = De
         raise HTTPException(status_code=400, detail="Bad mode")
     if not payload.script.strip():
         raise HTTPException(status_code=400, detail="Script required")
-    # Two jobs are queued at once, so both must fit within the quota.
-    await _enforce_appsumo_render_quota(user, payload.mode, jobs=2)
 
     jobs = []
+    # Track which aspects already passed the quota gate so we can refund
+    # if the SECOND gate-call raises (e.g. user has 1 render left + clicks
+    # both-aspects → first call consumes it, second call must 402 cleanly
+    # AND refund the first slot we just took).
+    gated_aspects: list[tuple[str, int]] = []  # (mode, estimated_cents)
     for aspect in ("9_16", "16_9"):
         per_payload = payload.model_copy(update={"aspect": aspect})
         estimated_cents = estimate_render_cost_cents(per_payload)
@@ -2714,10 +3375,30 @@ async def studio_render_both_aspects(payload: RenderRequest, user: AuthUser = De
                 "Both-aspects render circuit-breaker tripped: user=%s aspect=%s estimated=%s¢ threshold=%s¢",
                 user.email, aspect, estimated_cents, RENDER_COST_CIRCUIT_BREAKER_CENTS,
             )
+            # Refund any already-consumed slot before bailing.
+            for prev_mode, prev_cents in gated_aspects:
+                await _refund_quota_slot(email=user.email, mode=prev_mode, estimated_cents=prev_cents)
             raise HTTPException(
                 status_code=400,
                 detail="Render configuration is too large. Please contact support.",
             )
+
+        # Group B quota gate per render. Both-aspects fires two renders, so
+        # we consume two slots — one per aspect. If the second gate-call
+        # raises, refund the first slot we already took so the user isn't
+        # silently charged a quota slot for an unrun render.
+        try:
+            await _quota_gate_or_402(
+                email=user.email,
+                mode=per_payload.mode,
+                estimated_cents=estimated_cents,
+            )
+        except HTTPException:
+            for prev_mode, prev_cents in gated_aspects:
+                await _refund_quota_slot(email=user.email, mode=prev_mode, estimated_cents=prev_cents)
+            raise
+        gated_aspects.append((per_payload.mode, estimated_cents))
+
         job_id = str(uuid.uuid4())
         doc = {
             "id": job_id,
@@ -2836,8 +3517,46 @@ async def studio_render_bulk_delete(payload: BulkDeleteRequest, user: AuthUser =
 CLAUDE_MODEL = "claude-sonnet-4-5-20250929"
 
 
-async def _claude_complete(system_prompt: str, user_message: str, session_id: str | None = None) -> str:
-    """Single-shot Claude completion using the Emergent universal LLM key."""
+async def _anthropic_direct_complete(api_key: str, system_prompt: str, user_message: str) -> str:
+    """BYOK path: hit Anthropic's Messages API directly with the customer's
+    sk-ant-… key. Bypasses the Emergent universal LLM key entirely so the
+    customer's own quota is consumed."""
+    async with httpx.AsyncClient(timeout=180) as client:
+        r = await client.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": CLAUDE_MODEL,
+                "max_tokens": 8192,
+                "system": system_prompt,
+                "messages": [{"role": "user", "content": user_message}],
+            },
+        )
+    if r.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Anthropic error {r.status_code}: {r.text[:200]}")
+    body = r.json()
+    blocks = body.get("content") or []
+    return "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
+
+
+async def _claude_complete(system_prompt: str, user_message: str, session_id: str | None = None, user_email: str | None = None) -> str:
+    """Single-shot Claude completion. If the user has saved a BYOK Anthropic
+    key, route directly to Anthropic; else use the Emergent universal LLM key."""
+    # BYOK: customer's own Anthropic key takes precedence (consumes their quota).
+    if user_email:
+        try:
+            anthropic_key = await get_byok_key(db, user_email, "anthropic")
+            if anthropic_key:
+                return await _anthropic_direct_complete(anthropic_key, system_prompt, user_message)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.warning(f"[byok] anthropic single-shot lookup failed: {type(exc).__name__}: {exc}")
+
     if not EMERGENT_LLM_KEY:
         raise HTTPException(status_code=500, detail="LLM key missing")
     from emergentintegrations.llm.chat import LlmChat, UserMessage  # lazy import
@@ -2880,7 +3599,7 @@ async def studio_broll_prompts(payload: BrollPromptsRequest, user: AuthUser = De
         f"The viewer sees prompt #N while beat #N is being spoken.\n\n"
         f"Beats:\n{numbered}"
     )
-    text = await _claude_complete(BROLL_PROMPTS_SYSTEM, user_msg)
+    text = await _claude_complete(BROLL_PROMPTS_SYSTEM, user_msg, user_email=user.email)
 
     # Parse: one per line, drop blanks, strip bullets/quotes/numbering
     out: list[str] = []
@@ -3031,53 +3750,20 @@ async def studio_ai_previews(payload: AIPreviewsRequest, user: AuthUser = Depend
     if not FAL_API_KEY:
         raise HTTPException(status_code=503, detail="Image generation unavailable")
     fal_headers = {"Authorization": f"Key {FAL_API_KEY}"}
-    aspect_tag = "p" if payload.aspect == "9_16" else "l"
 
     async def gen_one(idx: int, prompt: str) -> dict:
-        # Same cache key shape as the render pipeline so previews = real frames.
-        import hashlib  # noqa: PLC0415
-        cache_key = "flux:" + hashlib.sha256(
-            f"{aspect_tag}|{prompt}".encode("utf-8")
-        ).hexdigest()[:32]
-        cached = await db.flux_cache.find_one({"_id": cache_key})
-        if cached and cached.get("url"):
-            return {"idx": idx, "prompt": prompt, "image_url": cached["url"], "cached": True}
-        try:
-            async with httpx.AsyncClient(timeout=120) as client:
-                ir = await client.post(
-                    "https://fal.run/fal-ai/flux-pro/v1.1",
-                    headers=fal_headers,
-                    json={
-                        "prompt": (
-                            f"{prompt}. Cinematic photograph, 8k, sharp focus, "
-                            f"professional lighting, photorealistic, ultra detailed. "
-                            f"No visible text or signage — if any text appears it "
-                            f"must be clear, legible, perfectly spelled English only."
-                        ),
-                        "image_size": "portrait_16_9" if payload.aspect == "9_16" else "landscape_16_9",
-                        "num_inference_steps": 32,
-                        "guidance_scale": 4.0,
-                        "output_format": "png",
-                    },
-                )
-                if ir.status_code != 200:
-                    return {"idx": idx, "prompt": prompt, "image_url": None, "error": f"flux {ir.status_code}"}
-                url = (ir.json().get("images") or [{}])[0].get("url")
-                if url:
-                    await db.flux_cache.update_one(
-                        {"_id": cache_key},
-                        {"$set": {
-                            "url": url,
-                            "prompt": prompt,
-                            "aspect": payload.aspect,
-                            "cached_at": datetime.now(timezone.utc).isoformat(),
-                        }},
-                        upsert=True,
-                    )
-                return {"idx": idx, "prompt": prompt, "image_url": url, "cached": False}
-        except Exception as exc:
-            logger.warning(f"[ai-previews] {idx}/{prompt[:30]}: {type(exc).__name__}: {exc}")
-            return {"idx": idx, "prompt": prompt, "image_url": None, "error": str(exc)}
+        # v1.18.4: delegates to _generate_scene_image (Nano Banana primary,
+        # Flux fallback). Preview endpoint now matches the render pipeline
+        # exactly so "Preview scenes" and "Render" produce identical stills.
+        url = await _generate_scene_image(
+            prompt=prompt,
+            aspect=payload.aspect,
+            scene_idx=idx,
+            fal_headers=fal_headers,
+        )
+        if url:
+            return {"idx": idx, "prompt": prompt, "image_url": url, "cached": False}
+        return {"idx": idx, "prompt": prompt, "image_url": None, "error": "gen failed"}
 
     results = await asyncio.gather(*[gen_one(i, p) for i, p in enumerate(payload.prompts)])
     results.sort(key=lambda r: r["idx"])
@@ -3113,7 +3799,7 @@ async def scripts_angles(payload: AnglesRequest, user: AuthUser = Depends(curren
     if not topic:
         raise HTTPException(status_code=400, detail="Topic required")
 
-    raw = await _claude_complete(ANGLES_SYSTEM_PROMPT, build_angles_user_message(topic))
+    raw = await _claude_complete(ANGLES_SYSTEM_PROMPT, build_angles_user_message(topic), user_email=user.email)
     # Tolerate accidental markdown fences or preamble — extract the JSON array.
     text = raw.strip()
     m = re.search(r"\[\s*\{[\s\S]*\}\s*\]", text)
@@ -3192,11 +3878,103 @@ async def saved_angles_delete(angle_id: str, user: AuthUser = Depends(current_us
 # --- Script Engine: STEP 2 — full script package locked to a chosen angle --
 
 
-async def _run_script_job(script_id: str, system_prompt: str, user_message: str):
+async def _anthropic_direct_stream(api_key: str, session_id: str, system_prompt: str, user_message: str, script_id: str):
+    """BYOK streaming: SSE from Anthropic Messages API, writing accumulated
+    text into db.scripts on a throttled cadence (mirrors the Emergent path)."""
+    accumulated = ""
+    last_write = 0.0
+    loop = asyncio.get_event_loop()
+    async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0)) as client:
+        async with client.stream(
+            "POST",
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+                "accept": "text/event-stream",
+            },
+            json={
+                "model": CLAUDE_MODEL,
+                "max_tokens": 8192,
+                "system": system_prompt,
+                "stream": True,
+                "messages": [{"role": "user", "content": user_message}],
+            },
+        ) as resp:
+            if resp.status_code != 200:
+                body = await resp.aread()
+                raise HTTPException(status_code=502, detail=f"Anthropic stream {resp.status_code}: {body[:200]}")
+            async for line in resp.aiter_lines():
+                if not line or not line.startswith("data:"):
+                    continue
+                payload = line[5:].strip()
+                if not payload or payload == "[DONE]":
+                    continue
+                try:
+                    evt = json.loads(payload)
+                except Exception:
+                    continue
+                if evt.get("type") == "content_block_delta":
+                    delta = (evt.get("delta") or {}).get("text") or ""
+                    if delta:
+                        accumulated += delta
+                        now = loop.time()
+                        if now - last_write >= 0.25:
+                            await db.scripts.update_one(
+                                {"id": script_id},
+                                {"$set": {"text": accumulated}},
+                            )
+                            last_write = now
+    return accumulated
+
+
+async def _run_script_job(script_id: str, system_prompt: str, user_message: str, user_email: str | None = None):
     """Background worker — streams Claude's response, writing accumulating text
     back onto the script record so the frontend can render sections as they
     appear (drip / progressive reveal pattern). Falls back to single-shot if
     streaming isn't available on the model."""
+    # BYOK: customer's own Anthropic key streams direct from Anthropic
+    if user_email:
+        try:
+            anthropic_key = await get_byok_key(db, user_email, "anthropic")
+        except Exception:
+            anthropic_key = None
+        if anthropic_key:
+            try:
+                accumulated = await _anthropic_direct_stream(
+                    anthropic_key, script_id, system_prompt, user_message, script_id,
+                )
+                await db.scripts.update_one(
+                    {"id": script_id},
+                    {"$set": {
+                        "status": "complete",
+                        "text": accumulated,
+                        "completed_at": datetime.now(timezone.utc).isoformat(),
+                    }},
+                )
+                return
+            except HTTPException as e:
+                await db.scripts.update_one(
+                    {"id": script_id},
+                    {"$set": {
+                        "status": "failed",
+                        "error": str(e.detail)[:500],
+                        "completed_at": datetime.now(timezone.utc).isoformat(),
+                    }},
+                )
+                return
+            except Exception as e:  # noqa: BLE001
+                await db.scripts.update_one(
+                    {"id": script_id},
+                    {"$set": {
+                        "status": "failed",
+                        "error": str(e)[:500],
+                        "completed_at": datetime.now(timezone.utc).isoformat(),
+                    }},
+                )
+                return
+
     from emergentintegrations.llm.chat import LlmChat, UserMessage, TextDelta, StreamDone  # noqa: E402
     if not EMERGENT_LLM_KEY:
         await db.scripts.update_one(
@@ -3275,7 +4053,7 @@ async def _enqueue_script(*, user: AuthUser, mode: str, topic: str, system_promp
         **extra,
     }
     await db.scripts.insert_one(rec)
-    asyncio.create_task(_run_script_job(script_id, system_prompt, user_message))
+    asyncio.create_task(_run_script_job(script_id, system_prompt, user_message, user_email=user.email))
     rec.pop("_id", None)
     return rec
 
@@ -3354,17 +4132,6 @@ async def scripts_shorts(payload: ShortsRequest, user: AuthUser = Depends(curren
         raise HTTPException(status_code=400, detail="Invalid platform")
 
     if payload.sprint:
-        # Sprint Mode is a tier-2+ AppSumo feature; non-AppSumo customers
-        # are unaffected (limits is None for them).
-        limits = await get_buyer_appsumo_limits(db, user.email)
-        if limits is not None and not limits.get("sprint"):
-            raise HTTPException(
-                status_code=403,
-                detail=(
-                    "Sprint Mode isn't included in your AppSumo tier "
-                    f"(Tier {limits['tier']}). Upgrade your license on AppSumo to unlock it."
-                ),
-            )
         system = build_sprint_system_prompt(payload.platform)
         user_msg = (
             f"Generate a CONTENT SPRINT — 5 distinct shorts on the topic: {payload.topic.strip()}.\n"
@@ -3474,15 +4241,6 @@ register_admin_routes(
     log_activity=_log_activity,
 )
 
-# AppSumo licensing — webhook receiver + OAuth redemption + admin license
-# lookup. Same wiring pattern as the Pinball webhook above.
-register_appsumo_routes(
-    api=api,
-    db=db,
-    current_user=current_user,
-    log_activity=_log_activity,
-)
-
 # User uploads (B-roll media + recorded voiceovers). Mounted after admin
 # so the public /api/files/{id} stream endpoint sits on the same /api router.
 register_uploads_routes(
@@ -3490,6 +4248,67 @@ register_uploads_routes(
     db=db,
     current_user_dep=current_user,
     require_studio=require_studio,
+)
+
+# Thumbnail Engine (OpenAI gpt-image-1 "Premium" + Gemini Nano Banana
+# "Fast") for YouTube/Shorts cover images. Mounted on the same /api router
+# alongside renders + uploads. Separate GridFS bucket (`thumbnails`) so the
+# uploads bucket stays focused on user-supplied B-roll/voiceovers.
+from thumbnails_routes import register_thumbnail_routes  # noqa: E402
+# Import BYOK helper here (the routes are registered below) so the
+# thumbnails rewriter + concepts-from-script can route through a buyer's
+# own Anthropic key when present.
+from byok_routes import register_byok_routes, get_byok_key  # noqa: E402
+
+register_thumbnail_routes(
+    api=api,
+    db=db,
+    current_user_dep=current_user,
+    log_activity=_log_activity,
+    emergent_llm_key=EMERGENT_LLM_KEY,
+    dev_bypass_email=DEV_BYPASS_EMAIL,
+    studio_grant_emails=STUDIO_GRANT_EMAILS,
+    get_byok_key=get_byok_key,
+)
+
+# License redemption + upgrade-target + admin tier-bump tools (Group D).
+# Kept self-contained so server.py doesn't accumulate another 400 LOC and
+# the AppSumo launch logic can evolve independently.
+from licenses_routes import register_license_routes  # noqa: E402
+
+register_license_routes(
+    api=api,
+    db=db,
+    current_user_dep=current_user,
+    require_admin_dep=require_admin,
+    log_activity=_log_activity,
+    dev_bypass_email=DEV_BYPASS_EMAIL,
+    studio_grant_emails=STUDIO_GRANT_EMAILS,
+)
+
+# BYOK vault — encrypted Anthropic / OpenAI / HeyGen / fal.ai keys for
+# T4 / Founder users. (get_byok_key was imported above for the thumbnails
+# rewriter; register_byok_routes mounts /api/user/byok* here.)
+# The module also exposes get_byok_key(db, email, service) which the render
+# paths call to decide whether to use a customer's key vs the platform key.
+
+register_byok_routes(
+    api=api,
+    db=db,
+    current_user_dep=current_user,
+    dev_bypass_email=DEV_BYPASS_EMAIL,
+    studio_grant_emails=STUDIO_GRANT_EMAILS,
+)
+
+# Roadmap routes — public GET /api/roadmap, admin-gated write endpoints.
+# Seeds default items on first read so the /roadmap page never renders blank.
+from roadmap_routes import register_roadmap_routes  # noqa: E402
+
+register_roadmap_routes(
+    api=api,
+    db=db,
+    current_user=current_user,
+    ADMIN_EMAILS=ADMIN_EMAILS,
 )
 
 

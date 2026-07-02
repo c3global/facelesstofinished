@@ -121,7 +121,19 @@ Place a B-roll cue every 2–4 narration sentences. Cues must be specific and sh
 Provide one purpose-built transition line between each adjacent pair of sections in the script above. Format as:
 - [Section A] → [Section B]: "[Transition line, written for voiceover]"
 
-{broll_section}{production_section}RULES YOU NEVER BREAK:
+{broll_section}{production_section}### 🖼️ TITLE / THUMBNAIL VARIANTS
+3 alternative YouTube title or thumbnail-text variants (max 7 words each). Label each:
+1. [Curiosity] — [text]
+2. [Bold Claim] — [text]
+3. [Question] — [text]
+
+### 🎨 COVER IMAGE PROMPTS
+For each of the 3 title variants above, write a VIVID, detailed AI-image prompt designed for a viral YouTube thumbnail. Each prompt must be 60-120 words and include: (a) the main focal subject (specific human reaction or object), (b) lighting + mood, (c) color palette with at least one bold accent color, (d) composition note (where the subject sits in frame, where overlay text goes). End every prompt with `--ar 16:9 --no text`. Label each:
+1. [matches title variant 1] — [prompt]
+2. [matches title variant 2] — [prompt]
+3. [matches title variant 3] — [prompt]
+
+RULES YOU NEVER BREAK:
 - Never open with "In this video..." or "Hey guys, welcome back"
 - Never write passive, lifeless narration
 - Never use vague B-roll cues

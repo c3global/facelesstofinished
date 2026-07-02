@@ -21,7 +21,12 @@ from datetime import datetime, timezone, timedelta
 from typing import Any, Optional
 
 from fastapi import Body, Depends, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+
+# Outbound GHL push — fires on new buyer / new entitlement / license redemption.
+# Safe to import unconditionally: module no-ops when GHL_WEBHOOK_URL is unset.
+import ghl_integration  # noqa: E402
 
 logger = logging.getLogger("f48.admin")
 
@@ -264,6 +269,18 @@ class BuyerImportRow(BaseModel):
 
 class BuyerImportRequest(BaseModel):
     buyers: list[BuyerImportRow] = Field(default_factory=list)
+
+
+
+# Sora 2 test endpoint payload (v1.18.4). Module-level so FastAPI +
+# Pydantic v2 can build a proper TypeAdapter — nested inside the
+# register function it becomes a ForwardRef and FastAPI can't resolve
+# it as a request body.
+class Sora2TestRequest(BaseModel):
+    prompt: str = Field(..., min_length=8, max_length=1000)
+    aspect: str = Field("9_16", description="9_16 (vertical) or 16_9 (horizontal) or 1_1 (square)")
+    duration: int = Field(4, description="4, 8, or 12 seconds")
+    model: str = Field("sora-2", description="sora-2 (fast) or sora-2-pro (higher quality)")
 
 
 # ---------------------------------------------------------------------------
@@ -671,6 +688,7 @@ def register_admin_routes(
         # Engagement
         total_renders = await db.renders.count_documents({})
         total_scripts = await db.scripts.count_documents({})
+        total_thumbnails = await db.thumbnails.count_documents({"deleted": {"$ne": True}})
 
         # Revenue sum (cents)
         revenue_cents = 0
@@ -687,10 +705,428 @@ def register_admin_routes(
             "active_30d": active_30d,
             "total_renders": total_renders,
             "total_scripts": total_scripts,
+            "total_thumbnails": total_thumbnails,
             "revenue_cents": revenue_cents,
             "entitlement_breakdown": ent_breakdown,
             "signups_series": signups_series,
         }
+
+    # ---- Per-customer Usage (Group A3 of the AppSumo launch plan) ----
+    # Joins buyers + scripts + renders + activity into a single per-customer
+    # leaderboard row so the upcoming Usage admin tab can show:
+    #   email · tier · scripts (Long/Short/Sprint) · renders (Faceless/Avatar
+    #   · complete/failed) · $ infra spent · last_seen · founder flag
+    #
+    # Uses MongoDB $facet to compute all aggregations in ONE round trip
+    # rather than N+1 queries per buyer. Limits to 500 rows by default since
+    # AppSumo deal sizes typically stay in the low-thousands range; cursor-
+    # less pagination is fine for now.
+    @api.get("/admin/usage")
+    async def admin_usage(
+        q: Optional[str] = Query(None, description="Case-insensitive email substring"),
+        sort_by: str = Query(
+            "last_seen",
+            regex="^(last_seen|email|scripts_total|renders_total|thumbnails_total|spend_cents|added_at)$",
+            description="Column to sort by",
+        ),
+        sort_dir: str = Query("desc", regex="^(asc|desc)$"),
+        limit: int = Query(500, ge=1, le=2000),
+        skip: int = Query(0, ge=0),
+        _admin=Depends(require_admin),
+    ):
+        from tier_config import tier_for_entitlements  # local import — avoids top-level cycle risk
+
+        # Build the buyer filter once — used both as the buyers cursor AND as
+        # the email-set that scoping the script/render aggregations.
+        bq: dict[str, Any] = {}
+        if q:
+            bq["email"] = {"$regex": re.escape(q.strip().lower()), "$options": "i"}
+
+        # Pull buyer base rows first. We page on the buyer list, then enrich
+        # in bulk — this keeps the response bounded even if a user has tens
+        # of thousands of scripts. Total is the count for pagination UI.
+        total = await db.buyers.count_documents(bq)
+        buyers_cursor = db.buyers.find(
+            bq,
+            {
+                "email": 1,
+                "entitlements": 1,
+                "tier": 1,
+                "founders": 1,
+                "lastLoginAt": 1,
+                "loginCount": 1,
+                "addedAt": 1,
+                "totalSpendCents": 1,
+            },
+        ).sort([("email", 1)])
+        buyer_docs = [b async for b in buyers_cursor]
+        emails = [b["email"] for b in buyer_docs if b.get("email")]
+
+        if not emails:
+            return {"total": total, "items": []}
+
+        # One aggregate per source collection, all keyed by user_email so we
+        # can stitch back to buyers in O(1). Mongo handles the heavy lifting.
+        # `owner_field` defaults to "user_email" but thumbnails store ownership
+        # under `owner` — pass owner_field="owner" for that collection.
+        # `extra_match` lets callers (e.g. thumbnails) filter out soft-deleted
+        # rows in the same pipeline.
+        async def _agg(coll, group: dict, owner_field: str = "user_email", extra_match: dict | None = None) -> dict[str, dict]:
+            out: dict[str, dict] = {}
+            match_stage: dict = {owner_field: {"$in": emails}}
+            if extra_match:
+                match_stage.update(extra_match)
+            pipeline = [
+                {"$match": match_stage},
+                {"$group": group},
+            ]
+            async for row in coll.aggregate(pipeline):
+                key = row.pop("_id", None)
+                if isinstance(key, str):
+                    out[key] = row
+            return out
+
+        scripts_by_email = await _agg(
+            db.scripts,
+            {
+                "_id": "$user_email",
+                "total": {"$sum": 1},
+                "long":   {"$sum": {"$cond": [{"$eq": ["$mode", "long"]},   1, 0]}},
+                "shorts": {"$sum": {"$cond": [{"$eq": ["$mode", "shorts"]}, 1, 0]}},
+                "sprint": {"$sum": {"$cond": [{"$eq": ["$mode", "sprint"]}, 1, 0]}},
+                "last_script_at": {"$max": "$created_at"},
+            },
+        )
+        renders_by_email = await _agg(
+            db.renders,
+            {
+                "_id": "$user_email",
+                "total":    {"$sum": 1},
+                "faceless": {"$sum": {"$cond": [{"$eq": ["$mode", "faceless"]}, 1, 0]}},
+                "avatar":   {"$sum": {"$cond": [{"$eq": ["$mode", "avatar"]},   1, 0]}},
+                "complete": {"$sum": {"$cond": [{"$eq": ["$status", "complete"]}, 1, 0]}},
+                "failed":   {"$sum": {"$cond": [{"$eq": ["$status", "failed"]},   1, 0]}},
+                "spend_cents": {"$sum": {"$ifNull": ["$actual_cost_cents", 0]}},
+                "last_render_at": {"$max": "$created_at"},
+            },
+        )
+        # Thumbnails — collection is `thumbnails`, ownership lives on `owner`
+        # (not user_email like scripts/renders). Soft-deleted rows are excluded
+        # so admins see actual current-usage counts. Premium = OpenAI engine;
+        # Fast = Gemini Nano Banana.
+        thumbs_by_email = await _agg(
+            db.thumbnails,
+            {
+                "_id": "$owner",
+                "total":   {"$sum": 1},
+                "premium": {"$sum": {"$cond": [{"$eq": ["$engine", "premium"]}, 1, 0]}},
+                "fast":    {"$sum": {"$cond": [{"$eq": ["$engine", "fast"]},    1, 0]}},
+                "last_thumb_at": {"$max": "$created_at"},
+            },
+            owner_field="owner",
+            extra_match={"deleted": {"$ne": True}},
+        )
+
+        # Stitch buyers + aggregations. Tier resolution: prefer the explicit
+        # `tier` field if migrated; otherwise derive from entitlements via
+        # the tier_config helper (so pre-migration buyers still get labeled).
+        items = []
+        for b in buyer_docs:
+            email = b.get("email") or ""
+            ents = list(b.get("entitlements") or [])
+            tier_id = (b.get("tier") or "").strip().lower()
+            if not tier_id:
+                tier_id = tier_for_entitlements(ents).id
+            scripts_row = scripts_by_email.get(email, {})
+            renders_row = renders_by_email.get(email, {})
+            thumbs_row  = thumbs_by_email.get(email, {})
+            # last_seen = the latest of (lastLoginAt, last_script_at,
+            # last_render_at, last_thumb_at). Buyers with no activity at all
+            # fall back to addedAt so the row still sorts sanely.
+            last_seen = _iso_max(b.get("lastLoginAt"), scripts_row.get("last_script_at"))
+            last_seen = _iso_max(last_seen, renders_row.get("last_render_at"))
+            last_seen = _iso_max(last_seen, thumbs_row.get("last_thumb_at"))
+            if not last_seen:
+                last_seen = b.get("addedAt")
+            items.append({
+                "email": email,
+                "tier": tier_id,
+                "entitlements": ents,
+                "founder": bool(b.get("founders")),
+                "last_seen": last_seen,
+                "added_at": b.get("addedAt"),
+                "login_count": int(b.get("loginCount") or 0),
+                "scripts": {
+                    "total":  int(scripts_row.get("total")  or 0),
+                    "long":   int(scripts_row.get("long")   or 0),
+                    "shorts": int(scripts_row.get("shorts") or 0),
+                    "sprint": int(scripts_row.get("sprint") or 0),
+                    "last_at": scripts_row.get("last_script_at"),
+                },
+                "renders": {
+                    "total":    int(renders_row.get("total")    or 0),
+                    "faceless": int(renders_row.get("faceless") or 0),
+                    "avatar":   int(renders_row.get("avatar")   or 0),
+                    "complete": int(renders_row.get("complete") or 0),
+                    "failed":   int(renders_row.get("failed")   or 0),
+                    "last_at":  renders_row.get("last_render_at"),
+                },
+                "thumbnails": {
+                    "total":   int(thumbs_row.get("total")   or 0),
+                    "premium": int(thumbs_row.get("premium") or 0),
+                    "fast":    int(thumbs_row.get("fast")    or 0),
+                    "last_at": thumbs_row.get("last_thumb_at"),
+                },
+                "spend_cents": int(renders_row.get("spend_cents") or 0),
+                "buyer_total_spend_cents": int(b.get("totalSpendCents") or 0),
+            })
+
+        # Server-side sort + pagination AFTER stitching so we can sort on
+        # derived columns (scripts_total, renders_total, spend_cents,
+        # last_seen) that don't exist on any single source collection.
+        sort_key_map = {
+            "email":            lambda r: (r.get("email") or "").lower(),
+            "scripts_total":    lambda r: r["scripts"]["total"],
+            "renders_total":    lambda r: r["renders"]["total"],
+            "thumbnails_total": lambda r: r["thumbnails"]["total"],
+            "spend_cents":      lambda r: r["spend_cents"],
+            "last_seen":        lambda r: r.get("last_seen") or "",
+            "added_at":         lambda r: r.get("added_at") or "",
+        }
+        items.sort(key=sort_key_map[sort_by], reverse=(sort_dir == "desc"))
+        paged = items[skip : skip + limit]
+
+        return {"total": total, "items": paged, "sort_by": sort_by, "sort_dir": sort_dir}
+
+    # ---- CSV exports (Group B6 of the AppSumo launch plan) ----
+    # Both files use the agreed filename format:
+    #   F2F48-{kind}-{YYYY-MM-DD}-export.csv
+    # which sorts cleanly by date in any file manager. UTF-8 + BOM so Excel
+    # opens it correctly without manual import config. Rows are streamed via
+    # a generator to keep memory flat even when the buyer list grows.
+    def _csv_escape(value: Any) -> str:
+        """Render any cell value as a CSV-safe string. Lists become
+        pipe-separated. Dicts/None become empty strings (admin can drill down
+        in the UI; the CSV is for at-a-glance snapshots, not nested data)."""
+        if value is None:
+            return ""
+        if isinstance(value, list):
+            value = "|".join(str(v) for v in value)
+        elif isinstance(value, dict):
+            value = ""
+        s = str(value)
+        if any(ch in s for ch in (",", '"', "\n", "\r")):
+            s = '"' + s.replace('"', '""') + '"'
+        return s
+
+    def _csv_row(values: list) -> str:
+        return ",".join(_csv_escape(v) for v in values) + "\n"
+
+    def _csv_filename(kind: str) -> str:
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        return f"F2F48-{kind}-{today}-export.csv"
+
+    @api.get("/admin/buyers/export")
+    async def admin_export_buyers(_admin=Depends(require_admin)):
+        """Stream every buyer row as CSV. Columns are flat (no nested JSON)
+        so accountants and customer-success folks can open it in Excel/Sheets
+        without preprocessing. Filename: F2F48-buyers-YYYY-MM-DD-export.csv."""
+        headers = [
+            "email",
+            "tier",
+            "founder",
+            "entitlements",
+            "total_spend_cents",
+            "renders_this_cycle",
+            "render_quota_monthly",
+            "avatar_renders_this_cycle",
+            "avatar_sub_cap",
+            "monthly_cost_cents",
+            "cycle_started_at",
+            "cycle_resets_at",
+            "last_login_at",
+            "login_count",
+            "script_count",
+            "shorts_count",
+            "first_use_at",
+            "added_at",
+            "source",
+            "order_id",
+        ]
+
+        async def _stream():
+            # BOM so Excel auto-detects UTF-8.
+            yield "\ufeff" + _csv_row(headers)
+            async for b in db.buyers.find({}).sort([("addedAt", -1)]):
+                row = [
+                    b.get("email"),
+                    b.get("tier"),
+                    bool(b.get("founders")),
+                    b.get("entitlements") or [],
+                    b.get("totalSpendCents") or 0,
+                    b.get("rendersThisCycle") or 0,
+                    b.get("renderQuotaMonthly") or 0,
+                    b.get("avatarRendersThisCycle") or 0,
+                    b.get("avatarSubCap") or 0,
+                    b.get("monthlyCostCents") or 0,
+                    b.get("cycleStartedAt"),
+                    b.get("cycleResetsAt"),
+                    b.get("lastLoginAt"),
+                    b.get("loginCount") or 0,
+                    b.get("scriptCount") or 0,
+                    b.get("shortsCount") or 0,
+                    b.get("firstUseAt"),
+                    b.get("addedAt"),
+                    b.get("source"),
+                    b.get("orderId"),
+                ]
+                yield _csv_row(row)
+
+        return StreamingResponse(
+            _stream(),
+            media_type="text/csv; charset=utf-8",
+            headers={
+                "Content-Disposition": f'attachment; filename="{_csv_filename("buyers")}"',
+            },
+        )
+
+    @api.get("/admin/usage/export")
+    async def admin_export_usage(_admin=Depends(require_admin)):
+        """Stream the per-customer usage leaderboard as CSV. Mirrors the
+        columns of GET /admin/usage but flattened (scripts.long → scripts_long
+        etc) so the CSV is one row per buyer. Filename:
+        F2F48-usage-YYYY-MM-DD-export.csv."""
+        from tier_config import tier_for_entitlements  # local import
+
+        headers = [
+            "email",
+            "tier",
+            "founder",
+            "entitlements",
+            "scripts_total",
+            "scripts_long",
+            "scripts_shorts",
+            "scripts_sprint",
+            "scripts_last_at",
+            "renders_total",
+            "renders_faceless",
+            "renders_avatar",
+            "renders_complete",
+            "renders_failed",
+            "renders_last_at",
+            "thumbnails_total",
+            "thumbnails_premium",
+            "thumbnails_fast",
+            "thumbnails_last_at",
+            "spend_cents",
+            "buyer_total_spend_cents",
+            "login_count",
+            "last_seen",
+            "added_at",
+        ]
+
+        # Pre-fetch the buyer base + email set in one pass; reuse the same
+        # $group aggregations the /admin/usage endpoint uses so the CSV
+        # numbers match the UI table 1:1.
+        buyer_docs: list[dict] = []
+        async for b in db.buyers.find({}, {
+            "email": 1, "entitlements": 1, "tier": 1, "founders": 1,
+            "lastLoginAt": 1, "loginCount": 1, "addedAt": 1, "totalSpendCents": 1,
+        }).sort([("email", 1)]):
+            buyer_docs.append(b)
+        emails = [b["email"] for b in buyer_docs if b.get("email")]
+
+        async def _agg(coll, group: dict, owner_field: str = "user_email", extra_match: dict | None = None) -> dict[str, dict]:
+            out: dict[str, dict] = {}
+            if not emails:
+                return out
+            match_stage: dict = {owner_field: {"$in": emails}}
+            if extra_match:
+                match_stage.update(extra_match)
+            pipeline = [{"$match": match_stage}, {"$group": group}]
+            async for row in coll.aggregate(pipeline):
+                key = row.pop("_id", None)
+                if isinstance(key, str):
+                    out[key] = row
+            return out
+
+        scripts_by_email = await _agg(db.scripts, {
+            "_id": "$user_email",
+            "total":  {"$sum": 1},
+            "long":   {"$sum": {"$cond": [{"$eq": ["$mode", "long"]},   1, 0]}},
+            "shorts": {"$sum": {"$cond": [{"$eq": ["$mode", "shorts"]}, 1, 0]}},
+            "sprint": {"$sum": {"$cond": [{"$eq": ["$mode", "sprint"]}, 1, 0]}},
+            "last_script_at": {"$max": "$created_at"},
+        })
+        renders_by_email = await _agg(db.renders, {
+            "_id": "$user_email",
+            "total":    {"$sum": 1},
+            "faceless": {"$sum": {"$cond": [{"$eq": ["$mode", "faceless"]}, 1, 0]}},
+            "avatar":   {"$sum": {"$cond": [{"$eq": ["$mode", "avatar"]},   1, 0]}},
+            "complete": {"$sum": {"$cond": [{"$eq": ["$status", "complete"]}, 1, 0]}},
+            "failed":   {"$sum": {"$cond": [{"$eq": ["$status", "failed"]},   1, 0]}},
+            "spend_cents": {"$sum": {"$ifNull": ["$actual_cost_cents", 0]}},
+            "last_render_at": {"$max": "$created_at"},
+        })
+        thumbs_by_email = await _agg(db.thumbnails, {
+            "_id": "$owner",
+            "total":   {"$sum": 1},
+            "premium": {"$sum": {"$cond": [{"$eq": ["$engine", "premium"]}, 1, 0]}},
+            "fast":    {"$sum": {"$cond": [{"$eq": ["$engine", "fast"]},    1, 0]}},
+            "last_thumb_at": {"$max": "$created_at"},
+        }, owner_field="owner", extra_match={"deleted": {"$ne": True}})
+
+        async def _stream():
+            yield "\ufeff" + _csv_row(headers)
+            for b in buyer_docs:
+                email = b.get("email") or ""
+                ents = list(b.get("entitlements") or [])
+                tier_id = (b.get("tier") or "").strip().lower()
+                if not tier_id:
+                    tier_id = tier_for_entitlements(ents).id
+                s = scripts_by_email.get(email, {})
+                r = renders_by_email.get(email, {})
+                t = thumbs_by_email.get(email, {})
+                last_seen = _iso_max(b.get("lastLoginAt"), s.get("last_script_at"))
+                last_seen = _iso_max(last_seen, r.get("last_render_at"))
+                last_seen = _iso_max(last_seen, t.get("last_thumb_at"))
+                if not last_seen:
+                    last_seen = b.get("addedAt")
+                row = [
+                    email,
+                    tier_id,
+                    bool(b.get("founders")),
+                    ents,
+                    int(s.get("total")  or 0),
+                    int(s.get("long")   or 0),
+                    int(s.get("shorts") or 0),
+                    int(s.get("sprint") or 0),
+                    s.get("last_script_at"),
+                    int(r.get("total")    or 0),
+                    int(r.get("faceless") or 0),
+                    int(r.get("avatar")   or 0),
+                    int(r.get("complete") or 0),
+                    int(r.get("failed")   or 0),
+                    r.get("last_render_at"),
+                    int(t.get("total")   or 0),
+                    int(t.get("premium") or 0),
+                    int(t.get("fast")    or 0),
+                    t.get("last_thumb_at"),
+                    int(r.get("spend_cents") or 0),
+                    int(b.get("totalSpendCents") or 0),
+                    int(b.get("loginCount") or 0),
+                    last_seen,
+                    b.get("addedAt"),
+                ]
+                yield _csv_row(row)
+
+        return StreamingResponse(
+            _stream(),
+            media_type="text/csv; charset=utf-8",
+            headers={
+                "Content-Disposition": f'attachment; filename="{_csv_filename("usage")}"',
+            },
+        )
 
     # ---- Pinball webhook (Phase C) ----
     async def _process_pinball_event(*, product: str, body: dict, source: str) -> dict:
@@ -776,6 +1212,33 @@ def register_admin_routes(
             email,
             {"status": "ok", "product": product, "order_id": order_id, "payload": body, "source": source},
         )
+
+        # GHL outbound push — only when this event actually granted a new
+        # entitlement (avoid spamming on duplicate / reprocessed webhooks).
+        # Fire-and-forget: errors are logged to db.activity, never raised.
+        if newly_granted and ghl_integration.is_configured():
+            try:
+                from tier_config import tier_for_entitlements  # local import — module-level cycle risk
+                tier = tier_for_entitlements(new_ents)
+                ghl_payload = ghl_integration.build_payload(
+                    email=email,
+                    tier_id=tier.id,
+                    tier_label=tier.label,
+                    source="pinball_purchase",
+                    founder=False,  # founders never enter via Pinball (manual onboarding)
+                    metadata={
+                        "order_id": order_id,
+                        "product": product,
+                        "newly_granted": newly_granted,
+                        "spend_cents": set_doc.get("totalSpendCents"),
+                    },
+                )
+                ghl_integration.push_in_background(
+                    ghl_payload, log_activity=log_activity,
+                )
+            except Exception as exc:
+                logger.warning("[ghl] pinball push wiring failed: %s: %s", type(exc).__name__, exc)
+
         return {"status": "ok", "product": product, "order_id": order_id, "email": email}
 
     @api.post("/pinball-webhook")
@@ -999,4 +1462,872 @@ def register_admin_routes(
             "results": results,
         }
 
-    return {"process_pinball_event": _process_pinball_event}
+    # -----------------------------------------------------------------
+    # GHL admin tools — manual push + connection test
+    # -----------------------------------------------------------------
+    # Two scenarios:
+    #   (a) A buyer landed via a path that didn't fire GHL (e.g. legacy
+    #       import, manual buyer-create, or a transient outage). Admin
+    #       hits "Push to GHL" on the Buyers row and we re-emit.
+    #   (b) Admin wants to confirm the configured GHL webhook URL even
+    #       responds before turning the toggle on — POST /admin/ghl/test
+    #       sends a sentinel payload so Charity can verify the workflow
+    #       fires in her workspace.
+
+    @api.post("/admin/ghl/push-buyer")
+    async def admin_ghl_push_buyer(
+        payload: dict = Body(...),
+        _admin=Depends(require_admin),
+    ):
+        from tier_config import tier_for_entitlements  # local import — avoids cycle
+        email = (payload.get("email") or "").strip().lower()
+        if not email:
+            raise HTTPException(status_code=400, detail="email required")
+        if not ghl_integration.is_configured():
+            raise HTTPException(
+                status_code=503,
+                detail="GHL_WEBHOOK_URL not configured. Set it in backend/.env and restart.",
+            )
+
+        buyer = await db.buyers.find_one({"email": email})
+        if not buyer:
+            raise HTTPException(status_code=404, detail=f"No buyer found for {email}")
+
+        ents = list(buyer.get("entitlements") or [])
+        tier = tier_for_entitlements(ents)
+        ghl_payload = ghl_integration.build_payload(
+            email=email,
+            tier_id=tier.id,
+            tier_label=tier.label,
+            source=payload.get("source") or "manual",
+            founder=bool(buyer.get("founders")),
+            metadata={
+                "order_id":    buyer.get("orderId"),
+                "spend_cents": buyer.get("totalSpendCents"),
+                "added_at":    buyer.get("addedAt"),
+                "manual_replay": True,
+            },
+        )
+        result = await ghl_integration.push(ghl_payload, log_activity=log_activity)
+        await log_activity("ghl_push_manual", email, {"result": result, "tier_id": tier.id})
+        return {"sent": ghl_payload, "result": result}
+
+    @api.post("/admin/ghl/test")
+    async def admin_ghl_test(_admin=Depends(require_admin)):
+        """Sentinel payload — verifies the configured GHL webhook URL is
+        live + the workflow fires. Does NOT touch db.buyers."""
+        if not ghl_integration.is_configured():
+            raise HTTPException(
+                status_code=503,
+                detail="GHL_WEBHOOK_URL not configured. Set it in backend/.env and restart.",
+            )
+        sentinel = ghl_integration.build_payload(
+            email="ghl-test@f2f48.local",
+            tier_id="test",
+            tier_label="Test",
+            source="manual",
+            founder=False,
+            metadata={"test": True, "note": "Sentinel from admin /admin/ghl/test"},
+        )
+        result = await ghl_integration.push(sentinel, log_activity=log_activity)
+        return {"configured": True, "sent": sentinel, "result": result}
+
+    @api.get("/admin/ghl/status")
+    async def admin_ghl_status(_admin=Depends(require_admin)):
+        """Lightweight status — used by the admin UI to know whether to
+        show the 'GHL: connected' green pill or the 'GHL: not configured'
+        amber pill. Never leaks the URL itself."""
+        url = (os.environ.get("GHL_WEBHOOK_URL") or "").strip()
+        return {
+            "configured": bool(url),
+            "url_host": (re.search(r"https?://([^/]+)", url).group(1) if url else None),
+            "auth_header_set": bool((os.environ.get("GHL_WEBHOOK_AUTH_HEADER") or "").strip()),
+        }
+
+    # -----------------------------------------------------------------
+    # AppSumo lifecycle webhook — refund / deactivate / downgrade / migrate
+    # -----------------------------------------------------------------
+    # AppSumo Plus webhooks ship 6 event types (per their integration docs):
+    #   activate    — license redeemed (we treat as no-op; /api/licenses/redeem
+    #                 already handles this customer-facing path).
+    #   deactivate  — license revoked. Refund + manual deactivation both
+    #                 funnel here. WE MUST REVOKE ENTITLEMENT or buyer keeps
+    #                 lifetime access after AppSumo's 60-day refund window.
+    #   refund      — explicit refund. Same effect as deactivate.
+    #   downgrade   — buyer moved to a lower tier (rare on lifetime deals
+    #                 but possible during tier consolidation events).
+    #   upgrade     — buyer moved to a higher tier (tier stack purchase).
+    #                 Mirrors the existing redeem flow but server-initiated.
+    #   migrate     — plan migration. We treat this as a tier-swap if a new
+    #                 tier is specified, otherwise as a no-op + log entry.
+    #
+    # Why we need this BEFORE AppSumo launch: AppSumo's refund window is
+    # 60 days. Refund rates on lifetime deals run 5-15%. Without this
+    # endpoint, every refunded buyer keeps using HeyGen + fal.ai forever
+    # on Charity's wallet. Net: roughly $0.15-$2 per render, indefinitely.
+    #
+    # Endpoint: POST /api/appsumo-webhook?token=<APPSUMO_WEBHOOK_TOKEN>
+    # Body shape (lenient — accepts several common variants):
+    #   { "event": "deactivate" | "refund" | "downgrade" | "upgrade" |
+    #              "migrate"   | "activate",
+    #     "email": "buyer@example.com",
+    #     "license_key":  "<optional - dedupe key>",
+    #     "tier":         "t1" | "t2" | "t3" | "t4"  (required for
+    #                                                 upgrade/downgrade/migrate),
+    #     "reason":       "<optional human-readable>",
+    #   }
+
+    APPSUMO_WEBHOOK_TOKEN = os.environ.get("APPSUMO_WEBHOOK_TOKEN", "").strip()
+    # AppSumo Licensing v2: HMAC SHA256 signing key. Same key used to
+    # authenticate outbound Licensing API calls. Set in Partner Portal.
+    # When empty (preview / pre-launch), HMAC verification is a no-op —
+    # the webhook still returns 200 to pass URL validation.
+    APPSUMO_LICENSING_KEY = os.environ.get("APPSUMO_LICENSING_KEY", "").strip()
+
+    def _verify_appsumo_signature(raw_body: bytes, signature: str, timestamp: str) -> bool:
+        """Verify HMAC-SHA256 signature per AppSumo Licensing v2 spec.
+
+        Signature = HMAC_SHA256(APPSUMO_LICENSING_KEY, timestamp + raw_body_utf8)
+
+        Returns True if the signature matches (or if no key is configured —
+        the endpoint stays permissive during pre-launch validation)."""
+        if not APPSUMO_LICENSING_KEY:
+            return True  # not configured yet — accept everything, log a note
+        if not signature or not timestamp:
+            return False
+        try:
+            import hmac  # noqa: PLC0415
+            import hashlib  # noqa: PLC0415
+            msg = timestamp.encode("utf-8") + raw_body
+            expected = hmac.new(
+                APPSUMO_LICENSING_KEY.encode("utf-8"),
+                msg,
+                hashlib.sha256,
+            ).hexdigest()
+            return hmac.compare_digest(expected, signature.strip())
+        except Exception:
+            return False
+
+    def _extract_event_type(p: dict) -> str:
+        """Find the event-type field across AppSumo's several payload shapes.
+        AppSumo Plus uses `event` at top-level; legacy AppSumo Black uses
+        `action`. GHL forwarding wraps as `data.event`. Be tolerant."""
+        for path in [
+            ("event",), ("action",), ("type",), ("event_type",),
+            ("data", "event"), ("data", "action"), ("data", "type"),
+            ("payload", "event"),
+        ]:
+            node: object = p
+            for k in path:
+                if not isinstance(node, dict):
+                    node = None
+                    break
+                node = node.get(k)
+            if isinstance(node, str) and node.strip():
+                return node.strip().lower()
+        return ""
+
+    def _extract_tier(p: dict) -> str:
+        """Locate the target tier id for upgrade/downgrade/migrate events.
+        AppSumo ships it as `plan_id`, `tier`, or `new_plan` depending on
+        the integration spec version + which event."""
+        for path in [
+            ("tier",), ("plan_id",), ("plan",), ("new_plan",), ("new_tier",),
+            ("data", "tier"), ("data", "plan_id"), ("data", "new_plan"),
+        ]:
+            node: object = p
+            for k in path:
+                if not isinstance(node, dict):
+                    node = None
+                    break
+                node = node.get(k)
+            if isinstance(node, str) and node.strip():
+                return node.strip().lower()
+        return ""
+
+    def _extract_license_key(p: dict) -> str:
+        for path in [
+            ("license_key",), ("license",), ("licenseKey",),
+            ("data", "license_key"), ("data", "license"),
+            ("order_id",), ("data", "order_id"),
+        ]:
+            node: object = p
+            for k in path:
+                if not isinstance(node, dict):
+                    node = None
+                    break
+                node = node.get(k)
+            if node and isinstance(node, (str, int)):
+                return str(node).strip()
+        return ""
+
+    async def _process_appsumo_event(*, event: str, body: dict, source: str) -> dict:
+        """Pure handler shared by the public webhook + the admin Replay
+        action. Idempotent — same license_key + event no-ops the second
+        time. Always logs to db.activity for admin visibility.
+
+        v1.19.0 update: AppSumo Licensing v2 webhooks generally do NOT
+        include an email address (per their partner guide — emails are
+        collected via OAuth on the redirect URL, not in the webhook).
+        We now key by `license_key` first and look up the associated
+        buyer email in db.appsumo_licenses when it's known. Missing
+        email is NOT a fatal error anymore — we log the event against
+        the license record so admin can see the full lifecycle.
+        """
+        email = _extract_email(body)
+        license_key = _extract_license_key(body)
+        now = _now_iso()
+
+        # test:true events are AppSumo's URL-validation ping. They MUST
+        # return 200 with the required success shape without touching
+        # any real data. Handled at the endpoint level, but we defense-
+        # in-depth here too.
+        if body.get("test") is True:
+            await log_activity(
+                "appsumo_webhook", email,
+                {"status": "test_event_acknowledged", "event": event,
+                 "source": source, "license_key": license_key, "payload": body},
+            )
+            return {"status": "test", "event": event, "license_key": license_key}
+
+        # Track the event against the license_key so we can rebuild the
+        # full audit trail even when email isn't known yet.
+        if license_key:
+            try:
+                existing_lic = await db.appsumo_licenses.find_one({"license_key": license_key})
+                # Dedupe: same license_key + same event fired twice = no-op.
+                if existing_lic:
+                    for ev in (existing_lic.get("events") or []):
+                        if ev.get("event") == event and ev.get("event_timestamp") == body.get("event_timestamp"):
+                            await log_activity(
+                                "appsumo_webhook", email,
+                                {"status": "duplicate", "event": event,
+                                 "license_key": license_key, "source": source,
+                                 "payload": body},
+                            )
+                            return {"status": "duplicate", "event": event,
+                                    "license_key": license_key}
+                await db.appsumo_licenses.update_one(
+                    {"license_key": license_key},
+                    {
+                        "$setOnInsert": {
+                            "license_key": license_key,
+                            "created_at": now,
+                            "source": source,
+                        },
+                        "$set": {
+                            "tier": body.get("tier"),
+                            "license_status": body.get("license_status"),
+                            "updated_at": now,
+                            "last_event": event,
+                        },
+                        "$push": {
+                            "events": {
+                                "event": event,
+                                "event_timestamp": body.get("event_timestamp"),
+                                "created_at": body.get("created_at"),
+                                "license_status": body.get("license_status"),
+                                "tier": body.get("tier"),
+                                "prev_license_key": body.get("prev_license_key"),
+                                "partner_plan_name": body.get("partner_plan_name"),
+                                "parent_license_key": body.get("parent_license_key"),
+                                "extra": body.get("extra"),
+                                "ts": now,
+                            },
+                        },
+                    },
+                    upsert=True,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[appsumo] license log write failed: %s", exc)
+
+        # If we don't have an email associated with this license yet, we
+        # can only record the event for later OAuth-driven activation.
+        # Return early with a `pending_email` status so the caller knows.
+        if not email or not EMAIL_RE.match(email):
+            # If we have a `prev_license_key` (upgrade / downgrade), try to
+            # find the email from the previous license.
+            prev = _extract_license_key({"license_key": body.get("prev_license_key") or ""})
+            if prev:
+                try:
+                    prev_doc = await db.appsumo_licenses.find_one({"license_key": prev})
+                    if prev_doc and prev_doc.get("email"):
+                        email = prev_doc["email"].strip().lower()
+                        # Backfill the new license row with the same email.
+                        if license_key:
+                            await db.appsumo_licenses.update_one(
+                                {"license_key": license_key},
+                                {"$set": {"email": email, "updated_at": now}},
+                            )
+                except Exception:
+                    pass
+            if not email:
+                await log_activity(
+                    "appsumo_webhook", "",
+                    {"status": "pending_email", "event": event,
+                     "license_key": license_key, "source": source,
+                     "payload": body},
+                )
+                return {"status": "pending_email", "event": event,
+                        "license_key": license_key}
+
+        # From here on we know the email. Continue with buyer-side dispatch.
+        existing = await db.buyers.find_one({"email": email})
+
+        # Backfill the email on the license row.
+        if license_key:
+            try:
+                await db.appsumo_licenses.update_one(
+                    {"license_key": license_key},
+                    {"$set": {"email": email, "updated_at": now}},
+                )
+            except Exception:
+                pass
+
+        from tier_config import assign_buyer_to_tier, tier_for_entitlements  # local import  # noqa: F401
+
+        # ---- Event dispatch --------------------------------------------
+        revoke_events = {"deactivate", "refund", "cancel", "cancelled", "revoke"}
+        upgrade_events = {"upgrade", "stack"}
+        downgrade_events = {"downgrade"}
+        migrate_events = {"migrate", "migration"}
+        activate_events = {"activate", "purchase"}  # no-op — handled by /redeem
+
+        result: dict = {"event": event, "email": email, "license_key": license_key}
+
+        if event in revoke_events:
+            # The actual P0 fix. Refund / deactivate → wipe entitlements,
+            # mark status=refunded, kill any active render-cycle quotas
+            # (set caps to 0 so any in-flight UI calls also reject).
+            if not existing:
+                # Refund webhook for a buyer we don't know about — log + 200.
+                # Some AppSumo flows fire deactivate before activate during
+                # migrations; rejecting would prevent the migrate->activate
+                # arriving moments later.
+                await log_activity(
+                    "appsumo_webhook", email,
+                    {"status": "no_buyer", "event": event, "source": source,
+                     "license_key": license_key, "payload": body},
+                )
+                result["status"] = "no_buyer"
+                return result
+            set_doc = {
+                "entitlements": [],
+                "tier": "",  # clears tier so UI shows "no access"
+                "status": "refunded" if event == "refund" else "deactivated",
+                "deactivatedAt": now,
+                "deactivationReason": (body.get("reason") or event),
+                # Hard-zero the cycle counters so any in-flight check rejects.
+                "renderQuotaMonthly": 0,
+                "avatarSubCap": 0,
+                "thumbnailQuotaMonthly": 0,
+                "monthlyCostCapCents": 0,
+                "updatedAt": now,
+            }
+            push_doc = {}
+            if license_key:
+                push_doc["appsumo_events"] = {
+                    "event": event, "license_key": license_key, "ts": now,
+                }
+            update_op: dict = {"$set": set_doc}
+            if push_doc:
+                update_op["$push"] = push_doc
+            await db.buyers.update_one({"email": email}, update_op)
+            await log_activity(
+                "appsumo_webhook", email,
+                {"status": "ok", "event": event, "source": source,
+                 "license_key": license_key, "reason": body.get("reason"),
+                 "payload": body},
+            )
+            result["status"] = "revoked"
+            return result
+
+        if event in upgrade_events or event in downgrade_events:
+            tier_id = _extract_tier(body)
+            if not tier_id:
+                await log_activity(
+                    "appsumo_webhook_failed", email,
+                    {"reason": "tier required for upgrade/downgrade",
+                     "event": event, "source": source, "payload": body},
+                )
+                raise HTTPException(status_code=400,
+                                    detail="tier required for upgrade/downgrade")
+            from tier_config import REDEEMABLE_TIER_IDS
+            if tier_id not in REDEEMABLE_TIER_IDS:
+                await log_activity(
+                    "appsumo_webhook_failed", email,
+                    {"reason": f"unknown tier {tier_id!r}", "event": event,
+                     "source": source, "payload": body},
+                )
+                raise HTTPException(status_code=400, detail=f"Unknown tier: {tier_id}")
+            # Upgrades preserve cycle clock (mid-cycle bump); downgrades
+            # also preserve cycle (we don't punish them mid-cycle by
+            # resetting their counters higher than the new cap). Both
+            # paths take is_upgrade=True since assign_buyer_to_tier's
+            # `is_upgrade` flag means "keep counters" not literal upgrade.
+            tier_payload = assign_buyer_to_tier(tier_id=tier_id, is_upgrade=True)
+            tier_payload["status"] = "active"
+            push_doc = {}
+            if license_key:
+                push_doc["appsumo_events"] = {
+                    "event": event, "license_key": license_key, "ts": now,
+                }
+            update_op: dict = {"$set": tier_payload}
+            if push_doc:
+                update_op["$push"] = push_doc
+            if not existing:
+                update_op["$setOnInsert"] = {
+                    "email": email, "addedAt": now, "source": "appsumo",
+                    "entitlements": [], "totalSpendCents": 0,
+                }
+            await db.buyers.update_one({"email": email}, update_op, upsert=True)
+            await log_activity(
+                "appsumo_webhook", email,
+                {"status": "ok", "event": event, "tier": tier_id,
+                 "source": source, "license_key": license_key, "payload": body},
+            )
+            result["status"] = "ok"
+            result["tier"] = tier_id
+            return result
+
+        if event in migrate_events:
+            # Migrate: if a new tier is in the payload, treat as tier-swap.
+            # Otherwise just log the event for the audit trail and no-op
+            # (some AppSumo migrations are admin-only plan renames).
+            tier_id = _extract_tier(body)
+            if tier_id:
+                from tier_config import REDEEMABLE_TIER_IDS
+                if tier_id in REDEEMABLE_TIER_IDS:
+                    tier_payload = assign_buyer_to_tier(tier_id=tier_id, is_upgrade=True)
+                    tier_payload["status"] = "active"
+                    push_doc = {}
+                    if license_key:
+                        push_doc["appsumo_events"] = {
+                            "event": event, "license_key": license_key, "ts": now,
+                        }
+                    update_op: dict = {"$set": tier_payload}
+                    if push_doc:
+                        update_op["$push"] = push_doc
+                    if not existing:
+                        update_op["$setOnInsert"] = {
+                            "email": email, "addedAt": now, "source": "appsumo",
+                            "entitlements": [], "totalSpendCents": 0,
+                        }
+                    await db.buyers.update_one({"email": email}, update_op, upsert=True)
+                    await log_activity(
+                        "appsumo_webhook", email,
+                        {"status": "ok", "event": event, "tier": tier_id,
+                         "source": source, "license_key": license_key,
+                         "payload": body},
+                    )
+                    result["status"] = "ok"
+                    result["tier"] = tier_id
+                    return result
+            # No tier => log and return without changing state.
+            await log_activity(
+                "appsumo_webhook", email,
+                {"status": "logged_only", "event": event,
+                 "source": source, "license_key": license_key, "payload": body},
+            )
+            result["status"] = "logged_only"
+            return result
+
+        if event in activate_events:
+            # AppSumo "activate" fires when the buyer redeems on their side.
+            # Our customer-facing /api/licenses/redeem already handles this
+            # path, so the webhook is informational. Log + return.
+            await log_activity(
+                "appsumo_webhook", email,
+                {"status": "logged_only_activate", "event": event,
+                 "source": source, "license_key": license_key, "payload": body},
+            )
+            result["status"] = "logged_only_activate"
+            return result
+
+        # Unknown event — log + 400 so AppSumo retries OR Charity sees it
+        # in the activity stream and can add a handler if needed.
+        await log_activity(
+            "appsumo_webhook_failed", email,
+            {"reason": f"unknown event {event!r}", "source": source,
+             "payload": body},
+        )
+        raise HTTPException(status_code=400, detail=f"Unknown event: {event}")
+
+    @api.post("/appsumo-webhook")
+    async def appsumo_webhook(request: Request, token: str = Query(default="")):
+        """Public AppSumo Licensing v2 webhook receiver.
+
+        AppSumo v2 spec compliance:
+        - Endpoint URL is public (no `?token=` query param required).
+        - MUST return `{event, success: true}` with HTTP 200 for every
+          valid webhook (including the `test: true` validation ping).
+        - MAY verify HMAC-SHA256 signature via `X-Appsumo-Signature` +
+          `X-Appsumo-Timestamp` headers using `APPSUMO_LICENSING_KEY`.
+        - Supports 6 event types: purchase, activate, upgrade, downgrade,
+          migrate, deactivate. Extra tolerance for refund/cancel/etc.
+        - Emails are NOT expected in the webhook — collected via OAuth
+          redirect. License events are tracked by `license_key`.
+
+        Backwards-compat: if `?token=<APPSUMO_WEBHOOK_TOKEN>` is passed,
+        it's still validated (this preserves the admin's ability to
+        trigger internal replays without HMAC keys). AppSumo itself will
+        NEVER pass this param — its calls go through the HMAC path.
+        """
+        # Read raw body FIRST so HMAC verification can hash it byte-for-byte.
+        try:
+            raw = await request.body()
+            body = json.loads(raw.decode("utf-8"))
+            if not isinstance(body, dict):
+                body = {}
+        except (ValueError, UnicodeDecodeError):
+            # Malformed body — return 200 anyway with a fallback event so
+            # AppSumo doesn't retry a permanently-broken payload forever.
+            await log_activity(
+                "appsumo_webhook_failed", "",
+                {"reason": "malformed json", "source": "appsumo"},
+            )
+            return {"event": "purchase", "success": False,
+                    "message": "Malformed JSON body"}
+
+        # HMAC verification (skipped when APPSUMO_LICENSING_KEY is empty).
+        signature = request.headers.get("X-Appsumo-Signature", "")
+        ts_header = request.headers.get("X-Appsumo-Timestamp", "")
+        hmac_valid = _verify_appsumo_signature(raw, signature, ts_header)
+
+        # Fallback auth: legacy token query gate — only enforced when both
+        # HMAC verification is DISABLED (empty key) AND the token query is
+        # non-empty. AppSumo itself never sends a token; leaving the key
+        # empty during pre-launch keeps the endpoint fully open.
+        if APPSUMO_LICENSING_KEY:
+            if not hmac_valid:
+                await log_activity(
+                    "appsumo_webhook_failed", "",
+                    {"reason": "invalid HMAC signature",
+                     "signature_present": bool(signature),
+                     "ts_present": bool(ts_header),
+                     "payload_keys": sorted(list(body.keys()))[:20] if isinstance(body, dict) else [],
+                     "source": "appsumo"},
+                )
+                # AppSumo webhook must return 200 even on failed HMAC or
+                # they mark the endpoint unreachable. Their spec: we OWN
+                # the auth, they own the transport.
+                return {"event": (body.get("event") or "purchase"),
+                        "success": False, "message": "Invalid signature"}
+        elif APPSUMO_WEBHOOK_TOKEN and token and token != APPSUMO_WEBHOOK_TOKEN:
+            # Only reject when a *token was explicitly provided* AND doesn't
+            # match. AppSumo requests (no token) pass through this gate.
+            await log_activity(
+                "appsumo_webhook_failed", "",
+                {"reason": "legacy token mismatch", "source": "appsumo"},
+            )
+            return {"event": (body.get("event") or "purchase"),
+                    "success": False, "message": "Invalid token"}
+
+        event = _extract_event_type(body)
+        # AppSumo test/validation ping: test:true. Return the required
+        # success shape immediately without touching any real data.
+        if body.get("test") is True:
+            # Echo the event field so we pass URL validation for any of
+            # the 6 event types AppSumo may fire during onboarding.
+            echoed = event or "purchase"
+            await log_activity(
+                "appsumo_webhook", "",
+                {"status": "test_event", "event": echoed,
+                 "source": "appsumo", "hmac_valid": hmac_valid,
+                 "payload": body},
+            )
+            return {"event": echoed, "success": True}
+
+        if not event:
+            await log_activity(
+                "appsumo_webhook_failed", _extract_email(body),
+                {"reason": "missing event type field",
+                 "top_keys": sorted(list(body.keys()))[:20] if isinstance(body, dict) else [],
+                 "payload": body, "source": "appsumo"},
+            )
+            # Still 200 (AppSumo requires) but with success:false so their
+            # dashboard flags it for us to fix.
+            return {"event": "purchase", "success": False,
+                    "message": "Missing event field"}
+
+        # Process the event. Handler may raise HTTPException on unknown
+        # events; we catch and translate to the AppSumo success:false
+        # shape so we keep returning HTTP 200.
+        try:
+            await _process_appsumo_event(event=event, body=body, source="appsumo")
+        except HTTPException as exc:
+            await log_activity(
+                "appsumo_webhook_failed", _extract_email(body),
+                {"reason": str(exc.detail), "event": event,
+                 "source": "appsumo", "payload": body},
+            )
+            return {"event": event, "success": False,
+                    "message": str(exc.detail)}
+        except Exception as exc:  # noqa: BLE001
+            logger.error("[appsumo] handler crashed: %s: %s", type(exc).__name__, exc)
+            await log_activity(
+                "appsumo_webhook_failed", _extract_email(body),
+                {"reason": f"{type(exc).__name__}: {exc}",
+                 "event": event, "source": "appsumo", "payload": body},
+            )
+            return {"event": event, "success": False,
+                    "message": "Internal error — see admin logs"}
+
+        return {"event": event, "success": True}
+
+    @api.get("/appsumo-webhook")
+    async def appsumo_webhook_probe():
+        """GET probe endpoint. Some webhook validators send a GET before
+        the POST validation ping to confirm the URL is alive. Returns
+        200 with a friendly JSON blob rather than 405."""
+        return {"ok": True, "endpoint": "appsumo-webhook",
+                "hint": "This is a POST-only webhook receiver."}
+
+    @api.get("/appsumo/oauth/redirect")
+    async def appsumo_oauth_redirect(request: Request, code: str = Query(default="")):
+        """AppSumo OAuth Redirect URL — GET endpoint that AppSumo hits after
+        a customer purchase.
+
+        Per AppSumo Licensing v2 spec:
+          - Must be publicly reachable
+          - Must return HTTP 200 (validation-time)
+          - After a real purchase, gets `?code=<oauth_code>` — we exchange
+            it for an access_token, fetch the license_key + status, then
+            redirect the buyer to our /redeem page with their code so
+            they can activate it against their email.
+
+        For URL validation (no `code` query param) we return 200 with
+        a friendly welcome JSON blob so the AppSumo dashboard passes
+        the redirect-URL health check.
+        """
+        # Validation-time probe (no code) → 200 OK
+        if not code:
+            return {"ok": True, "message": "AppSumo redirect URL ready.",
+                    "next": "activate a real purchase to see the redemption flow"}
+        # Real activation flow — hand off to the customer-facing /redeem
+        # page which will prompt for email + apply the code.
+        from fastapi.responses import RedirectResponse
+        origin = (request.headers.get("origin") or "").strip()
+        if not origin:
+            referer = (request.headers.get("referer") or "").strip()
+            if referer:
+                from urllib.parse import urlparse  # noqa: PLC0415
+                try:
+                    u = urlparse(referer)
+                    if u.scheme and u.netloc:
+                        origin = f"{u.scheme}://{u.netloc}"
+                except Exception:
+                    pass
+        origin = (os.environ.get("APP_BASE_URL") or origin or "").rstrip("/")
+        return RedirectResponse(
+            url=f"{origin}/redeem?appsumo_code={code}",
+            status_code=302,
+        )
+
+    @api.post("/admin/appsumo/test-webhook")
+    async def admin_appsumo_test_webhook(
+        payload: dict = Body(default_factory=dict),
+        admin=Depends(require_admin),
+    ):
+        """Admin-only synthetic AppSumo webhook trigger — used to verify
+        the lifecycle handlers (deactivate / refund / upgrade / downgrade)
+        without waiting for a real AppSumo event. Defaults to a deactivate
+        event on a freshly-created synthetic buyer so admins can confirm
+        the entitlement is actually wiped end-to-end."""
+        import time  # noqa: PLC0415
+
+        event = (payload.get("event") or "deactivate").strip().lower()
+        ts = int(time.time())
+        email = (payload.get("email") or f"appsumo-test+{ts}@faceless48.test").strip().lower()
+        license_key = (payload.get("license_key") or f"test-license-{ts}").strip()
+
+        # For revoke tests, seed a buyer first so there's something to revoke.
+        if event in {"deactivate", "refund", "cancel"}:
+            await db.buyers.update_one(
+                {"email": email},
+                {
+                    "$setOnInsert": {
+                        "email": email,
+                        "addedAt": _now_iso(),
+                        "source": "admin-test",
+                        "_synthetic": True,
+                        "_test_run_by": admin.email,
+                    },
+                    "$set": {
+                        "entitlements": ["base", "shorts", "studio"],
+                        "tier": "t3",
+                        "renderQuotaMonthly": 50,
+                        "avatarSubCap": 10,
+                        "monthlyCostCapCents": 5000,
+                    },
+                },
+                upsert=True,
+            )
+
+        body = {
+            "event": event,
+            "email": email,
+            "license_key": license_key,
+            "reason": payload.get("reason") or "admin-test",
+        }
+        if payload.get("tier"):
+            body["tier"] = payload["tier"]
+
+        try:
+            result = await _process_appsumo_event(
+                event=event, body=body, source="admin-test",
+            )
+            await db.buyers.update_one(
+                {"email": email},
+                {"$set": {"_synthetic": True, "_test_run_by": admin.email}},
+            )
+            doc = _strip_id(await db.buyers.find_one({"email": email}) or {})
+            return {
+                "ok": True,
+                "result": result,
+                "test_email": email,
+                "test_event": event,
+                "buyer_after": {
+                    "entitlements": doc.get("entitlements"),
+                    "tier": doc.get("tier"),
+                    "status": doc.get("status"),
+                    "renderQuotaMonthly": doc.get("renderQuotaMonthly"),
+                    "deactivatedAt": doc.get("deactivatedAt"),
+                },
+                "message": (
+                    f"Webhook handler is healthy. Test buyer {email} now has "
+                    f"status={doc.get('status', 'unchanged')!r}. Click 'Delete' "
+                    "on that buyer to clean up the test data."
+                ),
+            }
+        except HTTPException as exc:
+            return {
+                "ok": False,
+                "status_code": exc.status_code,
+                "detail": exc.detail,
+                "test_email": email,
+                "test_event": event,
+            }
+
+    # -----------------------------------------------------------------
+    # Sora 2 video generation — ADMIN TEST ONLY (v1.18.4)
+    # -----------------------------------------------------------------
+    # Charity called out that fal.ai/Flux quality wasn't hitting the
+    # professional bar for her audience. Sora 2 is available via the
+    # Emergent Universal LLM Key, meaning generation cost comes off her
+    # key balance instead of fal.ai's per-call bill. This endpoint fires
+    # ONE Sora 2 render from a text prompt and returns a fal.ai storage
+    # URL Charity can play back to evaluate quality. STRICTLY ADMIN GATED
+    # — no customer-facing wiring until she decides whether Sora 2 is good
+    # enough to become the "Cinematic Faceless" engine (Move 3b in her
+    # decision tree) or whether we park motion behind BYOK (Move 3a).
+    #
+    # Cost note: Sora 2 debits from EMERGENT_LLM_KEY balance. Standard
+    # `sora-2` model is much cheaper than `sora-2-pro`. Duration options:
+    # 4, 8, 12 seconds. Larger sizes + `sora-2-pro` = more $ per test.
+
+    @api.post("/admin/studio/test-sora2")
+    async def admin_test_sora2(
+        payload: Sora2TestRequest = Body(...),
+        admin=Depends(require_admin),
+    ):
+        # Map aspect → Sora 2's supported size grid (playbook constraint).
+        size_map = {
+            "9_16": "1024x1792",   # vertical
+            "16_9": "1792x1024",   # widescreen
+            "1_1":  "1024x1024",   # square
+        }
+        size = size_map.get(payload.aspect)
+        if not size:
+            raise HTTPException(status_code=400, detail="aspect must be 9_16, 16_9, or 1_1")
+        if payload.duration not in (4, 8, 12):
+            raise HTTPException(status_code=400, detail="duration must be 4, 8, or 12")
+        if payload.model not in ("sora-2", "sora-2-pro"):
+            raise HTTPException(status_code=400, detail="model must be sora-2 or sora-2-pro")
+
+        emergent_key = os.environ.get("EMERGENT_LLM_KEY")
+        if not emergent_key:
+            raise HTTPException(status_code=503, detail="EMERGENT_LLM_KEY not set — cannot test Sora 2")
+
+        import asyncio  # noqa: PLC0415
+        import tempfile  # noqa: PLC0415
+        import time  # noqa: PLC0415
+        # Delayed import so a missing playbook lib doesn't crash admin_routes
+        # at boot — this endpoint is admin-only + optional.
+        try:
+            from emergentintegrations.llm.openai.video_generation import OpenAIVideoGeneration  # noqa: PLC0415
+        except ImportError as exc:
+            raise HTTPException(status_code=503, detail=f"Sora 2 SDK unavailable: {exc}")
+
+        # Wall-clock timer so Charity sees "45s to render" alongside the
+        # video URL — informs her cost-vs-time decision on Move 3a/3b.
+        t0 = time.time()
+
+        def _gen_sync() -> bytes:
+            # OpenAIVideoGeneration is a sync SDK — run in an executor.
+            video_gen = OpenAIVideoGeneration(api_key=emergent_key)
+            return video_gen.text_to_video(
+                prompt=payload.prompt,
+                model=payload.model,
+                size=size,
+                duration=payload.duration,
+                max_wait_time=900,   # 15 min upper bound for pro/12s combos
+            )
+
+        try:
+            loop = asyncio.get_event_loop()
+            video_bytes = await loop.run_in_executor(None, _gen_sync)
+        except Exception as exc:
+            elapsed = time.time() - t0
+            await log_activity(
+                "sora2_test_failed", admin.email,
+                {"prompt": payload.prompt[:120], "aspect": payload.aspect,
+                 "duration": payload.duration, "model": payload.model,
+                 "elapsed_s": round(elapsed, 1),
+                 "error": f"{type(exc).__name__}: {exc}"},
+            )
+            raise HTTPException(status_code=502, detail=f"Sora 2 gen failed: {type(exc).__name__}: {exc}")
+
+        if not video_bytes:
+            raise HTTPException(status_code=502, detail="Sora 2 returned empty video")
+
+        # Save + upload to fal.ai storage so Charity gets a shareable URL
+        # (same pattern as scene stills). We reuse fal storage rather than
+        # GridFS so playback is instant on the frontend.
+        elapsed = round(time.time() - t0, 1)
+        tmpdir = tempfile.mkdtemp(prefix="sora2_")
+        dst = os.path.join(tmpdir, f"sora2-{uuid.uuid4().hex[:8]}.mp4")
+        try:
+            with open(dst, "wb") as f:
+                f.write(video_bytes)
+            # Delayed import — fal_client is in server.py, we grab from module
+            import fal_client  # noqa: PLC0415
+            fal_url = await loop.run_in_executor(None, fal_client.upload_file, dst)
+        finally:
+            try:
+                if os.path.exists(dst):
+                    os.remove(dst)
+                os.rmdir(tmpdir)
+            except Exception:
+                pass
+
+        result = {
+            "ok": True,
+            "url": fal_url,
+            "prompt": payload.prompt,
+            "aspect": payload.aspect,
+            "size": size,
+            "duration": payload.duration,
+            "model": payload.model,
+            "bytes": len(video_bytes),
+            "elapsed_s": elapsed,
+            "note": "This test debits your Emergent Universal Key balance, not fal.ai.",
+        }
+        await log_activity(
+            "sora2_test", admin.email,
+            {**result, "url": (fal_url or "")[:80]},   # avoid huge activity docs
+        )
+        return result
+
+    return {"process_pinball_event": _process_pinball_event,
+            "process_appsumo_event": _process_appsumo_event}

@@ -1,0 +1,50 @@
+{
+  "summary": "Iter 36 — Backend + frontend verification of (a) Anthropic BYOK, (b) thumbnail lightbox, (c) thumbnails in admin usage/stats/CSV. Pytest: 15/16 PASS (test_iter36_byok_anthropic_and_lightbox.py 10/10 PASS; test_iter36_admin_thumbnails.py 5/6 PASS — 1 fail surfaces a real backend bug). FRONTEND: ProfileMenu 'API keys' link now visible for owner (iter_35 HIGH bug fix verified). /settings/keys renders all 4 cards (anthropic+openai+heygen+fal). Anthropic save→masked badge 'Saved · sk-…cdef'→delete cycle works. Plaintext NEVER leaked in any GET response or db (Fernet 'gAAAAA' prefix verified). Thumbnail lightbox opens, shows image+download+copy+X, dismisses on ESC and backdrop click and X. Admin Usage tab: Thumbnails column present; footer '4 thumbnails'; expand owner row → drilldown shows Thumbnails card (4/Premium:2/Fast:2/last_at). Stats tab: stat-thumbnails tile shows 4. CSV export has columns thumbnails_total, thumbnails_premium, thumbnails_fast, thumbnails_last_at positioned between renders_last_at and spend_cents; owner row = 4/2/2. CRITICAL BUG: clicking the Thumbnails sort header on Admin Usage causes an unrecoverable React crash ('Uncaught runtime errors: Objects are not valid as a React child') because backend rejects sort_by=thumbnails_total with 422 (Pydantic regex missing that value) AND frontend renders the validation-error array (objects with keys {type,loc,msg,input,ctx}) as React children. Two fixes needed: (1) Backend admin_routes.py:713 — extend the sort_by regex to include thumbnails_total (the sort lambda at line 875 already implements it, just unreachable). (2) Frontend UsageTab.jsx — coerce error.response.data.detail to a string before rendering (defence-in-depth).",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "GET /api/admin/usage?sort_by=thumbnails_total", "issue": "Returns 422 'String should match pattern ^(last_seen|email|scripts_total|renders_total|spend_cents|added_at)$'. The sort_key_map at admin_routes.py:875 already implements the lambda for thumbnails_total, but the Pydantic Query regex on line 713 doesn't include it — request never reaches the handler. Fix: change the regex on line 713 to '^(last_seen|email|scripts_total|renders_total|thumbnails_total|spend_cents|added_at)$'. This bug is also responsible for the Admin Usage tab UI crash described in frontend_issues.", "priority": "HIGH"}
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "UsageTab", "issue": "Clicking the Thumbnails sort header crashes the page with 'Uncaught runtime errors: Objects are not valid as a React child (found: object with keys {type, loc, msg, input, ctx})'. Root cause: backend returns Pydantic 422 with detail=Array<{type,loc,msg,input,ctx}>, and the component tries to render that array directly as JSX. Even after the backend regex is fixed, the frontend should defensively coerce error.response.data.detail (string OR array OR object) into a single string for the toast. Until fixed, any 422 from this endpoint becomes a hard crash.", "selector": "[data-testid='usage-th-thumbnails_total']", "priority": "HIGH"}
+    ],
+    "integration_issues": [
+      {"flow": "Admin Usage sort by Thumbnails", "issue": "Backend 422 + missing frontend error guard → red 'Uncaught runtime errors' overlay covers the whole admin panel. User must reload to recover.", "affected_selectors": ["[data-testid='usage-th-thumbnails_total']", "[data-testid='admin-toast']"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter36_byok_anthropic_and_lightbox.py",
+    "/app/backend/tests/test_iter36_admin_thumbnails.py",
+    "/app/test_reports/pytest/iteration_36.xml"
+  ],
+  "action_items": [
+    "Fix admin_routes.py:713 — add 'thumbnails_total' to the sort_by regex (one-token addition). Verifies via the existing test_sort_by_thumbnails_total_desc test which will then pass.",
+    "Fix frontend/src/components/admin/UsageTab.jsx — wrap the error toast message extraction with a coercion like: const detail = err?.response?.data?.detail; const msg = Array.isArray(detail) ? detail.map(d => d?.msg || JSON.stringify(d)).join('; ') : (typeof detail === 'string' ? detail : (detail ? JSON.stringify(detail) : err.message)); — prevents future 422 shapes from crashing the tree.",
+    "Optional polish: also add 'thumbnails_premium' / 'thumbnails_fast' as sort keys for symmetry (lambdas would be one-liners)."
+  ],
+  "critical_code_review_comments": [
+    "Backend Anthropic BYOK wiring is correctly threaded end-to-end: _claude_complete(user_email=...) → get_byok_key(db, user_email, 'anthropic') → _anthropic_direct_complete via httpx; fallback to LlmChat path on no-key. Both /studio/broll-prompts and /scripts/angles pass user.email through. _run_script_job streaming branch uses _anthropic_direct_stream for buyer-owned key. Solid.",
+    "thumbnails_routes.py rewrite-prompt + concepts-from-script both check get_byok_key(db, user.email, 'anthropic') with try/except before falling back to Emergent LlmChat — clean defensive pattern. BYOK key never leaks: only used inside the httpx.AsyncClient with explicit Authorization header.",
+    "BYOK SERVICES dict has 'anthropic' as first key with correct label='Anthropic', purpose mentioning Script Engine + thumbnail prompt rewriter, key_hint='starts with sk-ant-…'. Frontend renders cards in dict-iteration order so Anthropic shows first as designed.",
+    "/api/me/quota iter_35 HIGH bug is FIXED: all three early-return dicts (dev_bypass/studio_grant, founders, normal buyer) now include byok_allowed. Verified by the regression test + by the visible ProfileMenu link.",
+    "BUG (HIGH): admin_routes.py:713 sort_by regex is the single source of truth for accepted values; sort_key_map at line 875 declares the lambda but is unreachable. This is a classic 'list of valid values declared in two places, fell out of sync' bug — would benefit from a single Enum or constant tuple used in both spots.",
+    "BUG (HIGH): UsageTab.jsx error rendering. FastAPI's 422 detail is always an array of objects in Pydantic v2 — frontends MUST treat it as such. Recommend a shared `extractErrMsg(err)` helper across admin tabs to prevent this class of crash recurring.",
+    "Thumbnails lightbox UX is solid: ESC + backdrop + X all dismiss; image + download + copy controls present; click target covers the full tile via thumb-tile-img-btn. No accessibility role='dialog'/aria-modal observed — minor a11y polish opportunity, non-blocking.",
+    "CSV column ordering correctly places thumbnails_total, thumbnails_premium, thumbnails_fast, thumbnails_last_at between renders_last_at and spend_cents. UTF-8 BOM is prepended (good for Excel) — downstream test consumers should lstrip('\\ufeff') (test was updated accordingly).",
+    "Drilldown card 'usage-drilldown-thumbs-{email}' renders correctly with Premium/Fast breakdown + last_at — UI matches data model."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter36_byok_anthropic_and_lightbox.py (fixed signature-parser to accept '-> str:' return annotation)",
+    "/app/backend/tests/test_iter36_admin_thumbnails.py (new — 6 pytest cases covering usage thumbnails block, stats tile, sort_by, CSV columns + values)"
+  ],
+  "success_rate": {"backend": "93.75% (15/16 — the 1 failing test is exposing a real backend bug)", "frontend": "85% (all 5 features in spec render correctly; one HIGH crash on sort header click)"},
+  "test_credentials": "Owner/Admin: drcharitycampbell@gmail.com (DEV_BYPASS passwordless). Confirmed thumbnails counts 4/2/2 in seed data as spec stated.",
+  "seed_data_creation": "Per-test BYOK fixture pre/post-cleans db.byok_keys rows for OWNER_EMAIL+service='anthropic'. No persistent state introduced.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "After main agent applies both fixes: (1) re-run /app/backend/tests/test_iter36_admin_thumbnails.py — should be 6/6 PASS. (2) Re-test the UI by logging in as drcharitycampbell@gmail.com → /admin → Usage tab → click 'Thumbnails' column header → assert NO red overlay AND the rows visibly resort. The fix is two single-line changes: regex extension in admin_routes.py + error-coercion guard in UsageTab.jsx. Iter_35 ProfileMenu bug is fully resolved (verified). Anthropic BYOK end-to-end is solid (10/10 pytest pass including encryption + masking + plaintext-leak checks).",
+  "rca of the issue": "RCA: Two-layer bug for sort-by-thumbnails. Layer 1 (backend, admin_routes.py:713) — the Pydantic Query(..., regex=...) validator was added in iter_36 to accept thumbnails sort but the regex string itself wasn't updated, only the sort_key_map dispatch at line 875 was. Result: every request with sort_by=thumbnails_total returns 422 before reaching the handler. Layer 2 (frontend, UsageTab.jsx) — the catch-block renders error.response.data.detail directly as a React child without checking shape. FastAPI/Pydantic v2 returns detail as Array<{type,loc,msg,input,ctx}>, which React refuses to render → 'Objects are not valid as a React child' uncaught crash. Reproduction: log in as owner → /admin → Usage → click the Thumbnails column header. Mitigation: extend regex AND add an extractErrMsg helper that handles array+object+string shapes. Note: this exact crash pattern will recur for ANY future 422 from the admin APIs, so the frontend guard is the more durable fix."
+}

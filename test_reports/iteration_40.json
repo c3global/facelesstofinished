@@ -1,0 +1,35 @@
+{
+  "summary": "Iteration 40 — v1.16.0 light-mode Thumbnails/Studio CSS fix verification. All 11 acceptance criteria from the request PASS. Critically: (1) light-mode .thumb-card bg = rgb(255,255,255) (was rgba(15,10,30,0.55)), (2) dark-mode .thumb-card bg = rgba(15,10,30,0.55) EXACTLY unchanged. NEW REGRESSION SCOPE FINDING: /settings/keys page has the SAME class of bug — 6 BYOK cards (section.settings-key-card) still render at rgba(15,10,30,0.55) in light mode, producing identical gray-purple boxes on lavender bg that the user originally complained about. Outside iter_40 fix scope (which targeted .thumb-* classes only) but plausible next-user-complaint.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Settings/Keys page", "issue": "Light mode: all 6 BYOK cards (section.settings-key-card) render with hardcoded rgba(15,10,30,0.55) — gray-purple boxes on pale lavender bg. Same root cause as the Thumbnails bug fixed in v1.16.0; just no [data-theme='light'] override exists for .settings-key-card. Visible: Anthropic / OpenAI / Google AI Studio / ElevenLabs / HeyGen / fal.ai cards. The eyebrow 'BYOK Keys' subtitle is also pale-on-pale and barely readable.", "selector": "section.settings-key-card", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/settings/keys (light)", "issues": ["6 BYOK cards still dark-on-light", "BYOK header eyebrow text very low contrast on light bg"]}
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [
+    "Add [data-theme='light'] overrides for .settings-key-card (background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow-card)) plus nested input bg = var(--bg) to mirror the .thumb-card fix. Also bump the BYOK page hero/eyebrow text contrast (currently pale-on-pale)."
+  ],
+  "critical_code_review_comments": [
+    "v1.16.0 CSS additions (App.css L6589-6720) are well-scoped — they only override [data-theme='light'] surfaces and leave dark untouched. Verified live: dark-mode .thumb-card stays at exact rgba(15,10,30,0.55) byte-for-byte; light-mode reads rgb(255,255,255). Clean approach. ✓",
+    "All overrides route through design tokens (var(--surface), var(--bg), var(--muted), var(--warning), var(--accent)) — no new hardcoded colors introduced. Future theme tweaks will cascade automatically. ✓",
+    "Light-mode CTA uses var(--warning) (copper rgb(168,112,69)) with white text — strong contrast, matches Stripe-style primary action. Active engine/aspect chips correctly switch to warm-gradient + copper border. ✓",
+    "Gap: same fix pattern was NOT applied to .settings-key-card. Recommend extracting a shared 'card-surface' utility class (or @apply mixin) so all panel-style components route through one set of light-mode overrides. Otherwise this bug will keep reappearing for every new card component.",
+    "Minor: App.css is now 6734 lines — well past the maintainability threshold. Consider splitting into App.css (base) + thumbnails.css / settings.css / scripts.css per-page sheets, each owning their own [data-theme='light'] block."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (quota 200 + byok_allowed=true)", "frontend": "100% on v1.16.0 spec items; 1 new related-bug finding on /settings/keys"},
+  "test_credentials": "drcharitycampbell@gmail.com (DEV_BYPASS owner, isAdmin=true, byok_allowed=true)",
+  "seed_data_creation": "None — used existing thumbnail gallery (6 tiles visible).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "v1.16.0 light-mode Thumbnails fix is GREEN. Verification snippet (run in browser console after login + on /thumbnails):  document.documentElement.setAttribute('data-theme','light'); getComputedStyle(document.querySelector('.thumb-card')).backgroundColor  → 'rgb(255, 255, 255)'.  For dark-mode regression check:  document.documentElement.setAttribute('data-theme','dark'); same query  → 'rgba(15, 10, 30, 0.55)' EXACTLY. If main agent adds .settings-key-card light overrides next, the same pattern (rgb(255,255,255) light / rgba(15,10,30,0.55) dark) should apply.",
+  "rca of the issue": "Original bug: .thumb-card / .thumb-tile / .thumb-seg / etc. were authored against the dark palette only — backgrounds were hardcoded as rgba(15,10,30,0.55) and rgba(8,5,20,0.6), text used cream/copper hardcoded values. There was no [data-theme='light'] cascade, so toggling the theme only swapped the design tokens but never reached these components. Fix: comprehensive [data-theme='light'] block at App.css L6589-6720 routing each surface through var(--surface), var(--bg), var(--muted), var(--warning), var(--accent). Same fix discipline still owed to .settings-key-card (and likely a few other card-shaped components) — confirmed bug there (6 cards leaking dark bg). Dark-mode remains pixel-identical (regression assertion in script confirms exact rgba(15,10,30,0.55) match)."
+}

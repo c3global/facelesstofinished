@@ -37,7 +37,10 @@
   --bg:            #F6F4FB;
   --surface:       #FFFFFF;
   --surface-soft:  rgba(15, 10, 30, 0.025);
-  --surface-hover: rgba(15, 10, 30, 0.05);
+  /* v1.14.0 — surface-hover bumped 5%→9% so card hover states are
+     actually perceptible against the very-light page bg. The old 5%
+     overlay was indistinguishable from the resting state. */
+  --surface-hover: rgba(15, 10, 30, 0.09);
   --border:        #D8D2EA;
   --border-soft:   rgba(120, 110, 170, 0.25);
   --accent:        #5E55C2;

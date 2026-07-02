@@ -4,10 +4,16 @@ import axios from "axios";
 import Studio from "./pages/Studio";
 import Scripts from "./pages/Scripts";
 import Resources from "./pages/Resources";
-import Login from "./pages/Login";
+import Thumbnails from "./pages/Thumbnails";
 import Redeem from "./pages/Redeem";
+import Roadmap from "./pages/Roadmap";
+import Changelog from "./pages/Changelog";
+import SettingsKeys from "./pages/SettingsKeys";
+import Login from "./pages/Login";
+import AuthCallback from "./pages/AuthCallback";
 import Admin from "./pages/Admin";
 import Header from "./components/Header";
+import Footer from "./components/Footer";
 import "./App.css";
 
 // API base — absolute in dev/preview (REACT_APP_BACKEND_URL set), relative in
@@ -184,16 +190,31 @@ export default function App() {
           <Header />
           <Routes>
             <Route path="/login" element={<Login />} />
-            <Route path="/redeem" element={<Redeem />} />
+            <Route path="/auth/callback" element={<AuthCallback />} />
             <Route path="/studio" element={<RequireStudio><Studio /></RequireStudio>} />
             <Route path="/scripts" element={<RequireAuth><Scripts /></RequireAuth>} />
+            <Route path="/thumbnails" element={<RequireAuth><Thumbnails /></RequireAuth>} />
             <Route path="/resources" element={<RequireAuth><Resources /></RequireAuth>} />
+            <Route path="/redeem" element={<Redeem />} />
+            <Route path="/roadmap" element={<Roadmap />} />
+            <Route path="/changelog" element={<Changelog />} />
+            <Route path="/settings/keys" element={<RequireAuth><SettingsKeys /></RequireAuth>} />
             <Route path="/admin" element={<RequireAuth><Admin /></RequireAuth>} />
             <Route path="/" element={<Navigate to="/scripts" replace />} />
             <Route path="*" element={<Navigate to="/scripts" replace />} />
           </Routes>
+          <FooterGate />
         </BrowserRouter>
       </AuthProvider>
     </ThemeProvider>
   );
+}
+
+// Footer mounts at the bottom of every route. Was previously hidden on
+// /login (the assumption being the hero already filled the page), but
+// Charity wants a real footer everywhere so visitors landing on /login,
+// /roadmap, or /changelog see the same shipping-velocity signal
+// (version pill + "What's New" amber dot) the authenticated app carries.
+function FooterGate() {
+  return <Footer />;
 }
