@@ -7521,3 +7521,198 @@ body[data-founder="true"] .settings-key-save-btn {
 }
 [data-theme="light"] .changelog-marker { border-color: #ffffff; }
 
+
+/* ============================================================
+ * v1.19.1 — Provider kill-switch UI (Pickers + Admin Providers tab)
+ * ============================================================ */
+
+/* Warning / info banner shown inside pickers when AI is disabled. */
+.picker-banner {
+  margin: 0 0 14px 0;
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.45;
+  border: 1px solid;
+}
+.picker-banner.is-warn {
+  background: rgba(224, 164, 88, 0.08);
+  color: #FFEAD0;
+  border-color: rgba(224, 164, 88, 0.35);
+}
+.picker-banner.is-info {
+  background: rgba(120, 200, 180, 0.08);
+  color: #BFEFE3;
+  border-color: rgba(120, 200, 180, 0.35);
+}
+
+/* Disabled state for source-card buttons. Kept subtle — visible but
+ * clearly non-interactive. Matches the disabled state on other UI. */
+.source-card.is-disabled,
+.source-card:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  filter: grayscale(0.5);
+}
+.source-card.is-disabled:hover,
+.source-card:disabled:hover {
+  border-color: var(--border);
+  background: transparent;
+}
+
+/* Admin → Providers tab. */
+.providers-tab {
+  padding: 20px 4px;
+}
+.providers-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 20px;
+  margin-bottom: 24px;
+}
+.providers-title {
+  font-size: 22px;
+  font-weight: 700;
+  margin: 0 0 6px 0;
+  color: var(--text);
+}
+.providers-sub {
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1.5;
+  max-width: 640px;
+  margin: 0;
+}
+.providers-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: right;
+  line-height: 1.5;
+}
+.providers-error {
+  background: rgba(255, 100, 100, 0.1);
+  color: #FFB4B4;
+  border: 1px solid rgba(255, 100, 100, 0.3);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  font-size: 13px;
+}
+.providers-flash {
+  background: rgba(120, 200, 180, 0.12);
+  color: #BFEFE3;
+  border: 1px solid rgba(120, 200, 180, 0.35);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  font-size: 13px;
+}
+.providers-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.providers-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.providers-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.providers-card-title {
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--text);
+}
+.providers-card-body {
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.55;
+  margin: 0;
+}
+.providers-card-body code {
+  background: rgba(255, 255, 255, 0.06);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+}
+.providers-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  margin-top: 6px;
+}
+.providers-toggle input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.providers-select,
+.providers-input {
+  background: var(--surface-hover);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 14px;
+  width: 100%;
+  margin-top: 4px;
+}
+.providers-select:focus,
+.providers-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.providers-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.providers-save,
+.providers-reload {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 18px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  transition: all 0.15s ease;
+}
+.providers-save {
+  background: var(--accent);
+  color: #0F1013;
+  border-color: var(--accent);
+}
+.providers-save:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+.providers-save:disabled,
+.providers-reload:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.providers-reload {
+  background: transparent;
+  color: var(--text-muted);
+}
+.providers-reload:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+

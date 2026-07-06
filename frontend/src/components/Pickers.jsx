@@ -177,7 +177,7 @@ export function AvatarPicker({ open, onClose, value, onPick, currentAspect = "9_
             : "No avatars match these filters."}
           {tab !== "favorites" && aspectFilter !== "all" && (
             <span style={{ display: "block", marginTop: 6, fontSize: 12, opacity: 0.7 }}>
-              Switch the aspect filter to "Any aspect" to widen the search.
+              Switch the aspect filter to &quot;Any aspect&quot; to widen the search.
             </span>
           )}
         </div>
@@ -520,9 +520,14 @@ export function VoicePicker({ open, onClose, value, onPick, source = "heygen", u
 // =====================================================================
 // B-Roll Source picker (faceless mode only)
 // =====================================================================
-export function BRollSourcePicker({ open, onClose, value, onPick }) {
+export function BRollSourcePicker({ open, onClose, value, onPick, providerConfig = null }) {
+  // v1.19.1: when AI visuals are disabled by admin, the "Generate with AI"
+  // option is greyed out and unclickable. Users still see it (so they
+  // know it exists) but can't select it — Studio-side renders would
+  // silently downgrade anyway.
+  const aiDisabled = providerConfig && (!providerConfig.ai_visuals_enabled || !providerConfig.fal_ai_enabled);
   const options = [
-    { id: "ai",       name: "Generate with AI",  icon: <Sparkles size={22} />, desc: "Every scene is generated with AI from your prompt. Best for abstract, stylized topics." },
+    { id: "ai",       name: "Generate with AI",  icon: <Sparkles size={22} />, desc: "Every scene is generated with AI from your prompt. Best for abstract, stylized topics.", disabled: aiDisabled },
     { id: "pexels",   name: "Stock from Pexels", icon: <Film size={22} />,     desc: "Free, premium stock footage. Strong on lifestyle, business, and nature." },
     { id: "pixabay",  name: "Stock from Pixabay", icon: <Film size={22} />,    desc: "Alternate library — broader catalog, more niche topics." },
     { id: "uploaded", name: "Your media",        icon: <FolderOpen size={22} />, desc: "Use clips and images YOU uploaded — bypass AI and stock entirely." },
@@ -530,13 +535,19 @@ export function BRollSourcePicker({ open, onClose, value, onPick }) {
   ];
   return (
     <Modal open={open} onClose={onClose} title="B-Roll source" testId="broll-modal">
+      {aiDisabled && (
+        <div className="picker-banner is-info" data-testid="broll-ai-disabled-banner">
+          AI generation is currently disabled by admin. Pick a stock source (Pexels / Pixabay) or your own uploaded media.
+        </div>
+      )}
       <div className="source-grid" data-testid="broll-grid">
         {options.map((o) => (
           <button
             key={o.id}
-            className={`source-card ${value === o.id ? "is-selected" : ""}`}
+            className={`source-card ${value === o.id ? "is-selected" : ""} ${o.disabled ? "is-disabled" : ""}`}
             data-testid={`broll-${o.id}`}
-            onClick={() => { onPick(o.id); onClose(); }}
+            disabled={o.disabled}
+            onClick={() => { if (o.disabled) return; onPick(o.id); onClose(); }}
           >
             <div className="source-icon">{o.icon}</div>
             <div className="source-name">{o.name}</div>
@@ -587,7 +598,20 @@ export function AspectPicker({ open, onClose, value, onPick }) {
 // =====================================================================
 // AI engine picker (Faceless mode only — picks the model for AI scenes)
 // =====================================================================
-export function AIEnginePicker({ open, onClose, value, onPick, isAdmin = false }) {
+export function AIEnginePicker({ open, onClose, value, onPick, isAdmin = false, providerConfig = null }) {
+  // v1.19.1: provider kill switch. When the admin has disabled fal.ai OR
+  // AI visuals entirely, the picker renders in read-only "unavailable" mode
+  // and every engine card is disabled. The Studio still shows the chip so
+  // the user knows the option exists, but they can't fire an AI render
+  // that would fail server-side anyway. `providerConfig` comes from the
+  // public /api/config/faceless endpoint that Studio.jsx hydrates on mount.
+  const aiDisabled = providerConfig && (!providerConfig.ai_visuals_enabled || !providerConfig.fal_ai_enabled);
+  const disabledReason = providerConfig?.ai_visuals_enabled === false
+    ? "AI-generated visuals are currently disabled by admin. Stock-only mode."
+    : providerConfig?.fal_ai_enabled === false
+      ? "fal.ai is currently disabled by admin. Nano Banana still works for AI stills — pick a stock-based source (Pexels / Pixabay / Uploaded) for now."
+      : null;
+
   // Engine catalogue. Cost field is only shown to admins per Charity's
   // instruction — customers see a quality/speed hint instead so the UI
   // doesn't expose vendor pricing.
@@ -630,13 +654,19 @@ export function AIEnginePicker({ open, onClose, value, onPick, isAdmin = false }
   ];
   return (
     <Modal open={open} onClose={onClose} title="AI engine for AI scenes" testId="ai-engine-modal">
-      <div className="source-grid" data-testid="ai-engine-grid">
+      {aiDisabled && (
+        <div className="picker-banner is-warn" data-testid="ai-engine-disabled-banner">
+          {disabledReason}
+        </div>
+      )}
+      <div className="source-grid" data-testid="ai-engine-grid" aria-disabled={aiDisabled}>
         {options.map((o) => (
           <button
             key={o.id}
-            className={`source-card ${value === o.id ? "is-selected" : ""}`}
+            className={`source-card ${value === o.id ? "is-selected" : ""} ${aiDisabled ? "is-disabled" : ""}`}
             data-testid={`ai-engine-${o.id}`}
-            onClick={() => { onPick(o.id); onClose(); }}
+            disabled={aiDisabled}
+            onClick={() => { if (aiDisabled) return; onPick(o.id); onClose(); }}
           >
             <div className="source-icon"><o.Icon size={22} /></div>
             <div className="source-name">{o.name}</div>

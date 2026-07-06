@@ -225,6 +225,17 @@ export default function Studio() {
   const [bulkPrompts, setBulkPrompts] = useState("");
   const [sceneOverrides, setSceneOverrides] = useState([]); // [{source?, pick?}]
 
+  // v1.19.1: Provider kill switch. Hydrate on mount from the public config
+  // endpoint so the AI engine picker + B-roll source picker can gray out
+  // the AI options when admin has disabled fal.ai or AI visuals entirely.
+  // Public endpoint = no auth needed, safe to fetch on every Studio load.
+  const [providerConfig, setProviderConfig] = useState(null);
+  useEffect(() => {
+    apiClient.get("/config/faceless")
+      .then((r) => setProviderConfig(r.data))
+      .catch(() => setProviderConfig(null));
+  }, []);
+
   // Render state
   const [render, setRender] = useState(null);
   const [history, setHistory] = useState([]);
@@ -1626,6 +1637,7 @@ export default function Studio() {
         open={modal === "broll"}
         onClose={closeModal}
         value={brollSource}
+        providerConfig={providerConfig}
         onPick={(src) => {
           setBrollSource(src);
           // Clear per-scene overrides so the new global takes effect (except when going to "mix")
@@ -1639,6 +1651,7 @@ export default function Studio() {
         value={aiEngine}
         onPick={setAiEngine}
         isAdmin={isAdmin}
+        providerConfig={providerConfig}
       />
       <StockPicker
         open={stockModal.open}
