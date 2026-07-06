@@ -85,6 +85,27 @@ NEW_SHIPPED_ITEMS = [
         ),
         "tag": "New",
     },
+    {
+        "title": "Cleaner Faceless Studio (stock-first)",
+        "blurb": (
+            "Build your video with beautiful stock footage from Pexels "
+            "and Pixabay, or your own uploaded clips — every render "
+            "leads with real footage for a cinematic, on-brand look. "
+            "AI-generated scenes are now reserved for Pro Plus and "
+            "Founder members."
+        ),
+        "tag": "New",
+    },
+    {
+        "title": "Founder dashboard for Studio controls",
+        "blurb": (
+            "New dashboard tab that lets you (as the owner) fine-tune "
+            "what shows up in the Studio — default video sources, "
+            "daily limits, and premium toggles — without needing to "
+            "touch a single line of code."
+        ),
+        "tag": "Founder",
+    },
 ]
 
 CINEMATIC_BLURB_NEW = (

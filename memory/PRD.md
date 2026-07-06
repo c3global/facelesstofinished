@@ -20,6 +20,20 @@ back to it for entitlement verification.
 
 ## 🔁 Workflow rule: Changelog moves with every change (set 2026-06-29 by user)
 
+### Iteration 53 (2026-07-02, evening) — Consumer-friendly rewording pass on changelog + roadmap
+
+**Trigger:** Charity: *"Update the roadmap and the change log — be sure to use terminology that consumers would understand, not from a developer standpoint."*
+
+**What changed:**
+- Rewrote v1.19.1 and v1.19.2 entries in `changelog.js` (customer footer popup) to remove all developer terminology (`fal.ai`, `kill switch`, `BYOK`, `API`, `AI generation cap`). New copy focuses on **what the customer experiences**: cleaner picker, cinematic footage, faster renders, distraction-free UI. Founder-exclusive language for BYOK-gated AI options ("Pro Plus perk", "Founder members keep full access").
+- Rewrote the matching sections in `memory/CHANGELOG.md` (public /changelog page) with the same warmer, benefit-focused language.
+- Added 2 new SHIPPED roadmap items on `db.roadmap_items`:
+  1. **Cleaner Faceless Studio (stock-first)** — customer-facing summary of v1.19.1 + v1.19.2 combined
+  2. **Founder dashboard for Studio controls** — the new Providers admin tab, framed as an owner benefit
+- Roadmap-sync script (`/app/scripts/sync_roadmap_to_production.py`) can be updated in a future pass to include these two new items when Charity next runs it against production.
+
+**Nothing functional shipped** — pure documentation quality pass. All prior code changes from Iterations 51+52 remain in place.
+
 ### Iteration 52 (2026-07-02, evening) — fal.ai kill switch + stock-first Faceless default (v1.19.1)
 
 **Trigger:** Charity: *"We need to reduce fal.ai dependency immediately. The issue is both cost and quality... Please do not keep fal.ai as the default provider for Faceless Studio... fal.ai should only be used when explicitly selected for AI-generated visuals, and it should be capped or disabled by admin setting."*
