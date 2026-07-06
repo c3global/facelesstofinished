@@ -2373,3 +2373,41 @@ def register_admin_routes(
 
     return {"process_pinball_event": _process_pinball_event,
             "process_appsumo_event": _process_appsumo_event}
+
+
+# ---------------------------------------------------------------------------
+# NOTE: /admin/system/faceless-config endpoints are registered by the caller
+# via register_faceless_config_admin_routes below — same pattern as the rest
+# of admin_routes so they share the require_admin dep + activity logger.
+# ---------------------------------------------------------------------------
+
+
+def register_faceless_config_admin_routes(*, api, db, require_admin, log_activity):
+    """Admin endpoints for the fal.ai kill switch + stock-first defaults.
+
+    Mounted via server.py after register_admin_routes to keep symmetry with
+    the existing modular router pattern.
+    """
+    import faceless_config  # noqa: PLC0415 — module-scope import safe here
+
+    @api.get("/admin/system/faceless-config")
+    async def get_config(admin=Depends(require_admin)):
+        cfg = await faceless_config.resolve_config(db)
+        return cfg
+
+    @api.put("/admin/system/faceless-config")
+    async def put_config(body: dict = Body(...), admin=Depends(require_admin)):
+        # Only whitelisted fields are honored (see faceless_config.update_config).
+        cfg = await faceless_config.update_config(
+            db, updates=body, admin_email=admin.email,
+        )
+        await log_activity(
+            "faceless_config_updated", admin.email,
+            {"changes": {k: v for k, v in body.items()
+                         if k in ("fal_ai_enabled", "ai_visuals_enabled",
+                                  "default_broll_source",
+                                  "max_ai_scenes_per_render",
+                                  "max_ai_renders_per_user_day")},
+             "resolved": cfg},
+        )
+        return cfg

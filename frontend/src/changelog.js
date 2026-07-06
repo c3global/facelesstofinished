@@ -14,9 +14,18 @@
 //    See PRD.md → "Workflow rule: changelog must move with every deploy."
 // 4. Most recent on top. Each entry has version + date + bullet list.
 
-export const APP_VERSION = "1.19.0";
+export const APP_VERSION = "1.19.1";
 
 export const CHANGELOG = [
+  {
+    version: "1.19.1",
+    date: "2026-07-02",
+    changes: [
+      "Faceless Studio is now stock-first by default — Pexels and Pixabay footage lead, uploaded media next, script-generated B-roll prompts drive the search. AI-generated visuals only fire when you explicitly pick them",
+      "Admin can now flip a global fal.ai kill switch and set per-user daily caps on AI renders, keeping cost predictable while quality improves",
+      "V1 rendering priority: stock footage + your uploads + voiceover + captions — faster, cheaper, and cleaner than the AI-first path",
+    ],
+  },
   {
     version: "1.19.0",
     date: "2026-07-02",

@@ -20,6 +20,28 @@ back to it for entitlement verification.
 
 ## 🔁 Workflow rule: Changelog moves with every change (set 2026-06-29 by user)
 
+### Iteration 52 (2026-07-02, evening) — fal.ai kill switch + stock-first Faceless default (v1.19.1)
+
+**Trigger:** Charity: *"We need to reduce fal.ai dependency immediately. The issue is both cost and quality... Please do not keep fal.ai as the default provider for Faceless Studio... fal.ai should only be used when explicitly selected for AI-generated visuals, and it should be capped or disabled by admin setting."*
+
+**Phase 1 (shipped today):**
+- New module `/app/backend/faceless_config.py` — env-default + DB-override config layer for the fal.ai kill switch, AI-visuals toggle, default B-roll source, per-render AI scene cap, and per-user daily AI render cap.
+- `FacelessRenderRequest.broll_source` default flipped from `None` → `"pexels"`. Stock-first is the new safe default.
+- `_run_render_faceless` now resolves the provider config BEFORE any provider call. When `broll_source == "ai"` is requested but AI is globally disabled OR the daily per-user cap is hit, the render silently downgrades to `default_broll_source` and stamps a `faceless_ai_downgraded` activity event.
+- New env vars in `/app/backend/.env`: `FAL_AI_ENABLED=false` (default OFF for new deploys), `AI_VISUALS_ENABLED=true`, `FACELESS_DEFAULT_SOURCE=pexels`, `MAX_AI_SCENES_PER_RENDER=2`, `MAX_AI_RENDERS_PER_USER_DAY=5`.
+- New admin endpoints via `register_faceless_config_admin_routes` in `admin_routes.py`: `GET /api/admin/system/faceless-config` reads current config, `PUT` upserts DB overrides. Activity-logged.
+- New public endpoint `GET /api/config/faceless` — no auth. Studio UI reads on mount to hide/show AI engine picker + show stock-first banner.
+- Frontend Studio.jsx already defaulted `brollSource` to `"pexels"` — no frontend default change needed.
+- `changelog.js` bumped to v1.19.1 with 3 customer-facing bullets.
+
+**Phase 2 (deferred, next session):**
+- Full provider-abstraction directory `/app/backend/providers/` with base classes for `ImageProvider`, `VideoMotionProvider`, `VoiceProvider`, `StockProvider`, `RenderCompositionProvider`. Move fal.ai, Kinovi, HeyGen, ElevenLabs, Pexels, Pixabay, ffmpeg-compose behind these classes so swapping providers is a config change, not a code change.
+- Frontend Pickers.jsx updates to gray-out AI engine picker when public config says `ai_visuals_enabled: false`.
+- Admin UI panel for the config (currently only reachable via curl / API tester).
+- Migrate the Faceless render pipeline's Nano Banana + fal.ai storage calls to the new provider layer.
+
+**Verified:** backend restarts clean, `GET /api/config/faceless` returns `{fal_ai_enabled:false, ai_visuals_enabled:true, default_broll_source:"pexels", max_ai_scenes_per_render:2}`. Admin PUT persists to `db.system_config._id="faceless_provider_config"`.
+
 ### Iteration 51 (2026-07-02, PM) — Tier ID realignment (Creator retired, IDs 1:1 with AppSumo listing) + magic-link auth security fix
 
 **Trigger:** Charity: *"I don't have a $99 for the pinball either for creator... Studio is when I sell it directly myself, it is $297. And then there's a payment plan option of three payments of $99. That is the only thing, because I need to make sure that the founders, those that are purchasing with me, there's currently no limitation with that. It's just limitations with AppSumo."* — meaning the internal $99 "Creator" tier was cruft (nothing actually sold at that price), and Founder is her direct-sale $297 (or 3×$99 payment plan) product with unlimited access.

@@ -12,6 +12,30 @@ first. Plain English — if you're a customer reading this, this is for you.
 
 ---
 
+---
+
+## v1.19.1 — July 2, 2026 (fal.ai kill switch + stock-first Faceless default)
+
+- **Faceless Studio defaults to stock footage.** New renders now pull from
+  Pexels + Pixabay (and any B-roll you've uploaded) first — AI-generated
+  visuals only fire when you explicitly pick the "AI" source in the B-roll
+  chip. Cleaner quality, predictable cost, and no surprise fal.ai charges.
+- **Admin-level fal.ai kill switch.** Global toggle at
+  `PUT /api/admin/system/faceless-config` lets us disable ALL fal.ai
+  video/image calls with one flag. Default is OFF for new deploys — the
+  admin must explicitly re-enable AI generation.
+- **Per-user daily AI cap.** New admin setting `max_ai_renders_per_user_day`
+  (default 5) hard-caps how many AI-source renders any single email can
+  trigger per UTC day. Excess renders auto-downgrade to the configured
+  stock provider and stamp a `faceless_ai_downgraded` event on the
+  Activity feed so admins can see what got swapped.
+- **New public config endpoint** `GET /api/config/faceless` — the Studio
+  UI reads this to hide/show the AI engine picker based on the current
+  admin config, without needing admin auth.
+- **Founder + Pro Plus BYOK unaffected.** Customers using their own fal.ai
+  key still work the same way — the kill switch only affects the platform's
+  shared fal.ai billing.
+
 - **Studio Founder Lifetime = auto-Founder.** Charity clarified her $297 (or 3×$99 payment plan) Studio Founder Lifetime product is meant to be truly unlimited from the moment Pinball fires. The webhook was setting `studio_lifetime: True` on the buyer but NOT `founders: True`, and the render quota gate ONLY checks `founders`. Fixed by stamping `founders: True` alongside the existing `studio_lifetime` metadata whenever `product == "studio"` in the Pinball webhook. Same fix updates the GHL outbound push so Studio purchases correctly tag as `founder` in her workflows (was tagged as `pro` before). Production DB is unaffected — existing Studio Founder buyers already have the flag set manually; this change ONLY affects NEW purchases going forward. The comment on the old `founder=False` GHL push line was corrected (previous engineer's assumption that "founders never enter via Pinball" was wrong — that IS how she sells Founder). Payment plan (3×$99) is the same Pinball product_id as the $297 one-time, so single mapping covers both.
 
 - **Sora 2 admin test endpoint bug fix + realistic cost picture.** The admin `/api/admin/studio/test-sora2` endpoint was returning `"Sora 2 returned empty video"` for 9:16 tests because the size map used 1024x1792 for both models, but the standard `sora-2` model (cheap tier) only supports 1280x720 (16:9 landscape). Fixed with a model-aware size map: `sora-2` gets 1280x720 only; `sora-2-pro` gets the three higher-res sizes (1024x1792, 1792x1024, 1024x1024). Endpoint now returns real video URLs — verified with a 4-second render (took 78.6 seconds, cost $0.40 from Emergent Universal Key balance).

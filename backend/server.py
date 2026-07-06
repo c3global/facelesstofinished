@@ -51,11 +51,12 @@ from prompts import (
 # admin_routes reads PINBALL_WEBHOOK_TOKEN at module-import time.
 load_dotenv()
 
-from admin_routes import register_admin_routes  # noqa: E402
+from admin_routes import register_admin_routes, register_faceless_config_admin_routes  # noqa: E402
 from uploads_routes import register_uploads_routes  # noqa: E402
 import auth_magic_link  # noqa: E402  – magic-link token storage + helpers
 import email_delivery  # noqa: E402  – Resend → GHL → log magic-link delivery chain
 import ghl_integration  # noqa: E402  – outbound webhook to GHL (magic link email)
+import faceless_config  # noqa: E402  – fal.ai kill switch + stock-first defaults
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("f48")
@@ -306,7 +307,13 @@ class RenderRequest(BaseModel):
     # Kokoro entirely and uses this URL as the audio track. Scene durations
     # are still computed from the actual audio length (via ffprobe).
     user_voiceover_url: Optional[str] = None
-    broll_source: Optional[str] = None  # "ai" | "pexels" | "pixabay" | "mix" | "uploaded"
+    broll_source: Optional[str] = "pexels"  # "ai" | "pexels" | "pixabay" | "mix" | "uploaded"
+    # v1.19.1 (2026-07-02): default flipped from None → "pexels". Stock-first
+    # is the new safe default per Charity's cost + quality mandate — fal.ai
+    # is opt-in only. Requests that explicitly pass "ai" go through the
+    # `faceless_config.resolve_config` gate at render time; if fal.ai is
+    # disabled OR the daily per-user AI cap is hit, the render silently
+    # downgrades to the admin-configured stock provider.
     scenes: list[dict] = Field(default_factory=list)
     # AI video engine for AI-sourced scenes (Faceless mode):
     #   - "flux" → Flux 1.1 Pro static image + ken-burns motion (fast, cheap)
@@ -490,6 +497,22 @@ class MagicLinkRequest(BaseModel):
     # (no buyer record yet, so no other path to a JWT) get provisioned.
     redeem: Optional[str] = None
     appsumo_oauth: Optional[str] = None
+
+
+@api.get("/config/faceless")
+async def get_faceless_config():
+    """Public read of the current Faceless provider config. No auth — the
+    Studio UI hits this on mount to hide the AI engine picker + show a
+    stock-first banner when fal.ai is disabled by admin."""
+    cfg = await faceless_config.resolve_config(db)
+    # Strip admin-only telemetry (updated_by, exact caps) from the public
+    # response — just tell the UI what's enabled and what the default is.
+    return {
+        "fal_ai_enabled": cfg["fal_ai_enabled"],
+        "ai_visuals_enabled": cfg["ai_visuals_enabled"],
+        "default_broll_source": cfg["default_broll_source"],
+        "max_ai_scenes_per_render": cfg["max_ai_scenes_per_render"],
+    }
 
 
 @app.on_event("startup")
@@ -2613,6 +2636,60 @@ async def _run_render_faceless(job: dict):
     actual_cost_cents = 0
     n_scenes = max(1, len(scenes))
 
+    # ---- Faceless provider config gate (v1.19.1 fal.ai kill switch) ----
+    # Resolve admin config BEFORE any fal.ai / provider call. If AI is
+    # globally off (Charity's default post-2026-07-02) OR the daily
+    # per-user AI cap is hit, silently downgrade "ai" sources to the
+    # admin-configured stock provider. Stamp the auto-swap on the job
+    # doc so admins can see it in Activity.
+    provider_cfg = await faceless_config.resolve_config(db)
+    ai_downgrade_reason = None
+    original_source = (job.get("broll_source") or "").strip().lower()
+    if original_source == "ai":
+        if not provider_cfg["fal_ai_enabled"] and not provider_cfg["ai_visuals_enabled"]:
+            ai_downgrade_reason = "ai_visuals_disabled"
+        elif not provider_cfg["ai_visuals_enabled"]:
+            ai_downgrade_reason = "ai_visuals_disabled"
+        else:
+            # Per-user daily cap check.
+            user_email = (job.get("user_email") or "").strip().lower()
+            used_today = await faceless_config.count_ai_renders_today(db, user_email)
+            cap = provider_cfg["max_ai_renders_per_user_day"]
+            if cap > 0 and used_today >= cap:
+                ai_downgrade_reason = "daily_ai_cap_reached"
+    if ai_downgrade_reason:
+        new_source = provider_cfg["default_broll_source"]
+        job["broll_source"] = new_source
+        await db.renders.update_one(
+            {"id": job_id},
+            {"$set": {
+                "broll_source": new_source,
+                "ai_downgrade_reason": ai_downgrade_reason,
+                "ai_downgrade_from": original_source,
+            }},
+        )
+        try:
+            await db.activity.insert_one({
+                "id": str(uuid.uuid4()),
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "type": "faceless_ai_downgraded",
+                "email": (job.get("user_email") or "").lower(),
+                "detail": {
+                    "job_id": job_id,
+                    "reason": ai_downgrade_reason,
+                    "from": original_source,
+                    "to": new_source,
+                    "cfg": {k: provider_cfg[k] for k in
+                            ("fal_ai_enabled", "ai_visuals_enabled",
+                             "max_ai_renders_per_user_day")},
+                },
+            })
+        except Exception:
+            pass
+        logger.info(
+            f"[faceless] {job_id} auto-downgraded AI→{new_source}: {ai_downgrade_reason}",
+        )
+
     # ---- Stage 1/4: voiceover ----
     await db.renders.update_one(
         {"id": job_id},
@@ -4347,6 +4424,16 @@ register_admin_routes(
     current_user=current_user,
     ADMIN_EMAILS=ADMIN_EMAILS,
     KNOWN_ENTITLEMENTS=KNOWN_ENTITLEMENTS,
+    log_activity=_log_activity,
+)
+
+# Faceless provider kill switch + admin config (v1.19.1). Registered right
+# after admin_routes so it inherits the same require_admin dep + activity
+# logger; must come BEFORE any Studio render endpoint uses the config.
+register_faceless_config_admin_routes(
+    api=api,
+    db=db,
+    require_admin=require_admin,
     log_activity=_log_activity,
 )
 
