@@ -1383,20 +1383,19 @@ async def _trim_stock_video(video_url: str, aspect: str, duration_ms: int, scene
 
 
 # ---------------------------------------------------------------------------
-# Scene still-image generation — Nano Banana primary, Flux fallback.
+# Scene still-image generation — Flux primary, Nano Banana fallback.
 # ---------------------------------------------------------------------------
 # Iter 49 (2026-07-01): Charity reported $100+ in fal.ai testing burn with
-# unsatisfactory Flux 1.1 Pro output quality for her professional audience
-# (consultants, coaches, executives). Replaced Flux as the DEFAULT scene
-# still engine with Gemini Nano Banana via the Emergent Universal LLM Key.
-# Advantages:
-#   - Higher photorealistic quality for professional aesthetic (already
-#     proven on the Fast thumbnail engine)
-#   - Cost comes off Universal Key balance (not fal.ai per-call bill)
-#   - Same content-hash cache pattern as before, new "nb:" prefix so we
-#     don't accidentally reuse old Flux outputs
-#   - Silent Flux fallback preserved for reliability — if Nano Banana
-#     returns nothing (rare rate-limit / quota), we don't fail the render
+# unsatisfactory Flux 1.1 Pro output quality. Swapped Flux for Nano Banana
+# as the DEFAULT scene still engine.
+#
+# Iter 55 (2026-07-02): Charity reversed the order — "Nano Banana can
+# remain but as secondary, not primary." Rationale: with fal.ai gated
+# behind admin toggles + BYOK anyway (v1.19.2), the Flux path only fires
+# when explicitly enabled, and when it fires Charity wants the more
+# consistent fal.ai output over the Emergent Universal Key balance
+# draw. Nano Banana stays as a silent fallback for reliability so
+# renders don't crash mid-pipeline if fal.ai is unhealthy.
 # ---------------------------------------------------------------------------
 async def _generate_scene_image(
     *,
@@ -1408,13 +1407,13 @@ async def _generate_scene_image(
     """Generate a photorealistic still image for one Faceless scene.
 
     Returns a fal.ai storage URL that downstream ffmpeg-compose can consume.
-    Nano Banana primary → uploads base64 PNG to fal.ai storage → returns URL.
-    Falls back to Flux 1.1 Pro if Nano Banana yields nothing.
+    Flux 1.1 Pro primary (via fal.ai) → Nano Banana fallback (via Emergent
+    Universal Key) when Flux is unavailable or fails.
 
     Content-hash cache: identical (prompt, aspect) requests return the
-    previously-generated URL instantly. Cache prefix `nb:` for the new
-    Nano Banana engine; old `flux:` entries stay put but aren't served
-    by this function.
+    previously-generated URL instantly. Cache prefix `nb:` retained for
+    backwards-compat with the iter 49 cache — same cache namespace,
+    different primary engine.
     """
     import hashlib  # noqa: PLC0415
     import base64 as _b64  # noqa: PLC0415
@@ -1425,7 +1424,48 @@ async def _generate_scene_image(
     if cached and cached.get("url"):
         return cached["url"]
 
-    # ---------- Attempt 1: Nano Banana via Emergent Universal Key ----------
+    # ---------- Attempt 1: Flux 1.1 Pro via fal.ai (primary) ----------
+    if fal_headers is not None:
+        try:
+            async with httpx.AsyncClient(timeout=120) as client:
+                ir = await client.post(
+                    "https://fal.run/fal-ai/flux-pro/v1.1",
+                    headers=fal_headers,
+                    json={
+                        "prompt": (
+                            f"{prompt}. Cinematic photograph, 8k, sharp focus, "
+                            f"professional lighting, photorealistic, ultra detailed. "
+                            f"No visible text or signage — if any text appears it "
+                            f"must be clear, legible, perfectly spelled English only."
+                        ),
+                        "image_size": "portrait_16_9" if aspect == "9_16" else "landscape_16_9",
+                        "num_inference_steps": 32,
+                        "guidance_scale": 4.0,
+                        "output_format": "png",
+                    },
+                )
+                if ir.status_code == 200:
+                    data = ir.json()
+                    url = (data.get("images") or [{}])[0].get("url")
+                    if url:
+                        await db.flux_cache.update_one(
+                            {"_id": cache_key},
+                            {"$set": {
+                                "url": url,
+                                "prompt": prompt,
+                                "aspect": aspect,
+                                "engine": "flux",
+                                "cached_at": datetime.now(timezone.utc).isoformat(),
+                            }},
+                            upsert=True,
+                        )
+                        logger.info(f"[flux] scene={scene_idx} generated + cached ok")
+                        return url
+                logger.warning(f"[flux] scene={scene_idx} non-200 ({ir.status_code}) — falling back to Nano Banana")
+        except Exception as exc:
+            logger.warning(f"[flux] scene={scene_idx} exception: {type(exc).__name__}: {exc} — falling back to Nano Banana")
+
+    # ---------- Attempt 2: Nano Banana via Emergent Universal Key (fallback) ----------
     nb_prompt = (
         f"{prompt}. "
         f"Aspect ratio: {'9:16 vertical portrait' if aspect == '9_16' else '16:9 horizontal landscape'}. "
@@ -1470,12 +1510,12 @@ async def _generate_scene_image(
                             "url": url,
                             "prompt": prompt,
                             "aspect": aspect,
-                            "engine": "nano-banana",
+                            "engine": "nano-banana-fallback",
                             "cached_at": datetime.now(timezone.utc).isoformat(),
                         }},
                         upsert=True,
                     )
-                    logger.info(f"[nano-banana] scene={scene_idx} generated + cached ok")
+                    logger.info(f"[nano-banana-fallback] scene={scene_idx} used as backup — check Flux health")
                     return url
             finally:
                 try:
@@ -1484,57 +1524,10 @@ async def _generate_scene_image(
                     os.rmdir(tmpdir)
                 except Exception:
                     pass
-        # else: fall through to Flux fallback
-        logger.warning(f"[nano-banana] scene={scene_idx} returned no images — falling back to Flux")
+        logger.warning(f"[nano-banana-fallback] scene={scene_idx} returned no images — giving up")
     except Exception as exc:
-        # Rate limit, quota, network — any Nano Banana failure falls back to
-        # Flux so the render doesn't crash mid-pipeline. Logged so Charity
-        # can see when the primary engine is misbehaving.
-        logger.warning(f"[nano-banana] scene={scene_idx} exception: {type(exc).__name__}: {exc} — falling back to Flux")
-
-    # ---------- Attempt 2: Flux fallback (legacy path) ----------
-    if fal_headers is None:
-        # Callers that don't pass fal_headers can't use the Flux fallback.
-        return None
-    try:
-        async with httpx.AsyncClient(timeout=120) as client:
-            ir = await client.post(
-                "https://fal.run/fal-ai/flux-pro/v1.1",
-                headers=fal_headers,
-                json={
-                    "prompt": (
-                        f"{prompt}. Cinematic photograph, 8k, sharp focus, "
-                        f"professional lighting, photorealistic, ultra detailed. "
-                        f"No visible text or signage — if any text appears it "
-                        f"must be clear, legible, perfectly spelled English only."
-                    ),
-                    "image_size": "portrait_16_9" if aspect == "9_16" else "landscape_16_9",
-                    "num_inference_steps": 32,
-                    "guidance_scale": 4.0,
-                    "output_format": "png",
-                },
-            )
-            if ir.status_code != 200:
-                return None
-            data = ir.json()
-            url = (data.get("images") or [{}])[0].get("url")
-            if url:
-                await db.flux_cache.update_one(
-                    {"_id": cache_key},
-                    {"$set": {
-                        "url": url,
-                        "prompt": prompt,
-                        "aspect": aspect,
-                        "engine": "flux-fallback",
-                        "cached_at": datetime.now(timezone.utc).isoformat(),
-                    }},
-                    upsert=True,
-                )
-                logger.info(f"[flux-fallback] scene={scene_idx} used as backup — check Nano Banana health")
-            return url
-    except Exception as exc:
-        logger.warning(f"[flux-fallback] scene={scene_idx} exception: {type(exc).__name__}: {exc}")
-        return None
+        logger.warning(f"[nano-banana-fallback] scene={scene_idx} exception: {type(exc).__name__}: {exc}")
+    return None
 
 
 

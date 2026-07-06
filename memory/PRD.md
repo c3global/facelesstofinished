@@ -20,6 +20,30 @@ back to it for entitlement verification.
 
 ## 🔁 Workflow rule: Changelog moves with every change (set 2026-06-29 by user)
 
+### Iteration 55 (2026-07-02, late) — Hide AI card + AI Engine chip when disabled; swap Nano Banana primary→fallback
+
+**Trigger:** Charity: *"Should these be showing if AI is turned off? Honestly, nano banana can remain but as secondary, not primary."* — she flagged that the B-Roll picker was still showing a greyed-out "Generate with AI" card + a permanent "Engine · Flux + Kling i2v" chip on the Studio row even though `FAL_AI_ENABLED=false`. Cluttered the UI with options no one could use.
+
+**Frontend cleanup (v1.19.4):**
+- `Pickers.jsx::BRollSourcePicker` — the AI card is now **filtered out entirely** when `providerConfig.fal_ai_enabled === false` OR `providerConfig.ai_visuals_enabled === false`. Previously shown dimmed + disabled with an inline banner. Cleaner picker for admins/BYOK when kill switch is on.
+- `Pickers.jsx::BRollSourcePicker` — removed the "AI generation is currently disabled by admin" inline info banner (no longer needed since the card itself is gone).
+- `Pickers.jsx::AIEnginePicker` — dropped the "Nano Banana still works for AI stills" copy from the disabled banner. Nano Banana is a backend implementation detail; customer-facing UI no longer promotes it as a primary path.
+- `Studio.jsx::chipAiEngine` — added `!aiDisabledGlobal` to the visibility gate. When `ai_visuals_enabled=false` OR `fal_ai_enabled=false`, the "Engine · Flux + Kling i2v" chip disappears from the Studio row (was previously always visible for admin/BYOK). Non-admin non-BYOK users already had it hidden — this change extends the hide to admins when the kill switch is on.
+
+**Backend swap (server.py `_generate_scene_image`):**
+- Reversed the two-engine order — **Flux 1.1 Pro via fal.ai is now the PRIMARY**, **Nano Banana via Emergent Universal Key is the FALLBACK**. Reversal of iter 49's swap.
+- Rationale: fal.ai is gated behind admin toggles + BYOK anyway (v1.19.2), so `_generate_scene_image` only fires when AI mode is explicitly enabled. When it does fire, Charity wants the fal.ai output over the Universal Key draw. Nano Banana stays as silent fallback for reliability if Flux is unhealthy.
+- Cache key prefix `nb:` retained for backwards-compat with existing cached entries — same namespace, different primary engine. Cache doc `engine` field now records `flux` or `nano-banana-fallback`.
+
+**Files touched:**
+- `/app/frontend/src/components/Pickers.jsx` — AI card filter + banner removal + Nano Banana copy scrub.
+- `/app/frontend/src/pages/Studio.jsx` — `chipAiEngine` visibility gate widened.
+- `/app/backend/server.py` — `_generate_scene_image` primary/fallback swap.
+- `/app/frontend/src/changelog.js` — APP_VERSION 1.19.4 + customer-facing entry.
+
+**Verified:** `curl GET /api/config/faceless` still returns `fal_ai_enabled:false`; frontend Studio → Faceless mode → B-Roll picker now shows only Pexels / Pixabay / Your media / Mix (no AI card, no banner); AI engine chip removed from chip row.
+
+
 ### Iteration 54 (2026-07-02, late) — Admin fast-lane sign-in (skip magic link for ADMIN_EMAILS)
 
 **Trigger:** Charity: *"can you remove the need for the admin email to use magic link?"* — being forced through the 15-min email loop every time she wanted to check the admin panel was a real friction point for the owner.

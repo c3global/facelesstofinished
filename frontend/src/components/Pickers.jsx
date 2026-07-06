@@ -529,31 +529,34 @@ export function BRollSourcePicker({ open, onClose, value, onPick, providerConfig
   // customers. Only admins + BYOK-enabled buyers see the "Generate with
   // AI" option in the source picker. Others go straight to Pexels /
   // Pixabay / Uploaded / Mix without knowing the AI path exists.
+  // v1.19.4: when AI is disabled by admin, the "Generate with AI" card
+  // is now HIDDEN entirely (previously shown dimmed with an inline
+  // banner). The dimmed state was cluttering the picker with an
+  // option nobody could use.
   const aiDisabled = providerConfig && (!providerConfig.ai_visuals_enabled || !providerConfig.fal_ai_enabled);
   const allOptions = [
-    { id: "ai",       name: "Generate with AI",  icon: <Sparkles size={22} />, desc: "Every scene is generated with AI from your prompt. Best for abstract, stylized topics.", disabled: aiDisabled, requiresByok: true },
+    { id: "ai",       name: "Generate with AI",  icon: <Sparkles size={22} />, desc: "Every scene is generated with AI from your prompt. Best for abstract, stylized topics.", requiresByok: true, hideWhenDisabled: true },
     { id: "pexels",   name: "Stock from Pexels", icon: <Film size={22} />,     desc: "Free, premium stock footage. Strong on lifestyle, business, and nature." },
     { id: "pixabay",  name: "Stock from Pixabay", icon: <Film size={22} />,    desc: "Alternate library — broader catalog, more niche topics." },
     { id: "uploaded", name: "Your media",        icon: <FolderOpen size={22} />, desc: "Use clips and images YOU uploaded — bypass AI and stock entirely." },
     { id: "mix",      name: "Mix per scene",     icon: <Layers size={22} />,   desc: "No global default — pick Pexels / Pixabay / Your media per scene." },
   ];
-  // Filter: hide AI option entirely from non-admin non-BYOK users.
-  const options = allOptions.filter((o) => !o.requiresByok || canUseAI);
+  // Filter: hide AI option entirely from non-admin non-BYOK users AND
+  // from admins when AI is currently disabled by admin config.
+  const options = allOptions.filter((o) => {
+    if (o.requiresByok && !canUseAI) return false;
+    if (o.hideWhenDisabled && aiDisabled) return false;
+    return true;
+  });
   return (
     <Modal open={open} onClose={onClose} title="B-Roll source" testId="broll-modal">
-      {canUseAI && aiDisabled && (
-        <div className="picker-banner is-info" data-testid="broll-ai-disabled-banner">
-          AI generation is currently disabled by admin. Pick a stock source (Pexels / Pixabay) or your own uploaded media.
-        </div>
-      )}
       <div className="source-grid" data-testid="broll-grid">
         {options.map((o) => (
           <button
             key={o.id}
-            className={`source-card ${value === o.id ? "is-selected" : ""} ${o.disabled ? "is-disabled" : ""}`}
+            className={`source-card ${value === o.id ? "is-selected" : ""}`}
             data-testid={`broll-${o.id}`}
-            disabled={o.disabled}
-            onClick={() => { if (o.disabled) return; onPick(o.id); onClose(); }}
+            onClick={() => { onPick(o.id); onClose(); }}
           >
             <div className="source-icon">{o.icon}</div>
             <div className="source-name">{o.name}</div>
@@ -615,7 +618,7 @@ export function AIEnginePicker({ open, onClose, value, onPick, isAdmin = false, 
   const disabledReason = providerConfig?.ai_visuals_enabled === false
     ? "AI-generated visuals are currently disabled by admin. Stock-only mode."
     : providerConfig?.fal_ai_enabled === false
-      ? "fal.ai is currently disabled by admin. Nano Banana still works for AI stills — pick a stock-based source (Pexels / Pixabay / Uploaded) for now."
+      ? "AI video engines are currently disabled by admin. Pick a stock source (Pexels / Pixabay / Uploaded) for now."
       : null;
 
   // Engine catalogue. Cost field is only shown to admins per Charity's

@@ -871,7 +871,10 @@ export default function Studio() {
   }[aiEngine] || "AI Engine";
   // v1.19.2: hide the "AI Engine" chip entirely for non-admin non-BYOK users.
   // fal.ai / Kling / Veo / Pika are internal-only until we ship gated BYOK.
-  const chipAiEngine = canUseAI ? (
+  // v1.19.4: also hide the chip when AI visuals are disabled by admin —
+  // no point exposing an engine picker for a feature that can't fire.
+  const aiDisabledGlobal = providerConfig && (!providerConfig.ai_visuals_enabled || !providerConfig.fal_ai_enabled);
+  const chipAiEngine = (canUseAI && !aiDisabledGlobal) ? (
     <button className="chip is-set" data-testid="chip-ai-engine" onClick={() => setModal("ai-engine")}>
       <span className="chip-icon"><Cpu size={14} /></span>
       <span className="chip-label">{aiEngineLabel}</span>

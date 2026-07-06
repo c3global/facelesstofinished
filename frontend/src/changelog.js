@@ -14,9 +14,16 @@
 //    See PRD.md → "Workflow rule: changelog must move with every deploy."
 // 4. Most recent on top. Each entry has version + date + bullet list.
 
-export const APP_VERSION = "1.19.3";
+export const APP_VERSION = "1.19.4";
 
 export const CHANGELOG = [
+  {
+    version: "1.19.4",
+    date: "2026-07-02",
+    changes: [
+      "Cleaner B-Roll picker — when AI generation is turned off, the AI card and AI engine chip are hidden entirely instead of showing greyed-out with disclaimers. Just the options you can actually use",
+    ],
+  },
   {
     version: "1.19.3",
     date: "2026-07-02",
