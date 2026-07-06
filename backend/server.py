@@ -2642,11 +2642,22 @@ async def _run_render_faceless(job: dict):
     # per-user AI cap is hit, silently downgrade "ai" sources to the
     # admin-configured stock provider. Stamp the auto-swap on the job
     # doc so admins can see it in Activity.
+    #
+    # v1.19.2 defense-in-depth: also downgrade if the caller doesn't have
+    # admin OR the "byok" entitlement. Front-end already hides the AI
+    # picker for regular customers, but the backend must reject the same
+    # way in case someone crafts a raw request.
     provider_cfg = await faceless_config.resolve_config(db)
     ai_downgrade_reason = None
     original_source = (job.get("broll_source") or "").strip().lower()
     if original_source == "ai":
-        if not provider_cfg["fal_ai_enabled"] and not provider_cfg["ai_visuals_enabled"]:
+        # Server-side entitlement gate.
+        user_ents = job.get("user_entitlements") or []
+        user_is_admin = bool(job.get("user_is_admin"))
+        user_has_byok = "byok" in {e.strip().lower() for e in user_ents}
+        if not (user_is_admin or user_has_byok):
+            ai_downgrade_reason = "ai_not_entitled"
+        elif not provider_cfg["fal_ai_enabled"] and not provider_cfg["ai_visuals_enabled"]:
             ai_downgrade_reason = "ai_visuals_disabled"
         elif not provider_cfg["ai_visuals_enabled"]:
             ai_downgrade_reason = "ai_visuals_disabled"
@@ -3278,6 +3289,11 @@ async def studio_render(payload: RenderRequest, user: AuthUser = Depends(current
     doc = {
         "id": job_id,
         "user_email": user.email,
+        # v1.19.2: stamp entitlement snapshot on the render job so the AI
+        # gate in _run_render_faceless can check without a second buyer
+        # lookup mid-render.
+        "user_entitlements": list(getattr(user, "entitlements", []) or []),
+        "user_is_admin": bool(getattr(user, "is_admin", False)),
         "mode": payload.mode,
         "aspect": payload.aspect,
         "captions": payload.captions,
@@ -3572,6 +3588,11 @@ async def studio_render_both_aspects(payload: RenderRequest, user: AuthUser = De
         doc = {
             "id": job_id,
             "user_email": user.email,
+            # v1.19.2: stamp entitlement snapshot on the render job so the AI
+            # gate in _run_render_faceless can check without a second buyer
+            # lookup mid-render.
+            "user_entitlements": list(getattr(user, "entitlements", []) or []),
+            "user_is_admin": bool(getattr(user, "is_admin", False)),
             "mode": per_payload.mode,
             "aspect": per_payload.aspect,
             "captions": per_payload.captions,

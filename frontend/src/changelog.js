@@ -14,9 +14,16 @@
 //    See PRD.md → "Workflow rule: changelog must move with every deploy."
 // 4. Most recent on top. Each entry has version + date + bullet list.
 
-export const APP_VERSION = "1.19.1";
+export const APP_VERSION = "1.19.2";
 
 export const CHANGELOG = [
+  {
+    version: "1.19.2",
+    date: "2026-07-02",
+    changes: [
+      "Faceless Studio B-roll picker now shows Pexels, Pixabay, your uploaded media, and Mix — the AI-generation option is reserved for admin and BYOK-tier users. Cleaner defaults, no accidental AI charges",
+    ],
+  },
   {
     version: "1.19.1",
     date: "2026-07-02",

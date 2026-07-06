@@ -248,6 +248,12 @@ export default function Studio() {
   // Auth context (kept for entitlement gating elsewhere, not for render gating).
   const { user } = useAuth();
   const isAdmin = !!user?.isAdmin;
+  // v1.19.2: AI-generation gating. fal.ai and AI engine controls are hidden
+  // from regular customers entirely. Only admins + BYOK-enabled buyers
+  // (Pro Plus / Founder) see the AI option in the B-roll picker and the
+  // "AI Engine" chip in the Studio toolbar.
+  const hasByok = Array.isArray(user?.entitlements) && user.entitlements.includes("byok");
+  const canUseAI = isAdmin || hasByok;
   const [toast, setToast] = useState("");
   // History "play" opens an inline modal. Opening the raw HeyGen/fal CDN
   // URL in a new tab shows a blank file2.heygen.ai page (signed URL + the
@@ -863,13 +869,15 @@ export default function Studio() {
     veo3: "Engine · Veo 3.1",
     pika: "Engine · Pika 2.1",
   }[aiEngine] || "AI Engine";
-  const chipAiEngine = (
+  // v1.19.2: hide the "AI Engine" chip entirely for non-admin non-BYOK users.
+  // fal.ai / Kling / Veo / Pika are internal-only until we ship gated BYOK.
+  const chipAiEngine = canUseAI ? (
     <button className="chip is-set" data-testid="chip-ai-engine" onClick={() => setModal("ai-engine")}>
       <span className="chip-icon"><Cpu size={14} /></span>
       <span className="chip-label">{aiEngineLabel}</span>
       <ChevronDown size={14} className="chip-caret" />
     </button>
-  );
+  ) : null;
 
   const captionsChipLabel = captions
     ? `Captions · ${ { boxed: "Boxed", tiktok: "TikTok", minimal: "Minimal" }[captionStyle] || "On" } · ${ { top: "Top", bottom: "Bottom", center: "Center" }[captionPosition] || "Bottom" }`
@@ -1638,6 +1646,7 @@ export default function Studio() {
         onClose={closeModal}
         value={brollSource}
         providerConfig={providerConfig}
+        canUseAI={canUseAI}
         onPick={(src) => {
           setBrollSource(src);
           // Clear per-scene overrides so the new global takes effect (except when going to "mix")

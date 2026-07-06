@@ -520,22 +520,28 @@ export function VoicePicker({ open, onClose, value, onPick, source = "heygen", u
 // =====================================================================
 // B-Roll Source picker (faceless mode only)
 // =====================================================================
-export function BRollSourcePicker({ open, onClose, value, onPick, providerConfig = null }) {
+export function BRollSourcePicker({ open, onClose, value, onPick, providerConfig = null, canUseAI = false }) {
   // v1.19.1: when AI visuals are disabled by admin, the "Generate with AI"
   // option is greyed out and unclickable. Users still see it (so they
   // know it exists) but can't select it — Studio-side renders would
   // silently downgrade anyway.
+  // v1.19.2: fal.ai / AI generation is hidden entirely for regular
+  // customers. Only admins + BYOK-enabled buyers see the "Generate with
+  // AI" option in the source picker. Others go straight to Pexels /
+  // Pixabay / Uploaded / Mix without knowing the AI path exists.
   const aiDisabled = providerConfig && (!providerConfig.ai_visuals_enabled || !providerConfig.fal_ai_enabled);
-  const options = [
-    { id: "ai",       name: "Generate with AI",  icon: <Sparkles size={22} />, desc: "Every scene is generated with AI from your prompt. Best for abstract, stylized topics.", disabled: aiDisabled },
+  const allOptions = [
+    { id: "ai",       name: "Generate with AI",  icon: <Sparkles size={22} />, desc: "Every scene is generated with AI from your prompt. Best for abstract, stylized topics.", disabled: aiDisabled, requiresByok: true },
     { id: "pexels",   name: "Stock from Pexels", icon: <Film size={22} />,     desc: "Free, premium stock footage. Strong on lifestyle, business, and nature." },
     { id: "pixabay",  name: "Stock from Pixabay", icon: <Film size={22} />,    desc: "Alternate library — broader catalog, more niche topics." },
     { id: "uploaded", name: "Your media",        icon: <FolderOpen size={22} />, desc: "Use clips and images YOU uploaded — bypass AI and stock entirely." },
-    { id: "mix",      name: "Mix per scene",     icon: <Layers size={22} />,   desc: "No global default — pick AI / Pexels / Pixabay / Your media per scene." },
+    { id: "mix",      name: "Mix per scene",     icon: <Layers size={22} />,   desc: "No global default — pick Pexels / Pixabay / Your media per scene." },
   ];
+  // Filter: hide AI option entirely from non-admin non-BYOK users.
+  const options = allOptions.filter((o) => !o.requiresByok || canUseAI);
   return (
     <Modal open={open} onClose={onClose} title="B-Roll source" testId="broll-modal">
-      {aiDisabled && (
+      {canUseAI && aiDisabled && (
         <div className="picker-banner is-info" data-testid="broll-ai-disabled-banner">
           AI generation is currently disabled by admin. Pick a stock source (Pexels / Pixabay) or your own uploaded media.
         </div>

@@ -14,6 +14,22 @@ first. Plain English — if you're a customer reading this, this is for you.
 
 ---
 
+## v1.19.2 — July 2, 2026 (fal.ai hidden from regular customers)
+
+- **The "Generate with AI" B-roll option no longer shows up for regular
+  customers.** Only admins and BYOK-tier buyers (Pro Plus / Founder) see
+  the AI source card. Everyone else picks from Pexels, Pixabay, uploaded
+  media, or Mix. Prevents accidental AI charges + keeps the interface
+  simpler for the vast majority of users.
+- **AI Engine chip in the Studio toolbar hidden for non-BYOK users** —
+  same rule.
+- **Backend defense-in-depth**: if a raw API call tries to render with
+  `broll_source: "ai"` without admin or BYOK entitlement, the render
+  silently downgrades to stock and logs `ai_not_entitled` on the
+  Activity feed.
+
+---
+
 ## v1.19.1 — July 2, 2026 (fal.ai kill switch + stock-first Faceless default)
 
 - **Faceless Studio defaults to stock footage.** New renders now pull from
