@@ -301,21 +301,34 @@ RULES YOU NEVER BREAK:
 
 
 
-BROLL_PROMPTS_SYSTEM = """You generate cinematic B-roll prompts from a video script. Each prompt must work BOTH as a stock-library search query (Pexels/Pixabay extract keywords) AND as a text-to-video AI generation prompt (Kling/Veo/Pika reward cinematographic detail).
+BROLL_PROMPTS_SYSTEM = """You generate B-roll cues from a video script. For each script beat, produce TWO paired lines: (1) a cinematic Prompt that AI text-to-video models can execute, and (2) a stock-library Search query that Pexels + Pixabay can match against their tags.
 
-You will be given a numbered list of script beats (one beat = one natural pause / sentence in the voiceover). Output EXACTLY one prompt per beat, in the same order. Each prompt must:
+You will be given a numbered list of script beats (one beat = one natural pause / sentence in the voiceover). Output EXACTLY N pairs for N beats, in the same order. Each pair must follow this shape:
 
-- Be 8–15 words long. Long enough to feel like a real shot description, short enough that stock libraries still index it well.
+Prompt: <8-15 word cinematic shot description>
+Search: <2-5 plain visual keywords, no shot-type / lighting / camera words>
+
+RULES for the Prompt line:
+- 8-15 words. Long enough to feel like a real shot description, short enough that AI models still parse it.
 - Open with a SHOT TYPE: wide / medium / close-up / overhead / aerial / tracking / handheld / static.
 - Include a SUBJECT (concrete noun — what's in frame).
 - Include LIGHTING or TIME-OF-DAY (golden hour, soft daylight, neon glow, overcast, blue hour, candlelit).
 - Include MOTION (slow push-in, gentle drift right, subject walks past, hands working, steam rising, etc.).
-- Be SHOOTABLE on a stock library AND generatable by an AI text-to-video model — no proper nouns, no real public figures, no copyrighted brands or logos, no text overlays, no on-screen captions.
-- Align with the MEANING of the beat — describe the visual the viewer should see while THAT specific line is being spoken.
+- No proper nouns, no real public figures, no copyrighted brands or logos, no text overlays, no on-screen captions.
 
-Good examples:
-- "Wide overhead shot of hands chopping fresh vegetables on a wooden board, soft kitchen daylight, slow camera drift right"
-- "Close-up of steam rising from a ceramic coffee cup at sunrise, golden warm light, subtle slow zoom in"
-- "Aerial tracking shot of a winding coastal highway at golden hour, soft warm glare, smooth forward push"
+RULES for the Search line:
+- 2-5 CONCRETE VISUAL NOUNS + one optional action verb — the words a person would type into a stock library. Think "concept a professional videographer would tag their clip with."
+- STRIP all shot types, camera motion words, and lighting/mood modifiers. The Prompt line already carries those.
+- STRIP the abstract theme of the script (e.g. "success", "confidence", "strategy", "AI", "content") — Pexels/Pixabay have zero footage tagged with those; instead, pick the SPECIFIC visible thing that REPRESENTS the theme.
+- Prefer everyday, filmable subjects: `person typing laptop`, `city skyline morning`, `hands drawing whiteboard`, `runner sunrise trail`, `coffee pouring cup`, `team meeting office`.
+- If the beat's meaning is abstract, translate it to a concrete metaphor scene. Never pass an abstract noun as a search term.
 
-Output ONLY the prompts, one per line, no numbering, no bullets, no quotes — exactly N lines for N beats."""
+Good pair example (beat: "That's when I realized the algorithm rewards consistency, not perfection."):
+Prompt: Wide overhead shot of hands typing on laptop keyboard, soft window daylight, slow camera drift right
+Search: person typing laptop keyboard
+
+Bad Search examples (do not do this):
+- "algorithm consistency perfection" (abstract — stock libraries have no footage of these)
+- "wide overhead soft daylight" (shot-type + lighting words — filtered out by stock search)
+
+Output ONLY the paired lines, one Prompt: and one Search: per beat, in order. No numbering, no bullets, no commentary."""

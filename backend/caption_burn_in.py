@@ -95,6 +95,7 @@ async def burn_in_captions(
     style_key: str,
     position_key: str = "bottom",
     *,
+    aspect: str = "16_9",
     fal_key_provider: Optional[Callable[[], str]] = None,
 ) -> Optional[str]:
     """Second pass through fal.ai's auto-subtitle workflow. Returns the URL
@@ -105,6 +106,11 @@ async def burn_in_captions(
     take precedence over the platform key at call-time — it's a callable
     rather than a value so the lookup happens inside the active render
     coroutine, not at module-import time.
+
+    `aspect` (v1.19.7 / iter 58): "9_16" scales down font_size + y_offset so
+    portrait captions don't dominate the frame. Charity flagged the default
+    92-96px fonts (calibrated for 1920px-wide landscape) looked huge on a
+    1080px-wide vertical. Ratio applied: font_size × 0.60, y_offset × 0.65.
     """
     fal_key = (fal_key_provider() if fal_key_provider else "") or ""
     if not fal_key or not video_url:
@@ -114,6 +120,20 @@ async def burn_in_captions(
     pos_override = CAPTION_POSITION_OVERRIDES.get(position_key)
     if pos_override:
         style.update(pos_override)
+
+    # Aspect-aware caption sizing: 9:16 portrait needs smaller captions
+    # because the frame is 1080px wide (vs 1920px landscape). Apply a
+    # proportional scale so the caption occupies roughly the same
+    # percentage of frame width in both orientations.
+    if aspect == "9_16":
+        try:
+            style["font_size"] = max(28, int(round(float(style.get("font_size", 92)) * 0.60)))
+        except Exception:
+            pass
+        try:
+            style["y_offset"] = max(24, int(round(float(style.get("y_offset", 90)) * 0.65)))
+        except Exception:
+            pass
 
     payload = {"video_url": video_url, "language": "en", **style}
     fal_headers = {"Authorization": f"Key {fal_key}"}

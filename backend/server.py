@@ -2016,14 +2016,19 @@ from caption_burn_in import (  # noqa: E402
 )
 
 
-async def _burn_in_captions(video_url: str, style_key: str, position_key: str = "bottom") -> Optional[str]:
+async def _burn_in_captions(video_url: str, style_key: str, position_key: str = "bottom", aspect: str = "16_9") -> Optional[str]:
     """Compat shim — delegates to caption_burn_in.burn_in_captions, injecting
     the BYOK-aware fal key resolver so customer keys still take precedence
-    inside the active render coroutine."""
+    inside the active render coroutine.
+
+    `aspect` (v1.19.7): passed through so 9:16 renders get proportionally
+    smaller caption fonts. Defaults to 16:9 so legacy callers stay unchanged.
+    """
     return await _burn_in_captions_impl(
         video_url,
         style_key,
         position_key,
+        aspect=aspect,
         fal_key_provider=_effective_fal_key,
     )
 
@@ -2592,6 +2597,7 @@ async def _run_render_avatar(job: dict):
                                 final_url,
                                 job.get("caption_style") or "boxed",
                                 job.get("caption_position") or "bottom",
+                                aspect=job.get("aspect") or "16_9",
                             )
                             if captioned:
                                 final_url = captioned
@@ -2920,8 +2926,13 @@ async def _run_render_faceless(job: dict):
                 if pre_picked:
                     image_urls[i] = pre_picked
                 else:
-                    # No pre-picked clip — auto-search.
-                    stock_search_tasks.append((i, effective_src, s.get("prompt") or "", orientation))
+                    # No pre-picked clip — auto-search. v1.19.7: prefer the
+                    # LLM-generated `search_query` (plain visual nouns) over
+                    # the cinematic `prompt` because Pexels/Pixabay index
+                    # tags, not shot descriptions. Falls back to the prompt
+                    # if the LLM didn't emit a search line.
+                    stock_q = s.get("search_query") or s.get("prompt") or ""
+                    stock_search_tasks.append((i, effective_src, stock_q, orientation))
 
         completed = 0
         total_ai = len(ai_tasks)
@@ -3190,6 +3201,7 @@ async def _run_render_faceless(job: dict):
                 composed_url,
                 job.get("caption_style") or "boxed",
                 job.get("caption_position") or "bottom",
+                aspect=job.get("aspect") or "16_9",
             )
             if captioned_url:
                 composed_url = captioned_url
@@ -3789,23 +3801,66 @@ async def studio_broll_prompts(payload: BrollPromptsRequest, user: AuthUser = De
     )
     text = await _claude_complete(BROLL_PROMPTS_SYSTEM, user_msg, user_email=user.email)
 
-    # Parse: one per line, drop blanks, strip bullets/quotes/numbering
-    out: list[str] = []
+    # Parse: paired "Prompt:" / "Search:" lines. v1.19.7 upgrade — the LLM
+    # now emits an explicit stock-search line per beat, in addition to the
+    # cinematic prompt, so Pexels/Pixabay searches hit concrete visual
+    # nouns instead of cinematic vocabulary they don't index.
+    #
+    # Legacy fallback: if Claude ignores the paired format and emits one
+    # line per beat (pre-1.19.7 shape), the single line is treated as the
+    # prompt and search_query is derived via _extract_stock_query.
+    prompts_parsed: list[str] = []
+    searches_parsed: list[str] = []
+    last_prompt: str | None = None
     for raw in text.splitlines():
         line = raw.strip()
         if not line:
             continue
-        line = line.lstrip("0123456789. -*•").strip().strip('"\u201c\u201d').strip()
-        if line:
-            out.append(line)
+        stripped = line.lstrip("0123456789. -*•").strip().strip('"\u201c\u201d').strip()
+        low = stripped.lower()
+        if low.startswith("prompt:"):
+            body = stripped.split(":", 1)[1].strip()
+            if body:
+                # Commit the previous prompt with an empty search (filled
+                # from the next Search: line if present).
+                if last_prompt is not None:
+                    prompts_parsed.append(last_prompt)
+                    searches_parsed.append("")
+                last_prompt = body
+        elif low.startswith("search:"):
+            body = stripped.split(":", 1)[1].strip()
+            if last_prompt is not None:
+                prompts_parsed.append(last_prompt)
+                searches_parsed.append(body)
+                last_prompt = None
+        else:
+            # Legacy single-line-per-beat shape — treat as prompt-only.
+            if last_prompt is not None:
+                prompts_parsed.append(last_prompt)
+                searches_parsed.append("")
+                last_prompt = None
+            prompts_parsed.append(stripped)
+            searches_parsed.append("")
+    # Flush any trailing prompt without a search partner.
+    if last_prompt is not None:
+        prompts_parsed.append(last_prompt)
+        searches_parsed.append("")
 
     # Pair prompts with beat weights (word counts). If Claude returned fewer
     # prompts than beats, fall back to the beat text itself for the missing
     # slots — better to ship a less-polished prompt than to drop a scene.
     scenes: list[dict] = []
     for i, (beat_text, weight) in enumerate(beats):
-        prompt = out[i] if i < len(out) else beat_text[:60]
-        scenes.append({"prompt": prompt, "weight": weight})
+        prompt = prompts_parsed[i] if i < len(prompts_parsed) else beat_text[:60]
+        search_query = (
+            searches_parsed[i] if i < len(searches_parsed) and searches_parsed[i]
+            else _extract_stock_query(prompt) or beat_text[:60]
+        )
+        scenes.append({
+            "prompt": prompt,
+            "search_query": search_query,
+            "weight": weight,
+        })
 
     return {
         "prompts": [s["prompt"] for s in scenes],

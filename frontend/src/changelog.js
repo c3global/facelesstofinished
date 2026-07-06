@@ -14,9 +14,17 @@
 //    See PRD.md → "Workflow rule: changelog must move with every deploy."
 // 4. Most recent on top. Each entry has version + date + bullet list.
 
-export const APP_VERSION = "1.19.6";
+export const APP_VERSION = "1.19.7";
 
 export const CHANGELOG = [
+  {
+    version: "1.19.7",
+    date: "2026-07-02",
+    changes: [
+      "Faceless 9:16 captions are now sized right — no more oversized text taking over the whole vertical frame",
+      "Smarter stock B-roll matching — the script planner now generates a dedicated Pexels/Pixabay search query per scene (not the cinematic AI-video prompt), so your clips actually match what you're saying",
+    ],
+  },
   {
     version: "1.19.6",
     date: "2026-07-02",

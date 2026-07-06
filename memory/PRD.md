@@ -20,6 +20,38 @@ back to it for entitlement verification.
 
 ## 🔁 Workflow rule: Changelog moves with every change (set 2026-06-29 by user)
 
+### Iteration 58 (2026-07-02, night) — 9:16 caption sizing + stock B-roll relevance fix (v1.19.7)
+
+**Trigger:** Charity: *"The captions are too large for the 9:16 screen. Also, the stock from pexels and pixabay were irrelevant for my script! I don't know if this is good enough..."*
+
+**Fix 1 — Captions sized right on 9:16:**
+- `caption_burn_in.burn_in_captions` now accepts an `aspect` kwarg. When `aspect == "9_16"`, `font_size` scales × 0.60 and `y_offset` scales × 0.65 (floor at 28px / 24px). Boxed style: 92 → 55. TikTok style: 96 → 58. Minimal style: 64 → 38. These were calibrated against a 1920px landscape frame; on the 1080px vertical the same pixel count occupied nearly double the frame width — Charity's exact complaint.
+- `server.py::_burn_in_captions` compat shim + both callers (Avatar HeyGen path line 2591, Faceless compose path line 3189) now pass `aspect=job.get("aspect") or "16_9"` through. 16:9 renders keep pre-1.19.7 sizing.
+
+**Fix 2 — Stock B-roll relevance rebuilt:**
+
+Root cause: the same cinematic LLM prompt drove BOTH the AI-generation call (which rewards adjectives + camera motion words) and the Pexels/Pixabay search (which indexes concrete visual nouns). The stripped-keyword result had abstract nouns like "confidence" or "algorithm" that stock libraries have zero footage tagged with.
+
+- `prompts.py::BROLL_PROMPTS_SYSTEM` rewritten to force the LLM to emit a **paired** shape per beat:
+  ```
+  Prompt: <cinematic shot description for AI generation>
+  Search: <2-5 concrete visual nouns for stock lookup>
+  ```
+  The Search line explicitly bans shot types, camera motion, lighting words, AND abstract themes — the model has to translate an abstract beat ("algorithm rewards consistency") into a concrete filmable metaphor ("person typing laptop keyboard").
+- `server.py::studio_broll_prompts` parser upgraded to split `Prompt:` / `Search:` lines. Legacy single-line output still parses (graceful degradation). Each scene now carries `{prompt, search_query, weight}`.
+- `server.py::_run_render_faceless` auto-stock branch now uses `s.get("search_query")` first, falls back to prompt only if the LLM didn't emit a search line.
+
+**Files touched:**
+- `/app/backend/caption_burn_in.py` — new `aspect` kwarg + proportional font scaling.
+- `/app/backend/server.py` — `_burn_in_captions` shim, both call sites, `studio_broll_prompts` parser, `_run_render_faceless` stock-search branch.
+- `/app/backend/prompts.py` — `BROLL_PROMPTS_SYSTEM` rewrite (paired Prompt/Search).
+- `/app/frontend/src/changelog.js` — APP_VERSION 1.19.7 + 2 customer-facing bullets.
+
+**Verified:** Backend lint clean; caption font-size math validated at boxed:55/tiktok:58/minimal:38 for 9_16. Real render regression pending user re-test (needs actual TTS + stock cycle to compare on-screen).
+
+**Not touched (per Charity's earlier ask):** existing roadmap items, Nano Banana engine order (still fallback), founder quota enforcement.
+
+
 ### Iteration 57 (2026-07-02, late) — Scene timeline editor added to roadmap + public +1 vote button (v1.19.6)
 
 **Trigger:** Charity: *"Yes, add the button."* + *"add a video scene editor or timeline editor... the B roll will continue to loop... this is a huge flaw... add it to the roadmap, don't try to fix it now."*
