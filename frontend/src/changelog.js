@@ -14,9 +14,16 @@
 //    See PRD.md → "Workflow rule: changelog must move with every deploy."
 // 4. Most recent on top. Each entry has version + date + bullet list.
 
-export const APP_VERSION = "1.19.2";
+export const APP_VERSION = "1.19.3";
 
 export const CHANGELOG = [
+  {
+    version: "1.19.3",
+    date: "2026-07-02",
+    changes: [
+      "Admins can now sign in with just their email — no email link round-trip required. Everyone else still gets our secure one-time link so accounts stay locked down",
+    ],
+  },
   {
     version: "1.19.2",
     date: "2026-07-02",

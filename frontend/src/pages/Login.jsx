@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { useSearchParams, Link } from "react-router-dom";
+import { useSearchParams, useNavigate, Link } from "react-router-dom";
 import { Zap, Mic, Film, ArrowRight, KeyRound, Mail, CheckCircle2 } from "lucide-react";
-import { apiClient } from "../App";
+import { apiClient, useAuth } from "../App";
 
 // Sign-in page — magic-link only.
 //
@@ -16,6 +16,8 @@ import { apiClient } from "../App";
 // reveal which addresses are on file. Users just see "check your email."
 export default function Login() {
   const [params] = useSearchParams();
+  const navigate = useNavigate();
+  const { login } = useAuth();
   const [email, setEmail] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
@@ -68,7 +70,38 @@ export default function Login() {
     setErr("");
     setBusy(true);
     try {
-      const body = { email: email.trim() };
+      const trimmed = email.trim();
+
+      // Admin / DEV_BYPASS fast lane. Try /auth/check first — the backend
+      // will short-circuit only for ADMIN_EMAILS + DEV_BYPASS_EMAIL and
+      // return a fresh JWT on the spot. Any other email gets 403 and
+      // falls through to the magic-link flow below.
+      // If a redemption code is pending, we still want it applied
+      // during real activation, so we skip the bypass and force the
+      // magic-link path (which carries the code server-side).
+      if (!pendingRedeem && !pendingOauth) {
+        try {
+          await login(trimmed);
+          // Navigate directly to /scripts (skipping "/" → /scripts
+          // redirect chain) so RequireAuth doesn't race the setUser
+          // commit and bounce us back to /login.
+          navigate("/scripts", { replace: true });
+          return;
+        } catch (bypassErr) {
+          const status = bypassErr?.response?.status;
+          // Anything other than 403 (magic-link required) is a real
+          // problem — surface it. 403 falls through to magic-link.
+          if (status && status !== 403) {
+            const msg =
+              bypassErr?.response?.data?.detail ||
+              "We couldn't sign you in. Try again.";
+            setErr(typeof msg === "string" ? msg : JSON.stringify(msg));
+            return;
+          }
+        }
+      }
+
+      const body = { email: trimmed };
       if (pendingRedeem) body.redeem = pendingRedeem;
       else if (pendingOauth) body.appsumo_oauth = pendingOauth;
       await apiClient.post("/auth/request-magic-link", body);

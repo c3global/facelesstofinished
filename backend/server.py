@@ -749,25 +749,30 @@ async def verify_magic_link(request: Request, token: str = Query(...)):
 
 @api.post("/auth/check")
 async def auth_check(payload: LoginPayload):
-    """Verify a user has Studio access — LOCAL DEV ONLY.
+    """Verify a user has Studio access — passwordless bypass for
+    DEV_BYPASS_EMAIL + ADMIN_EMAILS only.
 
-    v1.19.0 (P0 security fix): this endpoint now REJECTS every request
-    except `DEV_BYPASS_EMAIL` — production sign-in goes through the
+    v1.19.0 (P0 security fix): normal buyers MUST go through the
     magic-link flow (`/auth/request-magic-link` → email → `/auth/verify-
     magic-link` → JWT). The previous behaviour let anyone who knew a
-    paying customer's email address log in as them, which was
-    unacceptable ahead of the AppSumo launch.
+    paying customer's email address log in as them.
+
+    v1.19.3 (2026-07-02): admin emails (`ADMIN_EMAILS`) can also skip
+    the magic link and sign in directly. This restores fast dashboard
+    access for the owner + trusted admins without weakening the
+    security posture for paying customers.
     """
     email = payload.email.strip().lower()
     if not email:
         raise HTTPException(status_code=400, detail="Email required")
 
-    # DEV_BYPASS_EMAIL still short-circuits (single email, only set on
-    # preview .env — never in production). Everyone else must use the
+    # DEV_BYPASS_EMAIL (preview .env only) and ADMIN_EMAILS both
+    # short-circuit the magic-link loop. Everyone else must use the
     # magic-link flow.
-    if DEV_BYPASS_EMAIL and email == DEV_BYPASS_EMAIL:
-        is_admin = email in ADMIN_EMAILS
-        token = issue_jwt(email, KNOWN_ENTITLEMENTS, is_admin=is_admin)
+    is_dev_bypass = bool(DEV_BYPASS_EMAIL and email == DEV_BYPASS_EMAIL)
+    is_admin_bypass = email in ADMIN_EMAILS
+    if is_dev_bypass or is_admin_bypass:
+        token = issue_jwt(email, KNOWN_ENTITLEMENTS, is_admin=is_admin_bypass or (is_dev_bypass and email in ADMIN_EMAILS))
         try:
             now_iso = datetime.now(timezone.utc).isoformat()
             await db.buyers.update_one(
@@ -780,7 +785,7 @@ async def auth_check(payload: LoginPayload):
             pass
         return {
             "token": token,
-            "user": {"email": email, "entitlements": KNOWN_ENTITLEMENTS, "isAdmin": is_admin},
+            "user": {"email": email, "entitlements": KNOWN_ENTITLEMENTS, "isAdmin": is_admin_bypass},
         }
 
     # Everyone else: force magic-link. Anti-enumeration friendly copy so

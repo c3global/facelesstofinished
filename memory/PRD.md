@@ -20,6 +20,28 @@ back to it for entitlement verification.
 
 ## 🔁 Workflow rule: Changelog moves with every change (set 2026-06-29 by user)
 
+### Iteration 54 (2026-07-02, late) — Admin fast-lane sign-in (skip magic link for ADMIN_EMAILS)
+
+**Trigger:** Charity: *"can you remove the need for the admin email to use magic link?"* — being forced through the 15-min email loop every time she wanted to check the admin panel was a real friction point for the owner.
+
+**What changed:**
+- `POST /api/auth/check` now accepts BOTH `DEV_BYPASS_EMAIL` and any address in `ADMIN_EMAILS` — either returns a JWT directly (bypassing the magic-link email flow entirely). Non-admin buyers still get 403 + the anti-enumeration "request a magic link" message.
+- `Login.jsx` `submit()` now tries `/auth/check` FIRST via `useAuth().login()`. On success (admin/dev email) it navigates straight to `/`. On 403 (non-admin) it falls through to `/auth/request-magic-link` — the existing magic-link UX is unchanged for paying customers.
+- Pending redemption codes (`?redeem=` / `?appsumo_oauth=`) still force the magic-link path so the server-side redeemer runs during real activation — admins pasting codes get the full customer flow.
+- `changelog.js` bumped to `1.19.3` with one customer-facing line.
+- `memory/test_credentials.md` updated to document the admin bypass alongside DEV_BYPASS.
+
+**Security posture:** unchanged for buyers. Bypass is gated by env-var-controlled `ADMIN_EMAILS`; a hostile client typing a random email still gets forced through the magic-link loop with anti-enumeration copy.
+
+**Files touched:**
+- `/app/backend/server.py` — `/auth/check` handler expanded to accept ADMIN_EMAILS.
+- `/app/frontend/src/pages/Login.jsx` — try-bypass-then-magic-link submit flow, `useAuth`+`useNavigate` imports.
+- `/app/frontend/src/changelog.js` — APP_VERSION 1.19.3 + entry.
+- `/app/memory/test_credentials.md` — admin bypass usage documented.
+
+**Verified:** backend restarts clean, `curl -X POST /api/auth/check {email: admin}` returns 200+JWT+`isAdmin:true`, non-admin email returns 403 with magic-link copy, frontend Login smoke-tested (admin lands on `/` instantly, non-admin sees "Check your inbox" as before).
+
+
 ### Iteration 53 (2026-07-02, evening) — Consumer-friendly rewording pass on changelog + roadmap
 
 **Trigger:** Charity: *"Update the roadmap and the change log — be sure to use terminology that consumers would understand, not from a developer standpoint."*

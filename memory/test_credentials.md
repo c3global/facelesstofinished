@@ -1,23 +1,31 @@
 # F2F48 Studio — Test credentials
 
-## Auth (v1.19.0 magic-link required for all non-dev accounts)
+## Auth (v1.19.3 — magic-link required for buyers, admins bypass)
 
 As of v1.19.0 (2026-07-01) the app uses **passwordless magic-link auth**.
 Users enter their email at `/login` → we generate a 15-minute single-use
 token, push an outbound webhook to GoHighLevel (GHL) → GHL's workflow
 sends the actual email → user clicks the link → we verify + issue JWT.
 
-### DEV_BYPASS (preview/local only)
-The backend `DEV_BYPASS_EMAIL` env var still short-circuits the magic
-link flow for local testing. Only this single email works via the
-legacy `/api/auth/check` endpoint:
+As of v1.19.3 (2026-07-02) **ADMIN_EMAILS + DEV_BYPASS_EMAIL bypass the
+magic-link flow entirely** — they can sign in via `POST /api/auth/check`
+with just their email and get a JWT back immediately. Every other email
+still requires the magic-link loop.
+
+### Admin fast-lane / DEV_BYPASS (preview + production)
+Emails in `ADMIN_EMAILS` (comma-separated env var; defaults to
+`drcharitycampbell@gmail.com`) short-circuit the magic-link flow via
+`POST /api/auth/check`:
 
 - **Email**: `drcharitycampbell@gmail.com`
-- **Password**: (none — DEV_BYPASS bypasses magic link entirely)
-- **How to use**: POST `/api/auth/check` with `{"email": "drcharitycampbell@gmail.com"}` — returns JWT directly
+- **Password**: (none — admin bypass, no email link needed)
+- **How to use (API)**: POST `/api/auth/check` with `{"email": "drcharitycampbell@gmail.com"}` — returns JWT directly
+- **How to use (UI)**: Type the admin email into the login form and click "Email me a sign-in link". The frontend tries `/auth/check` first — admins are signed in instantly and land on `/`. Non-admins get the magic link as usual.
 
-This email is **also in ADMIN_EMAILS**, so the issued JWT has `isAdmin=true`.
-This grants access to the `/admin` route and the `/api/admin/*` endpoints.
+The issued JWT has `isAdmin=true` when the email is in `ADMIN_EMAILS`,
+which grants access to the `/admin` route and the `/api/admin/*`
+endpoints. `DEV_BYPASS_EMAIL` also bypasses via `/api/auth/check` for
+preview/local testing even if it's not in `ADMIN_EMAILS`.
 
 ### Non-admin test user (STUDIO_GRANT — requires magic link)
 
