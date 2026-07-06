@@ -14,9 +14,16 @@
 //    See PRD.md → "Workflow rule: changelog must move with every deploy."
 // 4. Most recent on top. Each entry has version + date + bullet list.
 
-export const APP_VERSION = "1.19.4";
+export const APP_VERSION = "1.19.5";
 
 export const CHANGELOG = [
+  {
+    version: "1.19.5",
+    date: "2026-07-02",
+    changes: [
+      "Two new items joined the public roadmap under Planned — Canva B-Roll import (drop your Canva designs straight into Faceless scenes) and a Higher-quality AI video engine for cinematic motion. Head to the Roadmap page to follow along",
+    ],
+  },
   {
     version: "1.19.4",
     date: "2026-07-02",

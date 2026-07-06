@@ -20,6 +20,25 @@ back to it for entitlement verification.
 
 ## 🔁 Workflow rule: Changelog moves with every change (set 2026-06-29 by user)
 
+### Iteration 56 (2026-07-02, late) — Roadmap additions: Canva B-Roll import + Higher-quality AI video engine (v1.19.5)
+
+**Trigger:** Charity: *"add canva integration for B roll as a planned task that we want to do next. And I want you to update, both the Changelog and the roadmap to include better quality AI integration for video output that would be in the planned section."*
+
+**What changed:**
+- Added two new roadmap items to the **Planned** column via `POST /api/admin/roadmap/items` (no existing items touched — Charity's manual roadmap edits stay as-is):
+  1. **Canva B-Roll import** (tag: `TOP REQUEST`) — "Pull your own Canva designs, cover graphics, and branded visuals directly into your Faceless scenes as B-roll — no more separate download-and-upload dance."
+  2. **Higher-quality AI video engine** (tag: `PRO PLUS`) — "Cinematic AI video generation for Faceless scenes — sharper, more realistic motion and lighting than today's static AI stills. Coming to the AI Engine picker for Pro Plus + Founders."
+- `changelog.js` bumped to v1.19.5 with a single customer-facing line pointing them to the Roadmap page.
+
+**Note on existing "Canva integration" item in In Progress:** left alone per Charity's instruction. That entry appears to cover the broader Canva push; the new **Canva B-Roll import** item is specifically the Studio B-roll integration variant she wants to prioritize next.
+
+**Files touched:**
+- `db.roadmap_items` — 2 new documents inserted (IDs auto-generated).
+- `/app/frontend/src/changelog.js` — APP_VERSION 1.19.5 + entry.
+
+**Verified:** `GET /api/roadmap` shows both new items in Planned column at orders 13 + 14; frontend `/roadmap` renders them with correct tags; all 17 pre-existing shipped items + Charity's manual In Progress + Planned edits untouched.
+
+
 ### Iteration 55 (2026-07-02, late) — Hide AI card + AI Engine chip when disabled; swap Nano Banana primary→fallback
 
 **Trigger:** Charity: *"Should these be showing if AI is turned off? Honestly, nano banana can remain but as secondary, not primary."* — she flagged that the B-Roll picker was still showing a greyed-out "Generate with AI" card + a permanent "Engine · Flux + Kling i2v" chip on the Studio row even though `FAL_AI_ENABLED=false`. Cluttered the UI with options no one could use.
