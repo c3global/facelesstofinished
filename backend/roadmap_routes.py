@@ -28,7 +28,9 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import Body, Depends, HTTPException, Path
+import hashlib
+
+from fastapi import Body, Depends, HTTPException, Path, Request
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger("f48.roadmap")
@@ -148,6 +150,33 @@ def _strip_id(doc: dict) -> dict:
     return doc or {}
 
 
+def _voter_id_for_request(request: Request | None) -> str:
+    """Stable per-visitor hash used to dedupe roadmap +1 votes.
+
+    Anonymous voting keeps the roadmap open to AppSumo reviewers who
+    aren't signed in yet. We fingerprint on (IP + user-agent) so a
+    single laptop can't spam votes just by hitting the button 50 times,
+    while still not requiring auth. A VPN hop resets the hash — good
+    enough for a directional signal, not a binding poll.
+    """
+    if request is None:
+        return "anon"
+    ip = request.client.host if request.client else ""
+    ua = request.headers.get("user-agent", "")[:200]
+    return hashlib.sha256(f"{ip}|{ua}".encode("utf-8")).hexdigest()[:24]
+
+
+def _decorate_item_for_public(doc: dict, voter_id: str) -> dict:
+    """Strip Mongo _id + voter_hashes list (never sent to client), and
+    surface `votes` (int) and `has_voted` (bool) so the UI can render
+    the +1 button state without a second round-trip."""
+    d = _strip_id(doc)
+    voters = d.pop("voter_hashes", []) or []
+    d["votes"] = int(d.get("votes") or 0)
+    d["has_voted"] = voter_id in voters
+    return d
+
+
 class RoadmapItemCreate(BaseModel):
     column: str = Field(..., description='one of shipped/inProgress/planned/considering')
     title: str = Field(..., min_length=1, max_length=120)
@@ -182,16 +211,19 @@ def register_roadmap_routes(*, api, db, current_user, ADMIN_EMAILS):
 
     # ---- Public read ----
     @api.get("/roadmap")
-    async def get_roadmap():
+    async def get_roadmap(request: Request):
         """Return the full roadmap grouped by column. Public — no auth.
-        Seeds default items on first call so the page never renders blank."""
+        Seeds default items on first call so the page never renders blank.
+        Also stamps `votes` + `has_voted` on every item so the +1 UI can
+        render instantly without a second call."""
         await _ensure_seed()
+        voter_id = _voter_id_for_request(request)
         items_by_col: dict[str, list[dict]] = {c: [] for c in VALID_COLUMNS}
         async for doc in db.roadmap_items.find({}).sort([("column", 1), ("order", 1)]):
             col = doc.get("column")
             if col not in items_by_col:
                 continue
-            items_by_col[col].append(_strip_id(doc))
+            items_by_col[col].append(_decorate_item_for_public(doc, voter_id))
         return {
             "columns": [
                 {"key": "shipped", "label": "Shipped",
@@ -288,6 +320,32 @@ def register_roadmap_routes(*, api, db, current_user, ADMIN_EMAILS):
                 {"$set": {"order": i, "updated_at": _now_iso()}},
             )
         return {"ok": True, "updated": len(ids)}
+
+    # ---- Public +1 vote (Planned + Considering only) ----
+    @api.post("/roadmap/items/{item_id}/vote")
+    async def vote_item(request: Request, item_id: str = Path(...)):
+        """Anonymous +1 vote. Enforced dedup per (IP + user-agent) hash
+        via `$addToSet` so a second click from the same fingerprint is
+        a no-op. Only Planned + Considering items accept votes — the
+        Shipped and In Progress columns don't need a signal."""
+        voter_id = _voter_id_for_request(request)
+        existing = await db.roadmap_items.find_one({"id": item_id})
+        if not existing:
+            raise HTTPException(status_code=404, detail="Item not found")
+        if existing.get("column") not in ("planned", "considering"):
+            raise HTTPException(status_code=400, detail="Votes only apply to Planned or Considering items")
+        # Atomic: increment votes ONLY if the voter isn't already in the set.
+        result = await db.roadmap_items.find_one_and_update(
+            {"id": item_id, "voter_hashes": {"$ne": voter_id}},
+            {"$inc": {"votes": 1},
+             "$addToSet": {"voter_hashes": voter_id},
+             "$set": {"updated_at": _now_iso()}},
+            return_document=True,  # ReturnDocument.AFTER on motor
+        )
+        if result is None:
+            # Voter already in set — return current count without incrementing.
+            return {"votes": int(existing.get("votes") or 0), "has_voted": True, "already_voted": True}
+        return {"votes": int(result.get("votes") or 0), "has_voted": True, "already_voted": False}
 
     @api.post("/admin/roadmap/reseed")
     async def reseed(admin=Depends(require_admin)):

@@ -2,9 +2,14 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   ArrowLeft, CheckCircle2, Sparkles, ListChecks, Lightbulb,
-  Pencil, Trash2, Plus, Save, X, ArrowUp, ArrowDown,
+  Pencil, Trash2, Plus, Save, X, ArrowUp, ArrowDown, ThumbsUp,
 } from "lucide-react";
 import { useAuth, apiClient } from "../App";
+
+// Columns that accept public +1 votes. Shipped / In Progress don't need
+// a demand signal — Planned + Considering do (that's the ranking input
+// we use to decide what to build next).
+const VOTABLE_COLUMNS = new Set(["planned", "considering"]);
 
 // Public roadmap page at /roadmap.
 //
@@ -42,7 +47,57 @@ function tagDataAttr(tag) {
   return (tag || "").toLowerCase().replace(/\s+/g, "-");
 }
 
-function ItemView({ item, isAdmin, onEdit, onDelete, onMove, isFirst, isLast }) {
+function VoteButton({ item, onVote }) {
+  // Local optimistic state so the button reacts instantly on click.
+  // Server is the source of truth on next load, but this makes the tap
+  // feel real (esp. for AppSumo reviewers spam-clicking on mobile).
+  const [voting, setVoting] = useState(false);
+  const [localVoted, setLocalVoted] = useState(!!item.has_voted);
+  const [localVotes, setLocalVotes] = useState(item.votes || 0);
+
+  const click = async () => {
+    if (voting || localVoted) return;
+    setVoting(true);
+    // Optimistic bump — server will overwrite with real count on success.
+    setLocalVoted(true);
+    setLocalVotes((v) => v + 1);
+    try {
+      const r = await apiClient.post(`/roadmap/items/${item.id}/vote`);
+      const server = r?.data || {};
+      if (typeof server.votes === "number") setLocalVotes(server.votes);
+      // If server says already_voted, keep the button in voted state.
+      if (server.has_voted !== undefined) setLocalVoted(!!server.has_voted);
+      onVote?.(item.id, server);
+    } catch {
+      // Roll back optimistic update on error.
+      setLocalVoted(!!item.has_voted);
+      setLocalVotes(item.votes || 0);
+    } finally {
+      setVoting(false);
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      className={`roadmap-vote-btn ${localVoted ? "is-voted" : ""}`}
+      onClick={click}
+      disabled={voting}
+      aria-pressed={localVoted}
+      aria-label={localVoted ? `You voted — ${localVotes} total votes` : `Vote for this — ${localVotes} votes so far`}
+      title={localVoted ? "You voted for this" : "Click to +1"}
+      data-testid={`roadmap-vote-${item.id}`}
+    >
+      <ThumbsUp size={12} strokeWidth={2.4} />
+      <span className="roadmap-vote-count" data-testid={`roadmap-vote-count-${item.id}`}>
+        {localVotes}
+      </span>
+    </button>
+  );
+}
+
+function ItemView({ item, isAdmin, onEdit, onDelete, onMove, onVote, isFirst, isLast }) {
+  const canVote = VOTABLE_COLUMNS.has(item.column);
   return (
     <li
       className="roadmap-item"
@@ -57,6 +112,11 @@ function ItemView({ item, isAdmin, onEdit, onDelete, onMove, isFirst, isLast }) 
         )}
       </div>
       <p className="roadmap-item-blurb">{item.blurb}</p>
+      {canVote && (
+        <div className="roadmap-item-vote-row">
+          <VoteButton item={item} onVote={onVote} />
+        </div>
+      )}
       {isAdmin && (
         <div className="roadmap-item-admin">
           <button
@@ -234,7 +294,7 @@ function ItemEditor({ initial, onSave, onCancel }) {
 function RoadmapColumn({
   columnKey, column, isAdmin,
   editingId, addingInColumn,
-  onStartEdit, onCancel, onSave, onDelete, onMove, onStartAdd,
+  onStartEdit, onCancel, onSave, onDelete, onMove, onStartAdd, onVote,
 }) {
   const Icon = COLUMN_ICONS[columnKey] || ListChecks;
   const items = column.items || [];
@@ -268,6 +328,7 @@ function RoadmapColumn({
               onEdit={onStartEdit}
               onDelete={onDelete}
               onMove={onMove}
+              onVote={onVote}
             />
           )
         ))}
@@ -356,6 +417,22 @@ export default function Roadmap() {
     }
   };
 
+  // Update local column state after a successful vote so sibling
+  // renders (and any subsequent load()) reflect the new count without
+  // a full reload. Keyed on item.id.
+  const applyVote = (itemId, server) => {
+    setColumns((prev) =>
+      prev.map((col) => ({
+        ...col,
+        items: (col.items || []).map((it) =>
+          it.id === itemId
+            ? { ...it, votes: server?.votes ?? it.votes, has_voted: !!server?.has_voted }
+            : it,
+        ),
+      })),
+    );
+  };
+
   const move = async (item, direction) => {
     const col = columns.find((c) => c.key === item.column);
     if (!col) return;
@@ -431,6 +508,7 @@ export default function Roadmap() {
                 onSave={save}
                 onDelete={remove}
                 onMove={move}
+                onVote={applyVote}
               />
             ) : null
           ))}

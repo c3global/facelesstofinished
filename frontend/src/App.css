@@ -7098,6 +7098,52 @@ body[data-founder="true"] .settings-key-save-btn {
   background: color-mix(in srgb, var(--warning) 28%, transparent);
   color: var(--warning);
   border-color: color-mix(in srgb, var(--warning) 50%, transparent);
+
+/* ==========================================================================
+   Roadmap public +1 vote button (Planned + Considering items only).
+   Small pill anchored under the blurb. Voted state uses --success fill;
+   unvoted stays neutral border-only so it doesn't overpower the card.
+   ========================================================================== */
+.roadmap-item-vote-row {
+  display: flex;
+  justify-content: flex-start;
+  margin-top: 10px;
+}
+.roadmap-vote-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: color 140ms ease, border-color 140ms ease, background 140ms ease, transform 120ms ease;
+  user-select: none;
+}
+.roadmap-vote-btn:hover:not(:disabled):not(.is-voted) {
+  color: var(--text);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.roadmap-vote-btn:active:not(:disabled) { transform: scale(0.96); }
+.roadmap-vote-btn.is-voted {
+  background: color-mix(in srgb, var(--success, #22c55e) 22%, transparent);
+  border-color: color-mix(in srgb, var(--success, #22c55e) 55%, transparent);
+  color: var(--success, #22c55e);
+  cursor: default;
+}
+.roadmap-vote-btn:disabled { opacity: 0.65; }
+.roadmap-vote-count {
+  font-variant-numeric: tabular-nums;
+  min-width: 12px;
+  text-align: right;
+}
+
 }
 .roadmap-item-blurb {
   font-size: 13px;

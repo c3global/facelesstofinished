@@ -20,6 +20,51 @@ back to it for entitlement verification.
 
 ## 🔁 Workflow rule: Changelog moves with every change (set 2026-06-29 by user)
 
+### Iteration 57 (2026-07-02, late) — Scene timeline editor added to roadmap + public +1 vote button (v1.19.6)
+
+**Trigger:** Charity: *"Yes, add the button."* + *"add a video scene editor or timeline editor... the B roll will continue to loop... this is a huge flaw... add it to the roadmap, don't try to fix it now."*
+
+**What changed:**
+1. **New roadmap item — Scene timeline editor** (Planned, tag: `TOP REQUEST`): "Drag-and-drop timeline so your B-roll clips line up exactly with your voiceover — no more looping stock footage that runs long past a sentence. Trim scene by scene, or let us auto-sync to the voiceover audio."
+2. **Public +1 vote button** on every Planned + Considering item (Shipped + In Progress skip it — no demand-signal needed there):
+   - `POST /api/roadmap/items/{id}/vote` — anonymous, atomic dedup via `$addToSet` on a `voter_hashes` array. Voter fingerprint = SHA256(IP + user-agent)[:24]. Second click from same fingerprint returns `{votes, has_voted:true, already_voted:true}` without incrementing.
+   - `GET /api/roadmap` now decorates every item with `votes` (int) + `has_voted` (bool). `voter_hashes` array stripped from response (never leaks to client).
+   - Column gate: only `planned` and `considering` accept votes (400 otherwise).
+3. **Frontend `Roadmap.jsx`**:
+   - New `VoteButton` component with optimistic local state — click bumps the count instantly, server reconciles on response, rolls back on error.
+   - Voted state uses green pill fill; unvoted is neutral border-only.
+   - `VOTABLE_COLUMNS = {planned, considering}` gates the button per column.
+   - Local `applyVote` handler propagates the server count back into the columns state so re-renders reflect the new total without a full `load()` refetch.
+4. **CSS**: `.roadmap-item-vote-row` + `.roadmap-vote-btn` (with `.is-voted` variant) added to `App.css` — uses `--success` token so both dark + light themes flip cleanly.
+5. **Changelog v1.19.6** — 2 customer-facing bullets covering the vote button + the timeline editor addition.
+
+**B-roll ↔ voiceover timing issue — Charity requested my thoughts (no code):**
+
+The core problem: Pexels/Pixabay clips are ~5-15s and get looped or truncated to fill the per-scene voiceover duration. The pipeline currently uses `_run_render_faceless` with a fixed per-scene duration derived from equal partitioning, not from actual voiceover phrasing.
+
+Fix approaches, in order of leverage:
+- **A. TTS-first duration mapping (biggest impact, medium build):** Run Kokoro TTS FIRST for each scene, measure the actual audio duration, THEN request/trim the B-roll clip to exactly that length. Kill the looping entirely — if a Pexels clip is shorter than the voiceover, freeze on the last frame instead of looping (or pre-filter search to `min_duration >= voiceover_sec + 1s`).
+- **B. Sentence-per-scene chunking (structural):** Split the script into sentences → one B-roll clip per sentence → duration = sentence audio length. Never loops because each clip is scoped to one sentence.
+- **C. Word-timestamp editing (Descript-level polish):** Use Whisper transcription of the Kokoro output to get word-level timestamps. Cut B-roll transitions ONLY at natural sentence boundaries so cuts feel intentional, not arbitrary.
+- **D. Scene timeline editor UI (what she asked for):** Once A or B is in place, the timeline UI is basically read-only visualization + drag handles that call an override endpoint. Backend already has `sceneOverrides` primitive — extend to per-scene `duration_ms` override.
+- **E. Higher `min_duration` filter on Pexels/Pixabay search:** Cheapest single change — require clips ≥ 8s so a 4s voiceover never needs to loop them. Doesn't fix the mismatch, just narrows it.
+
+Recommended sequence: **E → A → D → B → C**. E is one-line filter; A is the real fix; D is the UI Charity described; B is a re-architecture that also unlocks per-sentence AI captions; C is polish.
+
+**Files touched:**
+- `/app/backend/roadmap_routes.py` — vote endpoint + voter fingerprint helper + GET decoration.
+- `/app/frontend/src/pages/Roadmap.jsx` — VoteButton component + column gate + optimistic state.
+- `/app/frontend/src/App.css` — vote button pill styling.
+- `/app/frontend/src/changelog.js` — APP_VERSION 1.19.6 + 2 bullets.
+- `db.roadmap_items` — 1 new document inserted (Scene timeline editor, order 15).
+
+**Verified:**
+- `curl POST /api/roadmap/items/{planned_id}/vote` → `{votes:1, has_voted:true, already_voted:false}` ✓
+- Second call → `{votes:1, has_voted:true, already_voted:true}` (dedup working) ✓
+- `curl POST /api/roadmap/items/{shipped_id}/vote` → 400 "Votes only apply to Planned or Considering" ✓
+- Frontend eslint + Python ruff clean ✓
+
+
 ### Iteration 56 (2026-07-02, late) — Roadmap additions: Canva B-Roll import + Higher-quality AI video engine (v1.19.5)
 
 **Trigger:** Charity: *"add canva integration for B roll as a planned task that we want to do next. And I want you to update, both the Changelog and the roadmap to include better quality AI integration for video output that would be in the planned section."*
