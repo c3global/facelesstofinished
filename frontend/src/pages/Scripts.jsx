@@ -311,8 +311,8 @@ export default function Scripts() {
       let msg = "Could not get angles. Try again.";
       if (detail) {
         msg = String(detail);
-      } else if (status === 504 || status === 502 || e?.code === "ECONNABORTED") {
-        msg = "The script engine timed out. Try a shorter topic or retry in a moment.";
+      } else if (status === 504 || status === 502 || status === 520 || status === 522 || status === 524 || e?.code === "ECONNABORTED") {
+        msg = "The script engine had a hiccup (Anthropic overload). Wait 30 seconds and try again — the backend now auto-retries transient failures.";
       } else if (status === 401 || status === 403) {
         msg = "Your session expired. Refresh the page and sign in again.";
       } else if (status >= 500) {

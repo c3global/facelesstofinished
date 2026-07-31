@@ -14,9 +14,16 @@
 //    See PRD.md → "Workflow rule: changelog must move with every deploy."
 // 4. Most recent on top. Each entry has version + date + bullet list.
 
-export const APP_VERSION = "1.19.7";
+export const APP_VERSION = "1.19.8";
 
 export const CHANGELOG = [
+  {
+    version: "1.19.8",
+    date: "2026-07-02",
+    changes: [
+      "Script Engine now auto-retries when Anthropic (the AI behind your scripts) has a busy moment — up to 3 attempts with backoff, instead of surfacing a 'server overloaded' error on the first hiccup. Should cure the intermittent 520 errors on Show me 5 angles",
+    ],
+  },
   {
     version: "1.19.7",
     date: "2026-07-02",

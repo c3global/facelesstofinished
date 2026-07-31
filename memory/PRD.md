@@ -20,6 +20,36 @@ back to it for entitlement verification.
 
 ## 🔁 Workflow rule: Changelog moves with every change (set 2026-06-29 by user)
 
+### Iteration 59 (2026-07-02, night) — Anthropic 529 auto-retry / kill the Cloudflare 520 cascade (v1.19.8)
+
+**Trigger:** Charity: *"I have a client who continues to receive an error message... it said 'the script engine is busy'"* + Cloudflare 520 screenshot on production `faceless48.c3global.co/scripts`. Confirmed via her Universal Key balance (84.42 credits, auto-recharge on) — NOT a budget issue. Root cause: Anthropic 529 "Overloaded" errors hit Claude at peak US hours, and one bad response cascaded straight through to a Cloudflare 520 with no retry.
+
+**Fix:** Added exponential-backoff retry to BOTH LLM entry points in `server.py`:
+- `_claude_complete` (Universal Key path) — up to 3 attempts, 2s → 4s backoff, retries only on transient markers (`529`, `overloaded`, `rate_limit`, `timeout`, `5xx` etc.). Fails fast on auth / 400 / model-not-found. Fresh `LlmChat` instance per attempt so a poisoned session on attempt 1 doesn't taint attempt 2.
+- `_anthropic_direct_complete` (BYOK path) — same 3-attempt loop, but with structured HTTP status inspection since we own the httpx call. Retries `429 / 529 / 5xx`, fails fast on `4xx` client errors.
+- Frontend `Scripts.jsx` error message updated to include `520/522/524` codes with a friendlier retry-suggested copy.
+
+**Config constants:**
+- `_CLAUDE_MAX_ATTEMPTS = 3`
+- `_CLAUDE_BASE_BACKOFF_S = 2.0` (2s → 4s pauses between attempts)
+- `_CLAUDE_TRANSIENT_MARKERS` = tuple of substrings we sniff in the exception message
+
+**Verified on preview:**
+- Happy path: `POST /scripts/angles` → 200 in 9.1s, 5 angles returned ✓
+- Backend hot-reloaded cleanly, `ruff` lint passes ✓
+- Non-transient errors still fail fast (unchanged behavior for auth / 400)
+
+**Production deployment required:** this fix ships behind Emergent's deploy pipeline. Charity needs to redeploy from preview → production for her client to benefit. Preview retry logic is live and testable right now.
+
+**Files touched:**
+- `/app/backend/server.py` — `_CLAUDE_MAX_ATTEMPTS`, `_CLAUDE_BASE_BACKOFF_S`, `_CLAUDE_TRANSIENT_MARKERS`, `_is_claude_transient`, `_anthropic_direct_complete` (BYOK), `_claude_complete` (Universal Key).
+- `/app/frontend/src/pages/Scripts.jsx` — error copy for 520/522/524.
+- `/app/frontend/src/changelog.js` — APP_VERSION 1.19.8.
+
+**Not fixed by this iter (would require infra access):**
+- Emergent production container OOM/cold-start hiccups — if the container itself crashes mid-request, no amount of app-layer retry helps. Contact Emergent Support with timestamps if 520s persist after this deploys.
+
+
 ### Iteration 58 (2026-07-02, night) — 9:16 caption sizing + stock B-roll relevance fix (v1.19.7)
 
 **Trigger:** Charity: *"The captions are too large for the 9:16 screen. Also, the stock from pexels and pixabay were irrelevant for my script! I don't know if this is good enough..."*

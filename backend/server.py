@@ -3716,36 +3716,96 @@ async def studio_render_bulk_delete(payload: BulkDeleteRequest, user: AuthUser =
 # ---------------------------------------------------------------------------
 CLAUDE_MODEL = "claude-sonnet-4-5-20250929"
 
+# v1.19.8 (Iter 59, 2026-07-02): transient Anthropic errors used to cascade
+# straight through to the client as Cloudflare 520 in production (customer
+# complaint: "the script engine is busy"). Both entry points now retry with
+# exponential backoff on 429 / 5xx / overloaded / timeout errors — auth /
+# 400 / 402 fail fast so the caller sees a real error, not a stalled loop.
+_CLAUDE_MAX_ATTEMPTS = 3
+_CLAUDE_BASE_BACKOFF_S = 2.0   # attempt 1 fail → wait 2s → attempt 2 fail → wait 4s → attempt 3 or give up
+_CLAUDE_TRANSIENT_MARKERS = (
+    "529", "overloaded", "rate_limit", "rate limit", "rate-limit",
+    "timeout", "timed out", "connection", "temporarily unavailable",
+    "internal_server_error", "internal server error", "bad gateway",
+    "service unavailable", "gateway timeout",
+)
+
+
+def _is_claude_transient(exc: Exception) -> bool:
+    """Return True if the exception looks like something a retry can fix.
+
+    Emergent LLM SDK exceptions don't carry structured HTTP status codes,
+    so we sniff the stringified message for known transient markers
+    (Anthropic 529 "Overloaded", generic 5xx, network timeouts, etc.).
+    Auth / model-not-found / bad-request errors don't match, so we
+    fail fast on those instead of burning retries.
+    """
+    msg = str(exc).lower()
+    return any(marker in msg for marker in _CLAUDE_TRANSIENT_MARKERS)
+
 
 async def _anthropic_direct_complete(api_key: str, system_prompt: str, user_message: str) -> str:
     """BYOK path: hit Anthropic's Messages API directly with the customer's
     sk-ant-… key. Bypasses the Emergent universal LLM key entirely so the
-    customer's own quota is consumed."""
-    async with httpx.AsyncClient(timeout=180) as client:
-        r = await client.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json={
-                "model": CLAUDE_MODEL,
-                "max_tokens": 8192,
-                "system": system_prompt,
-                "messages": [{"role": "user", "content": user_message}],
-            },
-        )
-    if r.status_code != 200:
-        raise HTTPException(status_code=502, detail=f"Anthropic error {r.status_code}: {r.text[:200]}")
-    body = r.json()
-    blocks = body.get("content") or []
-    return "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
+    customer's own quota is consumed.
+
+    Retries transient errors (429 / 5xx / 529 Overloaded / connect timeout)
+    with exponential backoff. Auth (401) / bad request (400) fail fast.
+    """
+    last_err: str = ""
+    for attempt in range(1, _CLAUDE_MAX_ATTEMPTS + 1):
+        try:
+            async with httpx.AsyncClient(timeout=180) as client:
+                r = await client.post(
+                    "https://api.anthropic.com/v1/messages",
+                    headers={
+                        "x-api-key": api_key,
+                        "anthropic-version": "2023-06-01",
+                        "content-type": "application/json",
+                    },
+                    json={
+                        "model": CLAUDE_MODEL,
+                        "max_tokens": 8192,
+                        "system": system_prompt,
+                        "messages": [{"role": "user", "content": user_message}],
+                    },
+                )
+            if r.status_code == 200:
+                body = r.json()
+                blocks = body.get("content") or []
+                return "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
+            last_err = f"Anthropic error {r.status_code}: {r.text[:200]}"
+            # Retry on 429 (rate limit), 529 (overloaded), 5xx (server) —
+            # not on 4xx client errors (auth, bad model, etc.).
+            if r.status_code in (429, 529) or 500 <= r.status_code < 600:
+                if attempt < _CLAUDE_MAX_ATTEMPTS:
+                    wait_s = _CLAUDE_BASE_BACKOFF_S * (2 ** (attempt - 1))
+                    logger.warning(f"[claude-byok] transient {r.status_code} attempt {attempt}/{_CLAUDE_MAX_ATTEMPTS}, retrying in {wait_s}s")
+                    await asyncio.sleep(wait_s)
+                    continue
+            raise HTTPException(status_code=502, detail=last_err)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            last_err = f"{type(exc).__name__}: {exc}"
+            if attempt < _CLAUDE_MAX_ATTEMPTS:
+                wait_s = _CLAUDE_BASE_BACKOFF_S * (2 ** (attempt - 1))
+                logger.warning(f"[claude-byok] network/exception attempt {attempt}/{_CLAUDE_MAX_ATTEMPTS} ({last_err}), retrying in {wait_s}s")
+                await asyncio.sleep(wait_s)
+                continue
+            raise HTTPException(status_code=502, detail=f"Anthropic unreachable after {_CLAUDE_MAX_ATTEMPTS} attempts: {last_err}")
+    raise HTTPException(status_code=502, detail=last_err or "Anthropic unreachable")
 
 
 async def _claude_complete(system_prompt: str, user_message: str, session_id: str | None = None, user_email: str | None = None) -> str:
     """Single-shot Claude completion. If the user has saved a BYOK Anthropic
-    key, route directly to Anthropic; else use the Emergent universal LLM key."""
+    key, route directly to Anthropic; else use the Emergent universal LLM key.
+
+    Retries transient Anthropic errors (Overloaded 529, rate limits, timeouts,
+    5xx) up to `_CLAUDE_MAX_ATTEMPTS` times with exponential backoff before
+    surfacing a clean 502 to the client. Prevents the "Cloudflare 520 —
+    origin overloaded" cascade users hit when Anthropic has a bad minute.
+    """
     # BYOK: customer's own Anthropic key takes precedence (consumes their quota).
     if user_email:
         try:
@@ -3760,18 +3820,31 @@ async def _claude_complete(system_prompt: str, user_message: str, session_id: st
     if not EMERGENT_LLM_KEY:
         raise HTTPException(status_code=500, detail="LLM key missing")
     from emergentintegrations.llm.chat import LlmChat, UserMessage  # lazy import
-    chat = (
-        LlmChat(
-            api_key=EMERGENT_LLM_KEY,
-            session_id=session_id or str(uuid.uuid4()),
-            system_message=system_prompt,
+
+    last_err: str = ""
+    for attempt in range(1, _CLAUDE_MAX_ATTEMPTS + 1):
+        # Fresh chat instance per attempt so a stale session on a failed
+        # attempt doesn't poison the retry.
+        chat = (
+            LlmChat(
+                api_key=EMERGENT_LLM_KEY,
+                session_id=session_id or str(uuid.uuid4()),
+                system_message=system_prompt,
+            )
+            .with_model("anthropic", CLAUDE_MODEL)
         )
-        .with_model("anthropic", CLAUDE_MODEL)
-    )
-    try:
-        return await chat.send_message(UserMessage(text=user_message))
-    except Exception as e:  # noqa: BLE001 — surface a clean 502 to the client
-        raise HTTPException(status_code=502, detail=f"LLM error: {e}")
+        try:
+            return await chat.send_message(UserMessage(text=user_message))
+        except Exception as exc:  # noqa: BLE001
+            last_err = f"{type(exc).__name__}: {exc}"
+            if _is_claude_transient(exc) and attempt < _CLAUDE_MAX_ATTEMPTS:
+                wait_s = _CLAUDE_BASE_BACKOFF_S * (2 ** (attempt - 1))
+                logger.warning(f"[claude] transient attempt {attempt}/{_CLAUDE_MAX_ATTEMPTS} ({last_err}), retrying in {wait_s}s")
+                await asyncio.sleep(wait_s)
+                continue
+            # Non-transient (auth, bad request, model config) OR exhausted retries → fail out.
+            raise HTTPException(status_code=502, detail=f"LLM error: {last_err}")
+    raise HTTPException(status_code=502, detail=f"LLM error after {_CLAUDE_MAX_ATTEMPTS} attempts: {last_err}")
 
 
 # --- Studio helper: generate B-roll prompts from a script -------------------
