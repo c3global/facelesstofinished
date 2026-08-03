@@ -14,9 +14,16 @@
 //    See PRD.md → "Workflow rule: changelog must move with every deploy."
 // 4. Most recent on top. Each entry has version + date + bullet list.
 
-export const APP_VERSION = "1.19.8";
+export const APP_VERSION = "1.20.0";
 
 export const CHANGELOG = [
+  {
+    version: "1.20.0",
+    date: "2026-08-03",
+    changes: [
+      "🆕 Scene timeline editor (MVP) — open any completed Faceless render from your history and flip the new ⏱ button to control looping. Toggle 'Freeze last frame' on any scene where the stock B-roll runs shorter than the voiceover, or hit 'Freeze all scenes' to fix them in one tap. Re-render kicks a fresh Faceless job with your fixes applied. No more Groundhog Day B-roll",
+    ],
+  },
   {
     version: "1.19.8",
     date: "2026-07-02",

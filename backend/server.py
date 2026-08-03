@@ -1310,12 +1310,20 @@ async def _make_kenburns_mp4(image_url: str, aspect: str, duration_ms: int, scen
             pass
 
 
-async def _trim_stock_video(video_url: str, aspect: str, duration_ms: int, scene_idx: int) -> Optional[str]:
+async def _trim_stock_video(video_url: str, aspect: str, duration_ms: int, scene_idx: int, freeze_end: bool = False) -> Optional[str]:
     """Download a stock video (Pexels/Pixabay), trim to `duration_ms`, scale +
     crop to match the output aspect, upload to fal storage, return the URL.
     fal.ai's compose IGNORES the keyframe `duration` for video-type keyframes
     and always plays the source at its native length — so we have to pre-cut
-    every stock clip ourselves to keep the timeline aligned with the audio."""
+    every stock clip ourselves to keep the timeline aligned with the audio.
+
+    v1.20.0 (Iter 60, Timeline Editor MVP): `freeze_end=True` swaps the default
+    `-stream_loop -1` (loop-to-fill) behavior for a `tpad=stop_mode=clone`
+    filter that freezes the LAST frame of the source once it runs out. Fixes
+    the "Pexels clip loops 2× behind a longer voiceover" complaint that
+    triggered the Timeline Editor build. Default False keeps every existing
+    render + regenerate path unchanged.
+    """
     duration_s = max(1.5, duration_ms / 1000.0)
     if aspect == "9_16":
         out_w, out_h = 720, 1280
@@ -1330,11 +1338,18 @@ async def _trim_stock_video(video_url: str, aspect: str, duration_ms: int, scene
     # the output frame and let it play. `fps=30` resamples 24/25/59.94/60-fps
     # sources to a consistent cadence — without it, mixing source framerates
     # produces visible micro-stutter via uneven frame duplication.
-    vf = (
+    base_vf = (
         f"fps=30,"
         f"scale={out_w}:{out_h}:force_original_aspect_ratio=increase,"
         f"crop={out_w}:{out_h}"
     )
+    if freeze_end:
+        # tpad clones the last frame for up to `stop_duration` seconds after
+        # source EOF. -t caps total output. Net effect: short clip → freeze
+        # frame padding to reach target; long clip → trimmed at target.
+        vf = f"{base_vf},tpad=stop_mode=clone:stop_duration={duration_s + 5:.2f}"
+    else:
+        vf = base_vf
     tmpdir = tempfile.mkdtemp(prefix="trim_")
     src = os.path.join(tmpdir, "src.mp4")
     dst = os.path.join(tmpdir, "out.mp4")
@@ -1348,7 +1363,12 @@ async def _trim_stock_video(video_url: str, aspect: str, duration_ms: int, scene
         cmd = [
             FFMPEG_BIN, "-y", "-loglevel", "error",
             "-fflags", "+genpts",        # regenerate clean PTS — fixes hitch at stream_loop seam
-            "-stream_loop", "-1",        # loop short sources so the scene fills its slot
+        ]
+        if not freeze_end:
+            # Legacy loop-to-fill behavior — kept as default so existing
+            # renders (and Regenerate) reproduce identical output.
+            cmd += ["-stream_loop", "-1"]
+        cmd += [
             "-ss", "0", "-i", src,
             "-t", f"{duration_s:.2f}",
             "-an",                       # drop source audio — we use Kokoro's voiceover
@@ -1364,7 +1384,7 @@ async def _trim_stock_video(video_url: str, aspect: str, duration_ms: int, scene
         proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         _, err = await asyncio.wait_for(proc.communicate(), timeout=120)
         if proc.returncode != 0 or not os.path.exists(dst):
-            logger.warning(f"[trim] ffmpeg failed scene={scene_idx} rc={proc.returncode} stderr={err.decode()[-300:]}")
+            logger.warning(f"[trim] ffmpeg failed scene={scene_idx} freeze_end={freeze_end} rc={proc.returncode} stderr={err.decode()[-300:]}")
             return None
         loop = asyncio.get_event_loop()
         fal_url = await loop.run_in_executor(None, fal_client.upload_file, dst)
@@ -3080,9 +3100,23 @@ async def _run_render_faceless(job: dict):
     # for a 16-second voiceover. ---
     await _set_progress(55, "Adding motion to scenes…")
 
+    # v1.20.0 (Iter 60): if the job doc carries a `scene_overrides` list
+    # (from the Timeline Editor re-render endpoint), build a per-scene
+    # lookup so `normalize_scene` can pass `freeze_end=True` to
+    # `_trim_stock_video` for the exact scenes the user flagged.
+    scene_overrides = {}
+    for ov in (job.get("scene_overrides") or []):
+        try:
+            scene_overrides[int(ov.get("idx"))] = {
+                "freeze_end": bool(ov.get("freeze_end", False)),
+            }
+        except (TypeError, ValueError):
+            continue
+
     async def normalize_scene(slot: int, idx: int, url: str):
         this_dur = per_dur_ms_list[slot]
         kind = scene_kind[idx]
+        override = scene_overrides.get(idx) or {}
         if kind == "ai":
             # `flux_static` is the explicit opt-out: stills + cheap ken-burns
             # (no Kling i2v cost). Default `flux` upgrades to real AI motion
@@ -3103,7 +3137,10 @@ async def _run_render_faceless(job: dict):
                 scene_prompts[idx], job["aspect"], this_dur, ai_engine, idx,
             )
         else:
-            mp4 = await _trim_stock_video(url, job["aspect"], this_dur, idx)
+            mp4 = await _trim_stock_video(
+                url, job["aspect"], this_dur, idx,
+                freeze_end=override.get("freeze_end", False),
+            )
         if mp4:
             return (idx, mp4, "video", this_dur)
         # ffmpeg/upload failed — drop the scene so we keep the track uniform.
@@ -3682,6 +3719,152 @@ async def studio_render_delete(job_id: str, user: AuthUser = Depends(current_use
         "prior_status": doc["status"],
     })
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Timeline Editor MVP (Iter 60, v1.20.0)
+# ---------------------------------------------------------------------------
+# Ships the smallest slice of Charity's scene-timeline vision that actually
+# fixes the "Pexels clip loops behind a longer voiceover" complaint:
+#   1. GET  /studio/timeline/{job_id}      — per-scene analysis for the modal.
+#   2. POST /studio/timeline/{job_id}/rerender — clone parent inputs, layer
+#      user's scene_overrides (freeze_end per scene), kick a fresh render.
+#
+# v2 will add per-scene duration overrides + drag handles + audio waveform
+# for exact TTS alignment. For now: freeze-instead-of-loop toggle per scene
+# is enough to make current stock-clip renders watchable end-to-end.
+# ---------------------------------------------------------------------------
+@api.get("/studio/timeline/{job_id}")
+async def studio_timeline_get(job_id: str, user: AuthUser = Depends(current_user)):
+    require_studio(user)
+    doc = await db.renders.find_one({"id": job_id, "user_email": user.email})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Not found")
+    if doc.get("mode") != "faceless":
+        raise HTTPException(status_code=400, detail="Timeline editor is only available for Faceless renders")
+    if doc.get("status") != "complete":
+        raise HTTPException(status_code=400, detail="Timeline editor is only available for completed renders")
+
+    scenes_in = doc.get("scenes") or []
+    overrides_by_idx = {}
+    for ov in (doc.get("scene_overrides") or []):
+        try:
+            overrides_by_idx[int(ov.get("idx"))] = ov
+        except (TypeError, ValueError):
+            continue
+
+    # Best-effort per-scene duration estimate. The renderer allocates time
+    # proportional to each beat's word count, so we mirror that math here
+    # without re-running Kokoro. Not exact — real TTS-per-sentence lands in v2.
+    total_words = sum(int(s.get("weight") or 1) for s in scenes_in) or 1
+    total_est_sec = total_words / 155.0 * 60.0  # ~155 wpm Kokoro
+    scenes_out = []
+    for i, s in enumerate(scenes_in):
+        w = max(1, int(s.get("weight") or 1))
+        allocated_sec = round(total_est_sec * (w / total_words), 2)
+        ov = overrides_by_idx.get(i) or {}
+        scenes_out.append({
+            "idx": i,
+            "prompt": s.get("prompt") or "",
+            "search_query": s.get("search_query") or "",
+            "source": s.get("source") or doc.get("broll_source") or "pexels",
+            "video_url": s.get("video_url") or s.get("url") or None,
+            "weight": w,
+            "allocated_sec": allocated_sec,
+            "freeze_end": bool(ov.get("freeze_end", False)),
+        })
+    return {
+        "job_id": job_id,
+        "aspect": doc.get("aspect"),
+        "captions": doc.get("captions"),
+        "caption_style": doc.get("caption_style"),
+        "caption_position": doc.get("caption_position"),
+        "broll_source": doc.get("broll_source"),
+        "ai_engine": doc.get("ai_engine"),
+        "total_est_sec": round(total_est_sec, 2),
+        "result_url": doc.get("result_url"),
+        "scenes": scenes_out,
+    }
+
+
+class TimelineOverride(BaseModel):
+    idx: int
+    freeze_end: bool = False
+
+
+class TimelineRerenderRequest(BaseModel):
+    scene_overrides: list[TimelineOverride] = Field(default_factory=list)
+
+
+@api.post("/studio/timeline/{job_id}/rerender")
+async def studio_timeline_rerender(
+    job_id: str,
+    payload: TimelineRerenderRequest,
+    user: AuthUser = Depends(current_user),
+):
+    """Clone the parent render's inputs, layer the user's per-scene overrides
+    (freeze_end for MVP), kick off a fresh render, return the new job_id."""
+    require_studio(user)
+    parent = await db.renders.find_one({"id": job_id, "user_email": user.email})
+    if not parent:
+        raise HTTPException(status_code=404, detail="Not found")
+    if parent.get("mode") != "faceless":
+        raise HTTPException(status_code=400, detail="Timeline editor is only available for Faceless renders")
+
+    overrides_list = [{"idx": ov.idx, "freeze_end": ov.freeze_end} for ov in payload.scene_overrides]
+
+    estimated_cents = int(parent.get("estimated_cost_cents") or 0) or 30
+    if estimated_cents > RENDER_COST_CIRCUIT_BREAKER_CENTS:
+        raise HTTPException(status_code=400, detail="Render configuration is too large. Please contact support.")
+
+    _quota_snapshot = await _quota_gate_or_402(
+        email=user.email,
+        mode="faceless",
+        estimated_cents=estimated_cents,
+    )
+
+    new_job_id = str(uuid.uuid4())
+    doc = {
+        "id": new_job_id,
+        "user_email": user.email,
+        "user_entitlements": list(getattr(user, "entitlements", []) or []),
+        "user_is_admin": bool(getattr(user, "is_admin", False)),
+        "mode": "faceless",
+        "aspect": parent.get("aspect"),
+        "captions": parent.get("captions"),
+        "script": parent.get("script"),
+        "avatar_id": parent.get("avatar_id"),
+        "voice_id": parent.get("voice_id"),
+        "tts_voice_id": parent.get("tts_voice_id"),
+        "broll_source": parent.get("broll_source"),
+        "scenes": parent.get("scenes") or [],
+        "scene_overrides": overrides_list,
+        "ai_engine": parent.get("ai_engine"),
+        "broll_cutaway_interval_s": parent.get("broll_cutaway_interval_s"),
+        "caption_style": parent.get("caption_style"),
+        "caption_position": parent.get("caption_position"),
+        "user_voiceover_url": parent.get("user_voiceover_url"),
+        "parent_job_id": job_id,
+        "status": "queued",
+        "progress": 5,
+        "progress_label": "Queued (timeline re-render)…",
+        "result_url": None,
+        "error": None,
+        "estimated_cost_cents": estimated_cents,
+        "actual_cost_cents": 0,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.renders.insert_one(doc)
+    asyncio.create_task(_run_render_faceless(new_job_id))
+    await _log_activity("studio_timeline_rerender", user.email, {
+        "parent_job_id": job_id,
+        "new_job_id": new_job_id,
+        "override_count": len(overrides_list),
+        "frozen_scenes": sum(1 for ov in overrides_list if ov["freeze_end"]),
+    })
+    return {"job_id": new_job_id, "status": "queued"}
+
 
 
 class BulkDeleteRequest(BaseModel):

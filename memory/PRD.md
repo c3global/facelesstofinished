@@ -20,6 +20,56 @@ back to it for entitlement verification.
 
 ## 🔁 Workflow rule: Changelog moves with every change (set 2026-06-29 by user)
 
+### Iteration 60 (2026-08-03) — Scene Timeline Editor MVP (v1.20.0)
+
+**Trigger:** Charity: *"Okay...let's see what it would look like and please make sure it's functional!"* — after previewing the mockup she asked me to actually build a working version.
+
+**Scope decision (deliberate):** Ship the smallest slice that fixes the real problem she reported (Pexels/Pixabay B-roll clip loops behind a longer voiceover). Skip the drag-slider + waveform for v2 — those need real per-sentence TTS timing which we don't have plumbed yet. What ships in v1.20.0:
+
+**Backend (server.py):**
+1. `_trim_stock_video` gets a new `freeze_end: bool = False` kwarg. When True, uses ffmpeg's `tpad=stop_mode=clone:stop_duration=…` filter to freeze the last source frame instead of `-stream_loop -1`. Default False preserves every existing render + regenerate path unchanged.
+2. `normalize_scene` inside `_run_render_faceless` now reads `job.scene_overrides` (a list of `{idx, freeze_end}`) and passes `freeze_end=True` to `_trim_stock_video` for the matching indices.
+3. New endpoints:
+   - `GET /api/studio/timeline/{job_id}` — returns per-scene analysis for the modal (prompt, search_query, source, allocated_sec, freeze_end). Estimates per-scene duration from beat weight × 155 wpm Kokoro cadence (real TTS-per-sentence is v2). Gated to completed Faceless renders owned by the caller.
+   - `POST /api/studio/timeline/{job_id}/rerender` — clones the parent render's inputs, layers the user's `scene_overrides`, kicks off a fresh render via `_run_render_faceless(new_job_id)`. Reuses parent's `estimated_cost_cents`, quota-gates like a normal render.
+4. Both endpoints logged to activity feed (`studio_timeline_rerender` action).
+
+**Frontend:**
+1. New component `/app/frontend/src/components/TimelineModal.jsx` — full modal UI:
+   - Fetches `/studio/timeline/{jobId}` on open, seeds local overrides from any pre-existing freeze_end state.
+   - Grid of scene cards showing thumbnail (from `s.video_url`), allocated duration, prompt, and a per-scene "Freeze on last frame" toggle.
+   - "Freeze all scenes" + "Reset all" mass-toggle helpers.
+   - Footer with change counter + "Re-render with fixes" button (disabled when no changes).
+   - On submit: POST to `/rerender`, close modal, toast the parent Studio, reload history.
+2. `Studio.jsx` — added `Clock` icon import, `TimelineModal` import, `timelineJobId` state, `⏱ Timeline` icon button on completed Faceless history rows only, and modal rendered at the bottom of the tree with `onRerenderQueued` callback that toasts + reloads history.
+3. `App.css` — added ~200 lines of scoped timeline modal styling (`.timeline-*`). Toggle switches, scene grid, freeze-chip badges, primary/ghost buttons — all themed via existing `--accent` / `--success` / `--muted` variables so both dark + light themes flip cleanly.
+4. `changelog.js` v1.20.0 — one bumper customer-facing bullet with the ⏱ icon.
+
+**Data model change (backwards-compatible):**
+- `db.renders` docs may now carry `scene_overrides: [{idx: int, freeze_end: bool}]` and `parent_job_id: str`. Absent on all pre-1.20 renders — treated as empty list. No migration needed.
+
+**Files touched:**
+- `/app/backend/server.py` — `_trim_stock_video` sig, `normalize_scene` override read, 2 new endpoints (~110 LOC added).
+- `/app/frontend/src/components/TimelineModal.jsx` — new component (~250 LOC).
+- `/app/frontend/src/pages/Studio.jsx` — lucide `Clock` import, `TimelineModal` import + render, `timelineJobId` state, history row button (~15 LOC diff).
+- `/app/frontend/src/App.css` — timeline modal styles (~200 LOC added).
+- `/app/frontend/src/changelog.js` — v1.20.0 entry.
+
+**Verified:**
+- Python + JS lint clean ✓
+- `curl GET /api/studio/timeline/nonexistent` → 404 "Not found" (auth-gated 404, not 401) ✓
+- `curl POST /api/studio/timeline/nonexistent/rerender` → 404 "Not found" ✓
+- Backend hot-reloaded cleanly, frontend webpack compiled successfully ✓
+- Real full-render regression: PENDING user re-test — needs Charity to run a Faceless render then click the ⏱ button.
+
+**v2 backlog (deferred, in order):**
+- Per-scene duration override (drag handle to trim/extend beyond allocated)
+- Actual TTS-per-sentence timing (measure Kokoro output offline via ffprobe)
+- Waveform strip showing voiceover audio + scene boundaries
+- Per-scene "add 0.3s pause" + "replace this clip" actions from the mockup
+- Auto-detect looping: compare source clip ffprobe duration vs allocated → auto-suggest freeze_end=True
+
+
 ### Iteration 59 (2026-07-02, night) — Anthropic 529 auto-retry / kill the Cloudflare 520 cascade (v1.19.8)
 
 **Trigger:** Charity: *"I have a client who continues to receive an error message... it said 'the script engine is busy'"* + Cloudflare 520 screenshot on production `faceless48.c3global.co/scripts`. Confirmed via her Universal Key balance (84.42 credits, auto-recharge on) — NOT a budget issue. Root cause: Anthropic 529 "Overloaded" errors hit Claude at peak US hours, and one bad response cascaded straight through to a Cloudflare 520 with no retry.

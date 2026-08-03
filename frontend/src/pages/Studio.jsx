@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { UserCircle2, Mic, Ratio, Film, ChevronDown, Play, Trash2, Sparkles, Wand2, Loader2, RotateCw, Cpu, FolderOpen, Image as ImageIcon, Check, Captions, CaptionsOff } from "lucide-react";
+import { UserCircle2, Mic, Ratio, Film, ChevronDown, Play, Trash2, Sparkles, Wand2, Loader2, RotateCw, Cpu, FolderOpen, Image as ImageIcon, Check, Captions, CaptionsOff, Clock } from "lucide-react";
 import { apiClient, useAuth } from "../App";
 import {
   AvatarPicker,
@@ -14,6 +14,7 @@ import ModePicker, { COMPOSITE_TOAST } from "../components/ModePicker";
 import MediaLibrary from "../components/MediaLibrary";
 import Toast from "../components/Toast";
 import StudioQuotaPill from "../components/StudioQuotaPill";
+import TimelineModal from "../components/TimelineModal";
 
 const MODES = { AVATAR: "avatar", FACELESS: "faceless" };
 // HeyGen's API caps script text at exactly 5,000 characters on BOTH v3
@@ -259,6 +260,7 @@ export default function Studio() {
   // URL in a new tab shows a blank file2.heygen.ai page (signed URL + the
   // browser can't render the bare MP4 inline). Keeping playback in-app.
   const [playerModal, setPlayerModal] = useState(null);  // {url, aspect} | null
+  const [timelineJobId, setTimelineJobId] = useState(null);  // Iter 60: timeline editor modal
   // Per-row selection for bulk-delete in the Recent renders list.
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const toggleSelected = (id) => {
@@ -1589,6 +1591,17 @@ export default function Studio() {
                       <Play size={14} />
                     </button>
                   )}
+                  {r.status === "complete" && r.result_url && r.mode === "faceless" && (
+                    <button
+                      className="icon-btn"
+                      data-testid={`history-timeline-${r.id}`}
+                      onClick={() => setTimelineJobId(r.id)}
+                      aria-label="Timeline editor"
+                      title="Fix looping B-roll on this render"
+                    >
+                      <Clock size={14} />
+                    </button>
+                  )}
                   {(r.status === "complete" || r.status === "failed") && (
                     <button
                       className="icon-btn"
@@ -1735,6 +1748,20 @@ export default function Studio() {
       )}
 
       <Toast message={toast} onDismiss={() => setToast("")} />
+
+      {/* Iter 60 — Timeline editor modal for fixing looping B-roll on
+          completed Faceless renders. Opens from the ⏱ button on history rows. */}
+      <TimelineModal
+        open={!!timelineJobId}
+        jobId={timelineJobId}
+        onClose={() => setTimelineJobId(null)}
+        onRerenderQueued={(newJobId) => {
+          setTimelineJobId(null);
+          setToast("Timeline re-render queued — watch history for the new job.");
+          // Refresh history so the new render row appears immediately.
+          if (typeof loadHistory === "function") loadHistory();
+        }}
+      />
     </main>
   );
 }
