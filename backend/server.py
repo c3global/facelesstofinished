@@ -333,6 +333,13 @@ class RenderRequest(BaseModel):
     # step at the end of the faceless pipeline.
     caption_style: str = "boxed"
     caption_position: str = "bottom"
+    # v1.20.1 (Iter 61): when true and mode=faceless, all stock scenes freeze
+    # on the last frame instead of looping. Charity's follow-up to the
+    # Timeline Editor MVP — she wants freeze-behavior to be a first-class
+    # render setting so buyers don't have to timeline-edit every render.
+    # Applied by the render endpoint before insert (synthesizes a
+    # scene_overrides list covering every scene). Ignored in Avatar mode.
+    auto_freeze_broll: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -3358,6 +3365,16 @@ async def studio_render(payload: RenderRequest, user: AuthUser = Depends(current
         # skips Kokoro TTS entirely and uses this audio as the voiceover.
         # See _run_render_faceless line ~1771 for the override branch.
         "user_voiceover_url": payload.user_voiceover_url,
+        # v1.20.1: auto_freeze_broll=True → synthesize per-scene freeze_end
+        # overrides so every stock scene freezes on last frame instead of
+        # looping. Applied here so the existing _run_render_faceless scene
+        # normalizer picks them up without a second code path.
+        "scene_overrides": (
+            [{"idx": i, "freeze_end": True} for i in range(len(payload.scenes))]
+            if payload.mode == "faceless" and payload.auto_freeze_broll and payload.scenes
+            else []
+        ),
+        "auto_freeze_broll": bool(payload.auto_freeze_broll),
         "status": "queued",
         "progress": 5,
         "progress_label": "Queued…",
@@ -3654,6 +3671,15 @@ async def studio_render_both_aspects(payload: RenderRequest, user: AuthUser = De
             "caption_style": per_payload.caption_style,
             "caption_position": per_payload.caption_position,
             "user_voiceover_url": per_payload.user_voiceover_url,
+            # v1.20.1 mirror of the single-render endpoint: expand auto_freeze
+            # into per-scene freeze_end overrides so both 9:16 + 16:9 renders
+            # respect the toggle when Charity fires from "Render both aspects".
+            "scene_overrides": (
+                [{"idx": i, "freeze_end": True} for i in range(len(per_payload.scenes))]
+                if per_payload.mode == "faceless" and per_payload.auto_freeze_broll and per_payload.scenes
+                else []
+            ),
+            "auto_freeze_broll": bool(per_payload.auto_freeze_broll),
             "status": "queued",
             "progress": 5,
             "progress_label": "Queued…",

@@ -972,6 +972,53 @@
 
 /* ---------- Generate CTA ---------- */
 .cta-block { padding-top: 8px; display: flex; flex-direction: column; gap: 10px; }
+
+/* Iter 61 — Faceless "Freeze looping B-roll" toggle above the render CTA.
+   Sits inside .cta-block so it inherits the render-form padding; borrows
+   the .timeline-toggle-* switch pattern for consistency with the modal. */
+.cta-freeze-toggle {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(139, 92, 246, 0.05);
+  cursor: pointer;
+  position: relative;
+  transition: border-color 0.14s, background 0.14s;
+}
+.cta-freeze-toggle:hover { border-color: rgba(139, 92, 246, 0.5); }
+.cta-freeze-toggle input[type="checkbox"] {
+  position: absolute; opacity: 0; pointer-events: none;
+}
+.cta-freeze-track {
+  flex-shrink: 0;
+  width: 34px; height: 20px;
+  border-radius: 999px;
+  background: var(--border);
+  position: relative;
+  transition: background 0.15s;
+}
+.cta-freeze-dot {
+  position: absolute; top: 2px; left: 2px;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: #fff;
+  transition: left 0.16s;
+}
+.cta-freeze-toggle input:checked ~ .cta-freeze-track {
+  background: var(--accent, #8b5cf6);
+}
+.cta-freeze-toggle input:checked ~ .cta-freeze-track .cta-freeze-dot { left: 16px; }
+.cta-freeze-label {
+  display: flex; flex-direction: column; gap: 2px; flex: 1;
+  font-size: 13px; line-height: 1.4;
+}
+.cta-freeze-label b { font-weight: 600; }
+.cta-freeze-label span:last-child {
+  font-size: 12px; color: var(--muted);
+}
+
 .cta-btn {
   width: 100%;
   padding: 18px 24px;

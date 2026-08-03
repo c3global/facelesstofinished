@@ -20,6 +20,41 @@ back to it for entitlement verification.
 
 ## 🔁 Workflow rule: Changelog moves with every change (set 2026-06-29 by user)
 
+### Iteration 61 (2026-08-03) — Freeze looping B-roll toggle (v1.20.1) + Canva scoping
+
+**Trigger:** Charity: *"Yes you can add it but also, let's find a way to integrate canva so b-roll can come from the elements tab, or their own designs, etc."*
+
+**Ask 1: Auto-freeze toggle (SHIPPED)**
+- `RenderRequest.auto_freeze_broll: bool = False` field.
+- `POST /studio/render` + `POST /studio/render/both-aspects`: when `mode=faceless` AND `auto_freeze_broll=True` AND scenes non-empty → synthesize `scene_overrides = [{idx: i, freeze_end: true}] for i in range(len(scenes))`. Renderer's existing `normalize_scene` picks these up unchanged (no new code path).
+- Frontend `Studio.jsx`: `autoFreezeBroll` state persisted in `localStorage["f48_auto_freeze_broll"]`. Faceless-only toggle above the "Render your video" CTA with copy "Freeze looping B-roll — Hold the last frame instead of repeating the clip". Sends `auto_freeze_broll` in the render payload.
+- `App.css`: new `.cta-freeze-toggle` / `.cta-freeze-track` / `.cta-freeze-dot` classes matching the timeline modal's toggle pattern.
+- `changelog.js` v1.20.1 with one customer-facing bullet.
+- **Verified live**: Playwright confirmed toggle renders, click flips state, localStorage persists.
+
+**Ask 2: Canva integration (SCOPED, NOT YET BUILT)**
+
+Called `integration_playbook_expert_v2` with the full requirements. **Hard limit surfaced:** Canva Connect API DOES NOT expose Elements-library search. Their public docs explicitly distinguish user-uploaded assets (`asset:read` scope — supported) from built-in Elements/stock content (only available inside a Canva Apps SDK app that runs INSIDE Canva). So Charity's "elements tab" ask cannot be fulfilled via the Connect API path.
+
+Three real options:
+1. **Connect API scaffold** (build now, works when Charity registers a Canva Developer app):
+   - OAuth2 flow + PKCE → get user access token
+   - `design:meta:read` + `design:content:read` → list + PNG-export user's OWN designs
+   - `asset:read` + `folder:read` → list user's uploaded assets
+   - Requires Charity to: register at canva.com/developers, create a Public integration, submit for review (1-2 weeks), then paste `CANVA_CLIENT_ID` + `CANVA_CLIENT_SECRET` into `.env`
+   - Delivers "import your Canva designs as static B-roll images" but NOT Elements search
+2. **Apps SDK approach** (build a separate Canva-embedded app that pushes to F2F48): Different project entirely — a Canva app that users install inside Canva. Elements search WORKS in that context. But it's a totally separate deployment target.
+3. **Keep Canva on the roadmap** and skip both for now — build something else higher-impact.
+
+**Awaiting Charity's decision** before writing Canva code. Option 1 is the pragmatic path IF she can get through Canva's review process. Elements search is impossible via Connect API — that's Canva's rule, not something we can code around.
+
+**Files touched (this iteration):**
+- `/app/backend/server.py` — `RenderRequest.auto_freeze_broll` field + expansion into `scene_overrides` in both `studio_render` + `studio_render_both_aspects`.
+- `/app/frontend/src/pages/Studio.jsx` — `autoFreezeBroll` state + localStorage persistence + toggle UI + payload wiring.
+- `/app/frontend/src/App.css` — `.cta-freeze-toggle` styles.
+- `/app/frontend/src/changelog.js` — v1.20.1.
+
+
 ### Iteration 60 (2026-08-03) — Scene Timeline Editor MVP (v1.20.0)
 
 **Trigger:** Charity: *"Okay...let's see what it would look like and please make sure it's functional!"* — after previewing the mockup she asked me to actually build a working version.

@@ -215,6 +215,18 @@ export default function Studio() {
   // and uses this audio file as the voiceover track.
   const [userVoiceoverUrl, setUserVoiceoverUrl] = useState(null);
   const [brollSource, setBrollSource] = useState("pexels"); // global default
+  // v1.20.1 (Iter 61) — auto-freeze all looping B-roll on every new render.
+  // Charity's follow-up to Timeline Editor MVP: she wants freeze-behavior
+  // baked in from the first render for buyers who work with stock defaults.
+  // Persisted in localStorage so the setting survives reloads.
+  const [autoFreezeBroll, setAutoFreezeBroll] = useState(() => {
+    try { return localStorage.getItem("f48_auto_freeze_broll") === "1"; }
+    catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("f48_auto_freeze_broll", autoFreezeBroll ? "1" : "0"); }
+    catch { /* ignored */ }
+  }, [autoFreezeBroll]);
   // AI text-to-video engine for AI-sourced scenes. Default "flux" keeps the
   // existing Ken-Burns slideshow behaviour; "kling" / "veo3" / "pika" generate
   // real motion video clips per scene. Only relevant when at least one scene
@@ -455,6 +467,8 @@ export default function Studio() {
       // natural voiceover pauses. Omitted when scenes were hand-edited.
       ...(s.weight ? { weight: s.weight } : {}),
     })) : [],
+    // v1.20.1 — Faceless-only auto-freeze. Backend expands to scene_overrides.
+    auto_freeze_broll: mode === MODES.FACELESS ? autoFreezeBroll : false,
   });
 
   // ---- Generate ----
@@ -1306,6 +1320,21 @@ export default function Studio() {
 
       {/* Generate */}
       <div className="cta-block">
+        {mode === MODES.FACELESS && (
+          <label className="cta-freeze-toggle" data-testid="cta-auto-freeze">
+            <input
+              type="checkbox"
+              checked={autoFreezeBroll}
+              onChange={(e) => setAutoFreezeBroll(e.target.checked)}
+              data-testid="cta-auto-freeze-input"
+            />
+            <span className="cta-freeze-track" aria-hidden><span className="cta-freeze-dot" /></span>
+            <span className="cta-freeze-label">
+              <b>Freeze looping B-roll</b>
+              <span>Hold the last frame instead of repeating the clip — cleaner look for stock scenes</span>
+            </span>
+          </label>
+        )}
         <button
           className="cta-btn"
           data-testid="generate-btn"

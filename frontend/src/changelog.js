@@ -14,9 +14,16 @@
 //    See PRD.md → "Workflow rule: changelog must move with every deploy."
 // 4. Most recent on top. Each entry has version + date + bullet list.
 
-export const APP_VERSION = "1.20.0";
+export const APP_VERSION = "1.20.1";
 
 export const CHANGELOG = [
+  {
+    version: "1.20.1",
+    date: "2026-08-03",
+    changes: [
+      "New 'Freeze looping B-roll' toggle above the Faceless render button — flip it once and every future render will hold the last frame instead of looping short stock clips. No more Timeline editor round-trip for every video",
+    ],
+  },
   {
     version: "1.20.0",
     date: "2026-08-03",
