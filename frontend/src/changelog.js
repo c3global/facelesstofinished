@@ -14,9 +14,16 @@
 //    See PRD.md → "Workflow rule: changelog must move with every deploy."
 // 4. Most recent on top. Each entry has version + date + bullet list.
 
-export const APP_VERSION = "1.20.2";
+export const APP_VERSION = "1.20.3";
 
 export const CHANGELOG = [
+  {
+    version: "1.20.3",
+    date: "2026-08-10",
+    changes: [
+      "🐛 Faceless renders now show real per-scene progress during the 'Adding motion to scenes' phase (previously stuck at a static 55% for the whole phase). You'll see 'Scene 3 of 8 done…' as each one completes, so you know it's alive",
+    ],
+  },
   {
     version: "1.20.2",
     date: "2026-08-10",

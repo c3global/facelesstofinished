@@ -20,6 +20,31 @@ back to it for entitlement verification.
 
 ## 🔁 Workflow rule: Changelog moves with every change (set 2026-06-29 by user)
 
+### Iteration 63 (2026-08-10) — Per-scene progress inside the 55% phase (v1.20.3)
+
+**Trigger:** Charity redeployed v1.20.2 and immediately reported "still showing 55% — this is not okay." Diagnostic realization: 55% is a STATIC value during the entire `normalize_scene` gather phase, which can take 60s–8min depending on scene type. Even when the render is working correctly, the progress bar sits at 55% until the gather completes. There was no way for the user (or Charity) to distinguish "stuck" from "still working."
+
+Additionally, the render Charity was watching might have been queued BEFORE the deploy, so it was still executing on old v1.20.1 code with the infinite-hang bug — the deploy only fixes NEW renders started after it.
+
+**Fix:**
+- `_run_render_faceless` now increments progress inside the `normalize_scene` gather. Each scene completing (success OR timeout OR failure) increments a shared counter behind an `asyncio.Lock` and calls `_set_progress(pct, "Adding motion to scenes (N of M)…")`. Progress climbs from 55% up to 68% across the gather.
+- User now sees "Adding motion to scenes (3 of 8)…" instead of a silent 55% for 3+ minutes.
+- Also serves as a live diagnostic — if progress stops incrementing after N scenes, you know exactly how many succeeded before the stall.
+
+**Files touched:**
+- `/app/backend/server.py` — `_run_render_faceless` normalize phase: added `n_normalize`, `normalize_completed`, `normalize_lock`, `_mark_scene_done()` helper. Called from both timeout + success/fail return paths in `normalize_scene`.
+- `/app/frontend/src/changelog.js` — v1.20.3.
+
+**Charity's action items (production):**
+1. Delete the currently-stuck render from history (it was probably started before the v1.20.2 deploy, still running old code).
+2. After she redeploys v1.20.3, start a NEW render. Watch progress — should tick "1 of N", "2 of N", etc. during what used to be static 55%.
+3. If she still sees a static number for > 8 minutes on a new render, that's the real hang and we need to dig further. But the incremental progress will tell us exactly which scene is stuck.
+
+**Not yet fixed (backlog):**
+- The v1.20.2 fix is deployed to production; v1.20.3 progress fix is only on preview. Charity needs another redeploy for the progress feedback.
+- We still have no ability to inspect production render logs from preview — reliant on Charity's testing signal.
+
+
 ### Iteration 62 (2026-08-10) — Two production bugs fixed for paying clients (v1.20.2)
 
 **Trigger:** Charity forwarded bug reports from two paying Studio-tier clients:

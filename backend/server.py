@@ -3142,7 +3142,8 @@ async def _run_render_faceless(job: dict):
     # keyframe `duration` for video keyframes and plays the source at native
     # length — that's why earlier 6-Pexels renders came out 115 seconds long
     # for a 16-second voiceover. ---
-    await _set_progress(55, "Adding motion to scenes…")
+    n_normalize = len(surviving)
+    await _set_progress(55, f"Adding motion to scenes (0 of {n_normalize})…")
 
     # v1.20.0 (Iter 60): if the job doc carries a `scene_overrides` list
     # (from the Timeline Editor re-render endpoint), build a per-scene
@@ -3156,6 +3157,26 @@ async def _run_render_faceless(job: dict):
             }
         except (TypeError, ValueError):
             continue
+
+    # v1.20.3 (Iter 63): per-scene progress inside the normalize gather.
+    # Historically 55% was a STATIC value during the entire "Adding motion"
+    # phase (which can take 60s-8min depending on scene type) — users saw
+    # a frozen progress bar and assumed the render was stuck (Charity
+    # reported this repeatedly). Now we increment progress AS scenes
+    # complete, going from 55% up to 68% over the gather so the UI is
+    # never silent for more than a scene's worth of time.
+    normalize_completed = 0
+    normalize_lock = asyncio.Lock()
+
+    async def _mark_scene_done():
+        nonlocal normalize_completed
+        async with normalize_lock:
+            normalize_completed += 1
+            pct = 55 + int(round((normalize_completed / max(1, n_normalize)) * 13))
+            await _set_progress(
+                pct,
+                f"Adding motion to scenes ({normalize_completed} of {n_normalize})…",
+            )
 
     async def normalize_scene(slot: int, idx: int, url: str):
         # v1.20.2: per-scene hard timeout guard. Without this, one hung
@@ -3207,7 +3228,9 @@ async def _run_render_faceless(job: dict):
                 f"[normalize_scene] scene {idx} timed out after {per_scene_timeout}s "
                 f"(kind={kind}) — dropping scene so gather can complete"
             )
+            await _mark_scene_done()
             return None
+        await _mark_scene_done()
         if mp4:
             return (idx, mp4, "video", this_dur)
         # ffmpeg/upload failed — drop the scene so we keep the track uniform.
