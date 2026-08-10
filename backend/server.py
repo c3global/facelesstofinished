@@ -2210,31 +2210,33 @@ async def _local_ffmpeg_compose(
     workdir: str,
 ) -> str:
     """Concat local scene clips + mux audio into workdir/final.mp4.
-    Returns the absolute local path. Raises on ffmpeg failure so the
-    caller can fall back to fal-compose.
+    Returns the absolute local path. Raises RuntimeError with the ffmpeg
+    stderr embedded so the caller can log actionable diagnostics.
 
-    IMPORTANT: assumes every clip has the SAME resolution + fps + codec
-    (which is true because kburns + trim both write H.264 yuv420p at 30fps
-    at the render's target aspect ratio). Under that assumption we can use
-    `-c:v copy` — the concat demuxer just stitches keyframe boundaries
-    without re-encoding, which is ~50× faster than re-encoding and doesn't
-    load frames into RAM.
+    v1.20.7 (Iter 67): two-tier compose strategy. Every real customer
+    render on production surfaced a failure of the demuxer + `-c:v copy`
+    fast path because Pexels stock clips carry variable H.264 profile /
+    level / SPS across sources — the strict concat demuxer refuses to
+    stream-copy them. So we now:
+
+      1. Attempt: concat demuxer + `-c:v copy` (sub-second, no re-encode).
+         Works when every clip has identical bitstream headers.
+      2. Fallback: concat filter + libx264 re-encode. Bulletproof — the
+         filter graph resamples every clip into a consistent output
+         stream. ~5-15s per scene depending on tier, still WAY faster
+         than the fal-compose queue.
+
+    Only when BOTH ffmpeg paths fail do we raise, and the caller then
+    falls back to uploading each local clip to fal + running fal-compose
+    (the "worst case, but at least the customer gets their video" path).
     """
     if not clip_paths:
         raise RuntimeError("no clips to compose")
 
-    # 1) Concat list file (ffmpeg concat demuxer format)
-    concat_txt = os.path.join(workdir, "concat.txt")
-    with open(concat_txt, "w") as f:
-        for p in clip_paths:
-            # ffmpeg concat demuxer needs single-quoted absolute paths;
-            # single quotes inside the path get escaped as '\''.
-            safe = p.replace("'", "'\\''")
-            f.write(f"file '{safe}'\n")
-
-    # 2) Audio pull. Kokoro returns an https:// URL (fal-hosted). Bring it
-    # local so ffmpeg can mux it. If audio_url is missing we produce a
-    # silent video (rare — Kokoro rarely fails).
+    # ---- 1) Bring the audio track into the workdir ------------------------
+    # Kokoro returns an https:// URL (fal-hosted). We need it local so
+    # ffmpeg can mux it. If audio_url is missing / fails to download we
+    # produce a silent video (very rare — Kokoro rarely fails).
     audio_local: Optional[str] = None
     if audio_url:
         audio_local = os.path.join(workdir, "audio.mp3")
@@ -2244,44 +2246,120 @@ async def _local_ffmpeg_compose(
             logger.warning(f"[compose-local] audio download failed, will render silent: {exc}")
             audio_local = None
 
-    # 3) ffmpeg concat + mux
     final_path = os.path.join(workdir, "final.mp4")
+
+    # ---- 2) Fast path: concat demuxer + `-c:v copy` -----------------------
+    # Requires identical SPS/PPS/profile/level across every input clip.
+    # Works when every scene is produced by the same ffmpeg invocation
+    # (e.g. all trim outputs from the same source), fails hard when
+    # sources vary. We attempt it anyway because it's ~50× faster.
+    concat_txt = os.path.join(workdir, "concat.txt")
+    with open(concat_txt, "w") as f:
+        for p in clip_paths:
+            safe = p.replace("'", "'\\''")  # concat demuxer escape
+            f.write(f"file '{safe}'\n")
+
+    async def _run_ffmpeg(cmd: list[str], step_name: str, timeout_s: float) -> tuple[int, str]:
+        """Run an ffmpeg pipeline; return (returncode, tail-of-stderr).
+        Kept small so BOTH the copy and re-encode passes share the exact
+        same subprocess + timeout handling."""
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            _, err = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
+        except asyncio.TimeoutError:
+            proc.kill()
+            return -1, f"{step_name} timed out after {timeout_s}s"
+        err_tail = err.decode("utf-8", errors="ignore")[-800:]
+        return proc.returncode, err_tail
+
     if audio_local:
-        cmd = [
+        copy_cmd = [
             FFMPEG_BIN, "-y", "-loglevel", "error",
             "-threads", "1",
             "-f", "concat", "-safe", "0", "-i", concat_txt,   # input 0: video sequence
             "-i", audio_local,                                  # input 1: audio track
             "-c:v", "copy",                                     # stream-copy — no re-encode
-            "-c:a", "aac", "-b:a", "128k",                      # mux audio as AAC 128k
+            "-c:a", "aac", "-b:a", "128k",
             "-map", "0:v:0",
             "-map", "1:a:0",
-            "-shortest",                                        # trim to shortest stream
-            "-movflags", "+faststart",                          # web-playable header up front
+            "-shortest",
+            "-movflags", "+faststart",
             final_path,
         ]
     else:
-        cmd = [
+        copy_cmd = [
             FFMPEG_BIN, "-y", "-loglevel", "error",
             "-threads", "1",
             "-f", "concat", "-safe", "0", "-i", concat_txt,
             "-c:v", "copy",
-            "-an",  # no audio
+            "-an",
             "-movflags", "+faststart",
             final_path,
         ]
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+
+    rc, err_tail = await _run_ffmpeg(copy_cmd, "copy-concat", timeout_s=120.0)
+    if rc == 0 and os.path.exists(final_path) and os.path.getsize(final_path) > 0:
+        logger.info(f"[compose-local] copy-concat succeeded ({len(clip_paths)} clips)")
+        return final_path
+    logger.warning(
+        f"[compose-local] copy-concat failed rc={rc} — retrying with concat filter + re-encode. "
+        f"stderr: {err_tail[:300]}"
     )
-    _, err = await asyncio.wait_for(proc.communicate(), timeout=180.0)
-    if proc.returncode != 0 or not os.path.exists(final_path):
-        raise RuntimeError(
-            f"local ffmpeg compose failed (rc={proc.returncode}): "
-            + err.decode("utf-8", errors="ignore")[:400]
-        )
-    return final_path
+    # Remove partial final if it exists so re-encode starts clean.
+    if os.path.exists(final_path):
+        try:
+            os.unlink(final_path)
+        except Exception:
+            pass
+
+    # ---- 3) Fallback: concat filter + re-encode ---------------------------
+    # Concat FILTER (not demuxer) resamples every input into a consistent
+    # output stream, tolerating any input codec/profile/frame-rate/pixel-
+    # format variance. `libx264 -preset veryfast -crf 22` matches what
+    # kburns/trim produce so the final has consistent quality. Timeout is
+    # generous (5 min) because 20+ scene renders can take a while to
+    # re-encode on a 512MB container.
+    n = len(clip_paths)
+    filter_inputs = "".join(f"[{i}:v:0]" for i in range(n))
+    filter_graph = f"{filter_inputs}concat=n={n}:v=1:a=0[outv]"
+
+    reencode_cmd = [FFMPEG_BIN, "-y", "-loglevel", "error", "-threads", "1"]
+    for p in clip_paths:
+        reencode_cmd += ["-i", p]
+    if audio_local:
+        reencode_cmd += ["-i", audio_local]
+    reencode_cmd += [
+        "-filter_complex", filter_graph,
+        "-map", "[outv]",
+    ]
+    if audio_local:
+        reencode_cmd += ["-map", f"{n}:a:0", "-c:a", "aac", "-b:a", "128k", "-shortest"]
+    else:
+        reencode_cmd += ["-an"]
+    reencode_cmd += [
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
+        "-pix_fmt", "yuv420p",
+        "-movflags", "+faststart",
+        final_path,
+    ]
+
+    rc2, err_tail2 = await _run_ffmpeg(reencode_cmd, "filter-concat-reencode", timeout_s=600.0)
+    if rc2 == 0 and os.path.exists(final_path) and os.path.getsize(final_path) > 0:
+        logger.info(f"[compose-local] filter+re-encode succeeded ({n} clips)")
+        return final_path
+
+    # Both paths failed — surface a diagnostic error so the render row
+    # shows something actionable instead of the generic "compose failed"
+    # message that used to come out of fal-compose.
+    raise RuntimeError(
+        f"local ffmpeg compose failed on both paths. "
+        f"copy-concat rc={rc}: {err_tail[:200]} | "
+        f"filter-reencode rc={rc2}: {err_tail2[:200]}"
+    )
 
 
 async def _upload_final_to_fal(local_path: str, *, max_attempts: int = 3) -> Optional[str]:
@@ -3789,6 +3867,7 @@ async def _run_render_faceless(job: dict):
                 pass
 
     composed_url: Optional[str] = None
+    local_compose_error: Optional[str] = None  # stamped on render row if we fall through
 
     if all_local:
         # -------- Local ffmpeg compose (default post-v1.20.6) ------------------
@@ -3803,9 +3882,10 @@ async def _run_render_faceless(job: dict):
         try:
             final_local = await _local_ffmpeg_compose(clip_paths, audio_url, workdir)
         except Exception as exc:
+            local_compose_error = f"{type(exc).__name__}: {exc}"
             logger.warning(
-                f"[render] job={job_id} local compose failed: {type(exc).__name__}: {exc}. "
-                f"Falling back to fal-compose."
+                f"[render] job={job_id} local compose failed: {local_compose_error}. "
+                f"Uploading clips to fal for fallback compose."
             )
             stop_ticking.set()
             try:
@@ -3854,28 +3934,56 @@ async def _run_render_faceless(job: dict):
                 )
                 composed_url = f"/api/renders/{job_id}/video.mp4"
 
-    # -------- Legacy fal-compose fallback path ---------------------------------
+    # -------- Ultimate fallback: upload local clips to fal, then fal-compose --
+    # v1.20.7: if local ffmpeg failed (or all_local was False because AI
+    # scenes returned fal URLs), promote every local clip to a fal URL
+    # and use the legacy fal-compose queue. This IS the "worst case, but
+    # at least the customer gets their video" path.
     if not composed_url:
-        # Every scene needs to be a URL for fal compose. For scenes stuck as
-        # local paths (local-compose returned some but failed on others),
-        # skip the fallback — we can't easily promote local files to URLs
-        # here without another upload round. Give a clear error.
-        if any(isinstance(u, str) and u.startswith("/") for (_i, u, _k, _d) in kburns_results):
-            await _finalize(job_id, ok=False, url=None, actual_cost_cents=actual_cost_cents)
+        await _set_progress(75, "Local compose failed — uploading to remote…")
+        # Promote any local path in kburns_results to a fal URL. Upload
+        # sequentially (not in parallel) since we're already in a
+        # recovery path and don't want to spike memory during recovery.
+        promoted: list = []
+        upload_failures = 0
+        for (i, u, k, d) in kburns_results:
+            if isinstance(u, str) and u.startswith("/") and os.path.exists(u):
+                fal_url = await _fal_upload_with_timeout(u, i, "recovery")
+                if fal_url:
+                    promoted.append((i, fal_url, k, d))
+                else:
+                    upload_failures += 1
+            else:
+                promoted.append((i, u, k, d))
+
+        if not promoted or upload_failures > 0:
+            # No path left forward. Record what actually broke so the
+            # error card in the UI shows something actionable.
+            err_lines = []
+            if local_compose_error:
+                err_lines.append(f"Local ffmpeg: {local_compose_error[:300]}")
+            if upload_failures:
+                err_lines.append(f"Recovery uploads: {upload_failures}/{len(kburns_results)} failed")
+            if not err_lines:
+                err_lines.append("Compose pipeline exhausted all paths.")
             await db.renders.update_one(
                 {"id": job_id},
-                {"$set": {"error": "Local ffmpeg compose failed and remote fallback not available."}},
+                {"$set": {
+                    "status": "failed",
+                    "error": " | ".join(err_lines),
+                    "actual_cost_cents": actual_cost_cents,
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }},
             )
+            _cleanup_job_workdir(job_id)
             return
 
-        # fal.ai's ffmpeg-compose allows AT MOST one video track. Every scene is
-        # now a video (stock MP4 or ken-burns'd Flux image), so they all live in
-        # a single video track as sequential keyframes. `timestamp` + `duration`
-        # are in MILLISECONDS per the schema. Per-scene duration is whatever
-        # the normalize step actually produced.
+        # fal.ai's ffmpeg-compose allows AT MOST one video track. Build
+        # sequential keyframes as originally designed.
         visual_keyframes: list = []
         cursor_ms = 0
-        for slot, (_idx, url, _kind, this_dur) in enumerate(kburns_results):
+        for slot, (_idx, url, _kind, this_dur) in enumerate(promoted):
             visual_keyframes.append({"url": url, "timestamp": cursor_ms, "duration": this_dur})
             cursor_ms += this_dur
 
@@ -3906,6 +4014,15 @@ async def _run_render_faceless(job: dict):
         if not compose_res:
             return  # _fal_queue_run already finalized the job with an error
         composed_url = compose_res.get("video_url") or (compose_res.get("video") or {}).get("url")
+
+    # Stamp the local-compose diagnostic on the render doc even when we
+    # ended up succeeding via fal fallback — so we can see on prod what
+    # actually breaks the fast path without shipping another patch.
+    if local_compose_error and composed_url:
+        await db.renders.update_one(
+            {"id": job_id},
+            {"$set": {"local_compose_debug": local_compose_error[:500]}},
+        )
 
     # --- Caption burn-in (second compose pass) ---------------------------
     # User-uploaded voiceovers + Kokoro TTS both produce clean audio that

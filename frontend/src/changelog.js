@@ -14,9 +14,17 @@
 //    See PRD.md → "Workflow rule: changelog must move with every deploy."
 // 4. Most recent on top. Each entry has version + date + bullet list.
 
-export const APP_VERSION = "1.20.6";
+export const APP_VERSION = "1.20.7";
 
 export const CHANGELOG = [
+  {
+    version: "1.20.7",
+    date: "2026-08-10",
+    changes: [
+      "🐛 Fixed 'Local ffmpeg compose failed and remote fallback not available' — the local compose step now has a two-tier retry: fast stream-copy first (sub-second), then a bulletproof re-encode if any Pexels clip has an incompatible bitstream header. If BOTH local paths fail, we automatically promote the local clips up to fal storage and run fal-compose as an ultimate backup, so paying customers still get their video",
+      "🔍 Better error surfacing — when compose fails, the render row now shows exactly which path failed (copy-concat, re-encode, or fal-compose) with the ffmpeg stderr tail so the exact cause is visible instead of a generic 'failed'",
+    ],
+  },
   {
     version: "1.20.6",
     date: "2026-08-10",

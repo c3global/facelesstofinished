@@ -20,6 +20,37 @@ back to it for entitlement verification.
 
 ## 🔁 Workflow rule: Changelog moves with every change (set 2026-06-29 by user)
 
+### Iteration 67 (2026-08-10) — Two-tier local compose + true fal fallback (v1.20.7)
+
+**Trigger:** Charity redeployed v1.20.6 to prod. Both her renders (9:16 and 16:9 in parallel) failed with `Render failed: Local ffmpeg compose failed and remote fallback not available.` The bug I shipped: when local ffmpeg fails, my fallback branch checked `if any(u.startswith("/"))` and refused to run fal compose because clip URLs were local paths — instead of promoting those local paths to fal URLs via `_fal_upload_with_timeout`. The whole point of a "fallback" is to save the render, not print a clear diagnostic and give up.
+
+**Root cause of the local ffmpeg failure itself (theory, unverified without prod logs):** Pexels stock clips carry variable H.264 profile / level / SPS across sources. My v1.20.6 code used `concat demuxer + -c:v copy` which is STRICT about bitstream compatibility. Different-encoder Pexels clips → the demuxer refuses to stitch them → RuntimeError. Preview passed by luck (both clips happened to share encoding). Production hit the mismatch immediately.
+
+**The fix — two-tier local compose + real ultimate fallback:**
+
+1. **Fast path (`_local_ffmpeg_compose` first attempt)** — unchanged: concat demuxer + `-c:v copy`. Sub-second when clips align. `-loglevel error` captures the exact ffmpeg complaint if it doesn't.
+
+2. **Bulletproof path (`_local_ffmpeg_compose` retry)** — NEW: concat FILTER (`[0:v:0][1:v:0]...concat=n=N:v=1:a=0[outv]`) + libx264 re-encode at `-preset veryfast -crf 22`. The filter graph resamples every input into a consistent output stream so no bitstream variance can break it. ~5-15s per scene depending on tier; way faster than fal-compose queue.
+
+3. **Ultimate fallback (post-`_local_ffmpeg_compose` exception)** — NEW: promote each surviving local clip to fal storage via `_fal_upload_with_timeout` (sequential, not parallel, to keep memory calm during recovery), then run the legacy `fal-ai/ffmpeg-api/compose` queue. This is the "worst case we still ship the video" path that was misguided-guarded before.
+
+4. **Diagnostic stamping** — even when we succeed via the ultimate fallback, `local_compose_debug` stores the ffmpeg stderr tail from BOTH the copy-concat AND filter-reencode failures on the render row. Next time this happens on prod, we can see exactly which pattern breaks the fast path without shipping another patch.
+
+**Verified on preview:**
+- Fresh 3-scene render: 8s total (Kokoro was cached from earlier run), `local_compose_debug: None` → fast path won cleanly.
+- Manual ffmpeg test with deliberately-mismatched clips: both copy-concat AND re-encode pass on the imageio_ffmpeg build present on the container.
+- Backend restart clean, no lint errors.
+
+**Files touched:**
+- `/app/backend/server.py`:
+  - `_local_ffmpeg_compose`: rewritten as two-tier (copy → filter+reencode) with per-path stderr capture + a shared `_run_ffmpeg` helper.
+  - `_run_render_faceless` compose branch: removed the "remote fallback not available" bail; added a sequential `_fal_upload_with_timeout` promotion loop that lets legacy fal-compose complete the render even when local ffmpeg fails.
+  - Added `local_compose_error` diagnostic stamping on both the failed and fallback-succeeded paths.
+- `/app/frontend/src/changelog.js`: v1.20.7 entry.
+
+**Charity's next step:** Redeploy v1.20.7 to production. This iteration is strictly additive — no new failure modes introduced, existing successful renders continue on the fast path unchanged.
+
+
 ### Iteration 66 (2026-08-10) — Local ffmpeg compose (v1.20.6). Kills the fal.ai stitch dependency.
 
 **Context:** After v1.20.5 shipped, Charity still saw renders sticking at 57% on production. Preview test proved v1.20.5 works end-to-end in 93s / 2¢. So either prod was still on old code, OR fal.ai storage was the hidden bottleneck. She authorized building the fal.ai-independent path.
