@@ -68,9 +68,9 @@ export default function ProfileMenu() {
 
   if (!user) return null;
 
-  // The Founder bucket is purely the `founders: true` flag — NEVER an
-  // AppSumo-redeemable tier. The label is also "Founder" in quota.tier_label
-  // but we double-check via tier_id to avoid any future drift.
+  // The Founder bucket is purely the `founders: true` flag — NEVER a
+  // publicly-redeemable tier. Post-v1.20.5 pivot the label is also "Founder"
+  // in quota.tier_label but we double-check via tier_id to avoid any drift.
   const isFounder = quota?.tier_id === "founder" || quota?.tier_label === "Founder";
   const tierLabel = quota?.tier_label || (quota?.unlimited ? "Owner" : null);
 

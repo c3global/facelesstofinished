@@ -1656,13 +1656,14 @@ export default function Studio() {
                   )}
                   {r.status === "complete" && r.result_url && r.mode === "faceless" && (
                     <button
-                      className="icon-btn"
+                      className="icon-btn is-timeline"
                       data-testid={`history-timeline-${r.id}`}
                       onClick={() => setTimelineJobId(r.id)}
                       aria-label="Timeline editor"
                       title="Fix looping B-roll on this render"
                     >
                       <Clock size={14} />
+                      <span className="icon-btn-label">Timeline</span>
                     </button>
                   )}
                   {(r.status === "complete" || r.status === "failed") && (

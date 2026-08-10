@@ -26,11 +26,18 @@ function fmtDateTime(s) {
   }
 }
 
+// v1.20.5 pivot: tier IDs renamed away from AppSumo t1/t2/t3 to the new
+// Community-membership naming. Old ids kept as fallback labels for any
+// legacy admin data that hasn't been re-fetched after the migration.
 const TIER_LABELS = {
-  t1: "Starter",
-  t2: "Pro",
-  t3: "Pro Plus",
+  starter: "Starter",
+  legacy: "Legacy",
+  premium: "Premium",
   founder: "Founder",
+  // Back-compat labels for pre-migration data
+  t1: "Starter (legacy id)",
+  t2: "Pro (legacy id)",
+  t3: "Pro Plus (legacy id)",
 };
 
 const SORT_COLS = [
@@ -233,7 +240,7 @@ export default function UsageTab() {
                     <td>{fmtDate(row.last_seen)}</td>
                     <td>{fmtDate(row.added_at)}</td>
                     <td>
-                      <span className={`ent-chip ent-chip-${row.tier || "t1"}`}>
+                      <span className={`ent-chip ent-chip-${row.tier || "starter"}`}>
                         {TIER_LABELS[row.tier] || row.tier || "—"}
                       </span>
                     </td>

@@ -14,9 +14,19 @@
 //    See PRD.md → "Workflow rule: changelog must move with every deploy."
 // 4. Most recent on top. Each entry has version + date + bullet list.
 
-export const APP_VERSION = "1.20.4";
+export const APP_VERSION = "1.20.5";
 
 export const CHANGELOG = [
+  {
+    version: "1.20.5",
+    date: "2026-08-10",
+    changes: [
+      "✨ Tier pivot — the AppSumo t1 / t2 / t3 naming is retired. You'll see the new lineup everywhere: Starter (Script + Thumbnail), Legacy (Script + Thumbnail + Shorts — grandfathered), Founder (everything, lifetime — your original Studio buyers), and Premium (everything + Community access, $127/mo)",
+      "✨ Bring Your Own Key is now available for ALL tiers — Starter, Legacy, Founder, Premium. Plug in your own OpenRouter, HeyGen, ElevenLabs, or Anthropic keys to bypass platform quotas at any level",
+      "⚡ Cut the Claude retry budget from 75s → 20s so you (and your German customers) see a clean 'try again in 30s' prompt fast instead of watching the spinner for over a minute",
+      "✨ Made the post-render Timeline button obvious — it now shows as a proper labelled 'Timeline' button on every completed Faceless render row instead of a tiny clock icon lost in the row",
+    ],
+  },
   {
     version: "1.20.4",
     date: "2026-08-10",

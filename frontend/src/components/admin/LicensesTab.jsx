@@ -20,7 +20,9 @@ import { apiClient } from "../../App";
  * custom source string for downstream reporting.
  */
 const STATUS_OPTIONS = ["", "available", "redeemed", "void"];
-const TIER_OPTIONS   = ["", "t1", "t2", "t3"];
+// v1.20.5 pivot: tier IDs renamed. Legacy (was AppSumo t1) still redeemable
+// for backfill of any pending codes; Premium is the new default going forward.
+const TIER_OPTIONS   = ["", "legacy", "premium"];
 
 function fmtDate(s) {
   if (!s) return "—";
@@ -40,7 +42,7 @@ export default function LicensesTab() {
   const [q, setQ] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [csvText, setCsvText] = useState("");
-  const [createSource, setCreateSource] = useState("appsumo");
+  const [createSource, setCreateSource] = useState("direct");
   const [createBatchId, setCreateBatchId] = useState("");
   const [creating, setCreating] = useState(false);
   const [toast, setToast] = useState("");
@@ -79,13 +81,13 @@ export default function LicensesTab() {
       const firstLine = text.split(/\r?\n/, 1)[0] || "";
       const hasHeader = /code/i.test(firstLine) && /tier/i.test(firstLine);
       const body = hasHeader
-        ? { csv: text, source: createSource.trim() || "appsumo", batch_id: createBatchId.trim() || undefined }
+        ? { csv: text, source: createSource.trim() || "direct", batch_id: createBatchId.trim() || undefined }
         : {
             codes: text.split(/\r?\n/).map((line) => {
               const [code, tier, ...rest] = line.split(",").map((s) => s.trim());
-              return code ? { code, tier: tier || "t1", notes: rest.join(",") || undefined } : null;
+              return code ? { code, tier: tier || "premium", notes: rest.join(",") || undefined } : null;
             }).filter(Boolean),
-            source: createSource.trim() || "appsumo",
+            source: createSource.trim() || "direct",
             batch_id: createBatchId.trim() || undefined,
           };
       const r = await apiClient.post("/admin/licenses/bulk-create", body);
@@ -187,16 +189,17 @@ export default function LicensesTab() {
             <br />
             • CSV with header — <code>code,tier[,notes]</code>
             <br />
-            • Comma-separated lines — <code>F48-AAAA-BBBB,t1</code> (one per line)
+            • Comma-separated lines — <code>F48-AAAA-BBBB,premium</code> (one per line)
             <br />
-            Tier must be <code>t1</code> / <code>t2</code> / <code>t3</code>.
+            Tier must be <code>legacy</code> or <code>premium</code>.
             Duplicate codes are skipped silently.
           </p>
           <textarea
             rows={8}
             className="admin-textarea"
-            placeholder={"code,tier\nF48-AAAA-BBBB,t2\nF48-CCCC-DDDD,t3"}
-            // NOTE: t2 = Pro ($179), t3 = Pro Plus ($349), t1 = Starter ($49).
+            placeholder={"code,tier\nF48-AAAA-BBBB,premium\nF48-CCCC-DDDD,legacy"}
+            // v1.20.5 pivot: only Legacy (grandfathered $49) + Premium ($127/mo) are redeemable.
+            // Founder is granted by admin migration or Pinball webhook, never via public code.
             value={csvText}
             onChange={(e) => setCsvText(e.target.value)}
             data-testid="licenses-csv-input"
@@ -208,7 +211,7 @@ export default function LicensesTab() {
                 type="text"
                 value={createSource}
                 onChange={(e) => setCreateSource(e.target.value)}
-                placeholder="appsumo"
+                placeholder="direct"
                 data-testid="licenses-source-input"
               />
             </label>
@@ -258,7 +261,7 @@ export default function LicensesTab() {
             {!loading && items.map((row) => (
               <tr key={row.code} data-testid={`licenses-row-${row.code}`}>
                 <td className="admin-td-code">{row.code}</td>
-                <td><span className={`ent-chip ent-chip-${row.tier || "t1"}`}>{(row.tier || "—").toUpperCase()}</span></td>
+                <td><span className={`ent-chip ent-chip-${row.tier || "starter"}`}>{(row.tier || "—").toUpperCase()}</span></td>
                 <td>{row.source || "—"}</td>
                 <td><span className={`licenses-status licenses-status-${row.status}`}>{row.status}</span></td>
                 <td>{row.batch_id || "—"}</td>

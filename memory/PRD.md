@@ -20,6 +20,67 @@ back to it for entitlement verification.
 
 ## 🔁 Workflow rule: Changelog moves with every change (set 2026-06-29 by user)
 
+### Iteration 65 (2026-08-10) — Tier pivot to Community model + BYOK-for-all + Claude budget 20s (v1.20.5)
+
+**Context:** Charity confirmed the AppSumo t1/t2/t3 naming is dead. She's launching a $127/mo Community Membership. Also complained the 75s Claude retry budget was UX-hostile for her German customer (Volker) and demanded the post-render Timeline button be more visible (or replaced by a pre-render editor — she'd prefer that but tier rename comes first).
+
+**Tier pivot — new canonical structure:**
+
+| ID | Label | Software | Price | Redeemable? |
+|---|---|---|---|---|
+| `starter` | Starter | Script + Thumbnail + BYOK | one-time (off-platform) | Not publicly listed |
+| `legacy`  | Legacy  | Script + Thumbnail + Shorts + BYOK | one-time (was AppSumo t1 $49) | ❌ Sunset — no new signups |
+| `founder` | Founder | Script + Thumbnail + Shorts + Studio + BYOK | Lifetime one-time (was t2 $179 / t3 $349 / direct $297) | ❌ Grandfathered only |
+| `premium` | Premium | Script + Thumbnail + Shorts + Studio + BYOK | **$127/mo** (intro) / $197/mo (full) | ✅ Only publicly-purchasable tier |
+
+**Key design decision (locked by user):** BYOK is now on for EVERY tier, not just Pro Plus. Every tier's entitlements include `byok`; every tier's `byok_allowed = True`; every migrated buyer has `byokAllowed: true` stamped.
+
+**Distinction between Founder and Premium:** identical software feature set — the difference is billing (lifetime one-time vs $127/mo recurring) and Community/other-software access (Premium yes, Founder no, enforced outside this codebase).
+
+**Files touched (backend):**
+- `/app/backend/tier_config.py` — full rewrite: 4 tiers (`starter`, `legacy`, `founder`, `premium`) with BYOK-on-everywhere. Kept `_LEGACY_TIER_ID_ALIAS` so any lingering `t1/t2/t3` code paths still resolve during the migration window. `APPSUMO_NUMERIC_TIER_MAP` remaps numeric AppSumo tiers (1→legacy, 2→founder, 3→founder) so any pending AppSumo redemptions honor the customer's original purchase promise.
+- `/app/backend/server.py` — `KNOWN_ENTITLEMENTS` extended with `"byok"` (was missing so admin JWTs never carried BYOK).
+- `/app/backend/tools/migrate_tiers.py` — NEW: dry-run + apply migration for `db.buyers.tier` renames. Idempotent. Flags weird partial-entitlement rows for manual review instead of auto-migrating them.
+
+**Files touched (frontend):**
+- `/app/frontend/src/components/admin/UsageTab.jsx` — `TIER_LABELS` map now includes new IDs + back-compat aliases.
+- `/app/frontend/src/components/admin/LicensesTab.jsx` — `TIER_OPTIONS` = `["", "legacy", "premium"]`; source default `"appsumo"` → `"direct"`; placeholder / hint text scrubbed of `t1/t2/t3` mentions.
+- `/app/frontend/src/App.css` — new `.ent-chip-starter/legacy/premium/founder` color classes (kept old `.ent-chip-t1/t2/t3` as aliases for un-refetched admin data). New `.icon-btn.is-timeline` treatment so the post-render Timeline button reads as a proper labelled button.
+- `/app/frontend/src/pages/Studio.jsx` — Timeline history-row button now has a "Timeline" label, not just a lonely clock icon.
+- `/app/frontend/src/components/ProfileMenu.jsx` — removed AppSumo language from comment.
+- `/app/frontend/src/changelog.js` — v1.20.5 entry.
+
+**Claude budget:** `CLAUDE_TOTAL_BUDGET_S = 75.0 → 20.0`. On a healthy Anthropic day the request returns in 5-10s as usual; on an overloaded day the user sees a "temporarily overloaded, please try again in 30s" error inside 20s instead of waiting 75s.
+
+**Migration result (preview DB):**
+```
+Before                    After
+─────────────────────────────
+(all tier=null)   6       starter: 3
+                          founder: 2
+                          skipped (partial ents): 1
+```
+Idempotent — re-running after apply is a no-op update. Activity row `tier_migration_v1_20_5` written on apply.
+
+**Tested (this session):**
+- Backend restart clean, all lint clean (except one pre-existing quote-escape warning in LicensesTab unrelated to this change).
+- Migration script dry-run + apply + idempotent re-run all green.
+- `/api/me/quota` returns `tier_id: "starter" / "founder"` + `byok_allowed: true` for migrated non-admin buyers.
+- `/api/user/byok` returns `byok_allowed: true` for both starter and founder tiers (confirms BYOK-for-all works end-to-end).
+- `appsumo_tier_to_tier_id` unit test: `1→legacy`, `2/3→founder`, `t1/t2/t3→` legacy/founder/founder, new IDs pass through.
+
+**Not shipped this iteration (Charity acknowledged these are follow-ups):**
+- **Pre-render Timeline editor** — Charity's real ask ("I don't like that it is only available in post"). This is a significant new UI: script → beat splitter → user-editable scene manifest → drag reorder → assign B-roll → then hit render. Post-render Timeline stays as-is for now with a more visible button.
+- **Public Premium checkout page** — no Stripe/subscription UI yet; the Premium tier exists in code but there's no signup flow. Charity has to grant Premium manually via admin panel or a future Pinball webhook mapping.
+- **Community-only entitlement gate** — the Studio codebase doesn't gate on Community access; that's enforced by Charity's external system. Premium and Founder look identical from Studio's perspective.
+
+**Charity's action items (production):**
+1. Redeploy v1.20.5 to `faceless48.c3global.co`.
+2. Run `python /app/backend/tools/migrate_tiers.py` on production (dry-run first — SHOW HER THE OUTPUT — then `--apply` when she's ok with it). This is the ONE step that touches real customer records.
+3. If any weird partial-entitlement buyers get flagged, she reclassifies them manually via the admin Buyers tab.
+4. Later: build the public Premium checkout flow when she's ready to open new signups.
+
+
 ### Iteration 64 (2026-08-10) — Root-cause fix for the 55% stuck bug + Cancel Render (v1.20.4)
 
 **Trigger:** Charity redeployed v1.20.3 and hit the SAME stuck-at-55% state as her paying clients — same screenshot, same behavior. An AI bot she consulted told her she needed to upgrade the Emergent tier from 512MB because "video processing is memory intensive." That advice was wrong (or at least premature): the real problem was in our code, not in Emergent's tier.

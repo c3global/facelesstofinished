@@ -130,7 +130,7 @@ RENDER_COST_CIRCUIT_BREAKER_CENTS = int(os.environ.get("RENDER_COST_CAP_CENTS", 
 NORMALIZE_CONCURRENCY = int(os.environ.get("NORMALIZE_CONCURRENCY", "3"))
 STUCK_RENDER_TIMEOUT_S = int(os.environ.get("STUCK_RENDER_TIMEOUT_S", "300"))
 
-KNOWN_ENTITLEMENTS = ["base", "shorts", "studio"]
+KNOWN_ENTITLEMENTS = ["base", "shorts", "studio", "byok"]
 JWT_ALG = "HS256"
 JWT_TTL_HOURS = 24
 
@@ -4427,7 +4427,14 @@ async def _claude_complete(system_prompt: str, user_message: str, session_id: st
         )
 
 
-CLAUDE_TOTAL_BUDGET_S = 75.0  # Cloudflare edge closes idle at ~100s; leave 25s buffer.
+CLAUDE_TOTAL_BUDGET_S = 20.0  # v1.20.5 (Iter 65): tightened from 75s so users see a
+# clean retry prompt fast (Cloudflare edge closes idle at ~100s; that was
+# the ONLY reason 75s existed, but 75s of dead-air is user-hostile UX per
+# customer feedback — 15s+ German customer wait time was quoted as
+# "unacceptable" by owner). On a healthy Anthropic day a call returns in
+# 5-10s so this budget still fits 2 attempts. On an overloaded day the
+# user sees the "temporarily overloaded, try again in 30s" error inside
+# 20s instead of waiting 75s to get the same message.
 
 
 async def _claude_complete_inner(system_prompt: str, user_message: str, session_id: str | None = None, user_email: str | None = None) -> str:

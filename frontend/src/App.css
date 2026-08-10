@@ -1795,6 +1795,31 @@
   color: var(--danger); border-color: var(--danger); background: var(--danger-soft);
 }
 
+/* v1.20.5: Timeline button gets a text label + expanded width so buyers
+ * can spot the pre-render editing entry point among the row of 4 icon
+ * buttons on each completed render. Charity's feedback: "I don't like
+ * that it is only available in post" — until we ship the pre-render
+ * timeline, at least make the post-render Timeline unmissable. */
+.icon-btn.is-timeline {
+  width: auto;
+  padding: 0 10px;
+  gap: 6px;
+  color: var(--brand, #7F77DD);
+  border-color: rgba(127, 119, 221, 0.4);
+  background: rgba(127, 119, 221, 0.08);
+  font-weight: 500;
+  font-size: 12px;
+}
+.icon-btn.is-timeline:hover:not(:disabled) {
+  color: #fff;
+  border-color: var(--brand, #7F77DD);
+  background: var(--brand, #7F77DD);
+}
+.icon-btn-label {
+  font-size: 12px;
+  line-height: 1;
+}
+
 /* ---------- Modal ---------- */
 .modal-scrim {
   position: fixed; inset: 0; z-index: 200;
@@ -5342,12 +5367,21 @@
 /* ============================================================================
  * Tier chips (T1/T2/T3/T4/Founder) shown in admin Usage tab.
  * ========================================================================= */
-/* Tier chip palette — teal (Starter) → gold (Pro) → amber (Pro Plus) → violet (Founder).
- * IDs realigned 2026-07-02 to match AppSumo listing 1:1 (t1/t2/t3 = Tier 1/2/3). */
+/* Tier chip palette — v1.20.5 pivot naming (Community model, not AppSumo).
+ * Starter (teal) = Script + Thumbnail only.
+ * Legacy (gold)  = Script + Thumbnail + Shorts (sunset — old AppSumo t1 buyers).
+ * Premium (amber) = Script + Thumbnail + Shorts + Studio, $127/mo subscription.
+ * Founder (violet) = Same software as Premium, grandfathered lifetime buyers.
+ * Old t1/t2/t3 classes retained as aliases so any un-refetched admin data
+ * still renders with sensible colors during the migration window. */
+.ent-chip-starter { background: rgba(120,200,180,0.18); color: #BFEFE3; border: 1px solid rgba(120,200,180,0.4); }
+.ent-chip-legacy  { background: rgba(201,149,108,0.20); color: #F5D9B6; border: 1px solid rgba(201,149,108,0.45); }
+.ent-chip-premium { background: rgba(224,164,88,0.22);  color: #FFEAD0; border: 1px solid rgba(224,164,88,0.55); font-weight: 700; }
+.ent-chip-founder { background: rgba(127,119,221,0.22); color: #DCD5FF; border: 1px solid rgba(127,119,221,0.5); font-weight: 700; }
+/* Legacy AppSumo tier ids — kept for backward compat with un-refetched data */
 .ent-chip-t1      { background: rgba(120,200,180,0.18); color: #BFEFE3; border: 1px solid rgba(120,200,180,0.4); }
 .ent-chip-t2      { background: rgba(201,149,108,0.20); color: #F5D9B6; border: 1px solid rgba(201,149,108,0.45); }
 .ent-chip-t3      { background: rgba(224,164,88,0.22);  color: #FFEAD0; border: 1px solid rgba(224,164,88,0.55); }
-.ent-chip-founder { background: rgba(127,119,221,0.22); color: #DCD5FF; border: 1px solid rgba(127,119,221,0.5); font-weight: 700; }
 
 /* ============================================================================
  * Usage tab — sortable headers + drilldown row.
