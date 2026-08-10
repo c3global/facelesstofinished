@@ -14,9 +14,18 @@
 //    See PRD.md → "Workflow rule: changelog must move with every deploy."
 // 4. Most recent on top. Each entry has version + date + bullet list.
 
-export const APP_VERSION = "1.20.5";
+export const APP_VERSION = "1.20.6";
 
 export const CHANGELOG = [
+  {
+    version: "1.20.6",
+    date: "2026-08-10",
+    changes: [
+      "🚀 Rebuilt the video composition step to run locally — no more waiting on fal.ai to stitch clips together. The pipeline now concatenates everything on our server with ffmpeg (using stream-copy, so it takes about 2 seconds), then uploads just the final video once. Result: renders finish 20-30 seconds faster, cost half as much, and never hang because of fal.ai storage",
+      "🛡️ Automatic fallback — if fal.ai storage is completely unreachable when the render finishes, we serve the final MP4 directly from our backend so paying customers still get their video",
+      "🧹 Every render gets a job-scoped scratch directory that's auto-cleaned when the render finishes (success, failure, or cancel), so container disk stays tidy",
+    ],
+  },
   {
     version: "1.20.5",
     date: "2026-08-10",

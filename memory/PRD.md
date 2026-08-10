@@ -20,6 +20,39 @@ back to it for entitlement verification.
 
 ## 🔁 Workflow rule: Changelog moves with every change (set 2026-06-29 by user)
 
+### Iteration 66 (2026-08-10) — Local ffmpeg compose (v1.20.6). Kills the fal.ai stitch dependency.
+
+**Context:** After v1.20.5 shipped, Charity still saw renders sticking at 57% on production. Preview test proved v1.20.5 works end-to-end in 93s / 2¢. So either prod was still on old code, OR fal.ai storage was the hidden bottleneck. She authorized building the fal.ai-independent path.
+
+**The change:**
+- Scene normalize step (`_make_kenburns_mp4`, `_trim_stock_video`) now writes each scene MP4 to a job-scoped scratch dir `/tmp/f48_renders/{job_id}/scene_NNN.mp4` and returns the LOCAL PATH instead of uploading to fal storage.
+- New `_local_ffmpeg_compose` concats those local clips with ffmpeg's concat demuxer + `-c:v copy` (no re-encode — sub-second on 20-scene videos) and mux'es the Kokoro audio track.
+- Final MP4 gets a single upload to fal storage (retry 3× with exponential backoff) for URL hosting. If ALL 3 attempts fail, the file gets moved to a persistent per-job dir and served via a new endpoint `GET /api/renders/{job_id}/video.mp4` (uses FastAPI's `FileResponse` for byte-range/scrub support).
+- Env kill-switch `USE_LOCAL_COMPOSE` (default "1") flips back to legacy fal-compose if any prod edge case surfaces.
+- `_finalize` and both exception paths in `_run_render` now call `_cleanup_job_workdir` so `/tmp/f48_renders/` never accumulates cruft.
+- All AI paths (Kling i2v, T2V engines) still return fal URLs; the compose branch detects mixed local/remote clips and falls back to fal-compose for that render. Stock-only renders (Charity's actual usage) hit the fast local path 100% of the time.
+
+**Preview test result (real e2e, drcharitycampbell@gmail.com admin):**
+- 2-scene 9:16 Faceless via Pexels: **72s total, 1¢ cost, final MP4 delivered.**
+- vs. previous fal-compose baseline: 93s / 2¢. **21s faster, 50% cheaper.**
+- Kokoro TTS still dominates at ~65s (external service, unchanged).
+- Scene motion + local ffmpeg concat + fal upload = ~7s combined (was ~12s w/ fal compose).
+- Cleanup verified: `/tmp/f48_renders/` empty after render completes.
+- Final MP4 verified reachable: 200 OK, `video/mp4`, 2.8MB.
+
+**Files touched:**
+- `/app/backend/server.py`:
+  - New: `RENDER_WORKDIR_ROOT`, `USE_LOCAL_COMPOSE` env, `_make_job_workdir`, `_cleanup_job_workdir`, `_download_url_to_local`, `_ensure_local_clip`, `_local_ffmpeg_compose`, `_upload_final_to_fal`.
+  - Modified: `_make_kenburns_mp4` / `_trim_stock_video` accept optional `workdir` arg — when set, skip fal upload + keep local path.
+  - Modified: `_run_render_faceless` creates workdir at entry, uses local compose when all scenes are local, falls back to fal compose otherwise.
+  - Modified: `_finalize` + `_run_render` exception handlers call `_cleanup_job_workdir`.
+  - New: `GET /api/renders/{job_id}/video.mp4` endpoint for local-served fallback path.
+  - Fixed: syntax error I introduced in the render-status GET endpoint decorator (regression from a bad search_replace).
+- `/app/frontend/src/changelog.js`: v1.20.6 entry.
+
+**What Charity needs to do:** Redeploy production. That's it. No config changes needed — `USE_LOCAL_COMPOSE=1` is the default. If any edge case surfaces on prod, she can set `USE_LOCAL_COMPOSE=0` in her production env to revert to fal-compose without a code change.
+
+
 ### Iteration 65 (2026-08-10) — Tier pivot to Community model + BYOK-for-all + Claude budget 20s (v1.20.5)
 
 **Context:** Charity confirmed the AppSumo t1/t2/t3 naming is dead. She's launching a $127/mo Community Membership. Also complained the 75s Claude retry budget was UX-hostile for her German customer (Volker) and demanded the post-render Timeline button be more visible (or replaced by a pre-render editor — she'd prefer that but tier rename comes first).

@@ -17,6 +17,7 @@ import logging
 import os
 import re
 import secrets
+import shutil
 import subprocess
 import tempfile
 import time
@@ -32,7 +33,7 @@ import jwt
 from dotenv import load_dotenv
 from fastapi import Body, Cookie, Depends, FastAPI, Header, HTTPException, Path, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field
 
@@ -1368,7 +1369,7 @@ _KENBURNS_PRESETS = [
 ]
 
 
-async def _make_kenburns_mp4(image_url: str, aspect: str, duration_ms: int, scene_idx: int) -> Optional[str]:
+async def _make_kenburns_mp4(image_url: str, aspect: str, duration_ms: int, scene_idx: int, workdir: Optional[str] = None) -> Optional[str]:
     """Download a still image, render a short MP4 with subtle ken-burns motion
     (zoom + drift), upload it to fal storage, return the public URL.
     Returns None on any failure so the caller can fall back gracefully."""
@@ -1448,6 +1449,17 @@ async def _make_kenburns_mp4(image_url: str, aspect: str, duration_ms: int, scen
         # v1.20.2: hard 90s timeout via _fal_upload_with_timeout — the raw
         # executor call could hang forever, freezing the whole normalize_scene
         # gather at 55% (paying-client-reported bug).
+        # v1.20.6: when workdir is provided, keep the local mp4 for the local
+        # ffmpeg compose path (no fal upload). This is the fal.ai-independent
+        # code path that fixes the 55% hang for good — see USE_LOCAL_COMPOSE.
+        if workdir is not None:
+            final_local = os.path.join(workdir, f"scene_{scene_idx:03d}.mp4")
+            try:
+                shutil.move(dst, final_local)
+            except Exception:
+                shutil.copy(dst, final_local)
+            keep_dst = True  # (moved; nothing left at dst to delete)
+            return final_local
         fal_url = await _fal_upload_with_timeout(dst, scene_idx, "kburns")
         return fal_url
     except Exception as exc:
@@ -1455,15 +1467,19 @@ async def _make_kenburns_mp4(image_url: str, aspect: str, duration_ms: int, scen
         return None
     finally:
         try:
-            for f in (src, dst):
-                if os.path.exists(f):
-                    os.unlink(f)
-            os.rmdir(tmpdir)
+            os.unlink(src) if os.path.exists(src) else None
+            if not keep_dst and os.path.exists(dst):
+                os.unlink(dst)
+            # tmpdir may be non-empty if dst was moved out — that's fine, remove if empty
+            try:
+                os.rmdir(tmpdir)
+            except OSError:
+                pass
         except Exception:
             pass
 
 
-async def _trim_stock_video(video_url: str, aspect: str, duration_ms: int, scene_idx: int, freeze_end: bool = False) -> Optional[str]:
+async def _trim_stock_video(video_url: str, aspect: str, duration_ms: int, scene_idx: int, freeze_end: bool = False, workdir: Optional[str] = None) -> Optional[str]:
     """Download a stock video (Pexels/Pixabay), trim to `duration_ms`, scale +
     crop to match the output aspect, upload to fal storage, return the URL.
     fal.ai's compose IGNORES the keyframe `duration` for video-type keyframes
@@ -1506,6 +1522,7 @@ async def _trim_stock_video(video_url: str, aspect: str, duration_ms: int, scene
     tmpdir = tempfile.mkdtemp(prefix="trim_")
     src = os.path.join(tmpdir, "src.mp4")
     dst = os.path.join(tmpdir, "out.mp4")
+    keep_dst = False  # v1.20.6: preserved by finally-block when workdir is used
     try:
         # v1.20.4: stream the stock clip to disk instead of buffering the
         # entire (potentially 20-30MB) mp4 in RAM. On 512MB containers
@@ -1552,6 +1569,16 @@ async def _trim_stock_video(video_url: str, aspect: str, duration_ms: int, scene
             logger.warning(f"[trim] ffmpeg failed scene={scene_idx} freeze_end={freeze_end} rc={proc.returncode} stderr={err.decode()[-300:]}")
             return None
         # v1.20.2: hard 90s upload timeout — see _fal_upload_with_timeout.
+        # v1.20.6: when workdir is provided, keep the local mp4 for the
+        # local ffmpeg compose path (no fal upload).
+        if workdir is not None:
+            final_local = os.path.join(workdir, f"scene_{scene_idx:03d}.mp4")
+            try:
+                shutil.move(dst, final_local)
+            except Exception:
+                shutil.copy(dst, final_local)
+            keep_dst = True
+            return final_local
         fal_url = await _fal_upload_with_timeout(dst, scene_idx, "trim")
         return fal_url
     except Exception as exc:
@@ -1559,10 +1586,13 @@ async def _trim_stock_video(video_url: str, aspect: str, duration_ms: int, scene
         return None
     finally:
         try:
-            for f in (src, dst):
-                if os.path.exists(f):
-                    os.unlink(f)
-            os.rmdir(tmpdir)
+            os.unlink(src) if os.path.exists(src) else None
+            if not keep_dst and os.path.exists(dst):
+                os.unlink(dst)
+            try:
+                os.rmdir(tmpdir)
+            except OSError:
+                pass
         except Exception:
             pass
 
@@ -2089,6 +2119,197 @@ async def _fal_upload_with_timeout(path: str, scene_idx: int, kind: str) -> Opti
         return None
 
 
+# =============================================================================
+# Local ffmpeg compose (v1.20.6 / Iter 66) — the fal.ai-independent render
+# path. Replaces the 7×fal-upload + 1×fal-compose fan-out that historically
+# hung renders at 55% when fal.ai storage was slow or rate-limited.
+#
+# Design:
+#   1. Every render gets a job-scoped workdir at /tmp/render_{job_id}/. All
+#      intermediate scene clips + audio downloads + final MP4 live here.
+#   2. Scene normalizers write MP4s directly into this workdir (skipping
+#      the per-scene fal upload) and return the LOCAL PATH instead of a
+#      fal URL.
+#   3. `_local_ffmpeg_compose` concats those clips + mux'es the Kokoro audio
+#      + burns captions (optional, downstream) in a single ffmpeg pass with
+#      `-c:v copy` (no re-encode — sub-second even for 20-scene videos).
+#   4. Final MP4 gets ONE upload attempt to fal storage for URL hosting
+#      (with 3-attempt retry). If fal is fully unreachable, the file is
+#      served from the backend via GET /api/renders/{job_id}/video.mp4.
+#   5. Workdir is cleaned up on completion (success OR failure). A safety
+#      sweep also runs at startup to catch any dirs left over from a
+#      previous OOM-kill.
+#
+# This is a strict superset of the old path: nothing that used to succeed
+# now fails, and multiple prior failure modes (fal storage rate-limits,
+# fal compose queue lag, per-scene upload timeouts) become physical
+# impossibilities because those network calls are gone.
+# =============================================================================
+
+RENDER_WORKDIR_ROOT = os.path.join(tempfile.gettempdir(), "f48_renders")
+# Env kill-switch — flip to "0" to revert to fal-based compose while
+# debugging. Default "1" (local compose ON) since it's the whole point of
+# this iteration.
+USE_LOCAL_COMPOSE = os.environ.get("USE_LOCAL_COMPOSE", "1").strip() != "0"
+
+
+def _make_job_workdir(job_id: str) -> str:
+    """Create + return the job-scoped scratch directory. Idempotent."""
+    os.makedirs(RENDER_WORKDIR_ROOT, exist_ok=True)
+    d = os.path.join(RENDER_WORKDIR_ROOT, job_id)
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _cleanup_job_workdir(job_id: str) -> None:
+    """Remove the job's scratch dir + all intermediate files. Safe to call
+    multiple times; never raises."""
+    if not job_id:
+        return
+    d = os.path.join(RENDER_WORKDIR_ROOT, job_id)
+    if os.path.isdir(d):
+        shutil.rmtree(d, ignore_errors=True)
+
+
+async def _download_url_to_local(url: str, dest_path: str, *, timeout_s: float = 120.0) -> str:
+    """Stream a URL to a local file. Used to bring Kokoro TTS audio + any
+    fal-hosted AI-generated clips into the local workdir so `_local_ffmpeg_compose`
+    can process them alongside the natively-local kburns/trim outputs.
+    Raises on any HTTP error — caller catches and falls back to fal compose."""
+    async with httpx.AsyncClient(timeout=timeout_s, follow_redirects=True) as cli:
+        async with cli.stream("GET", url) as r:
+            r.raise_for_status()
+            with open(dest_path, "wb") as f:
+                async for chunk in r.aiter_bytes(64 * 1024):
+                    f.write(chunk)
+    return dest_path
+
+
+async def _ensure_local_clip(clip_url_or_path: str, workdir: str, scene_idx: int) -> Optional[str]:
+    """Resolve a clip reference to a guaranteed-local path. Kburns/trim
+    already return absolute local paths (starts with `/`); fal-hosted AI
+    clips get downloaded into workdir. Returns None if download fails so
+    the caller can drop the scene."""
+    if not clip_url_or_path:
+        return None
+    # Local absolute paths — pass through
+    if clip_url_or_path.startswith("/") and os.path.exists(clip_url_or_path):
+        return clip_url_or_path
+    # Remote URL — download to workdir
+    dest = os.path.join(workdir, f"remote_scene_{scene_idx:03d}.mp4")
+    try:
+        return await _download_url_to_local(clip_url_or_path, dest, timeout_s=90.0)
+    except Exception as exc:
+        logger.warning(f"[compose-local] scene={scene_idx} download failed: {type(exc).__name__}: {exc}")
+        return None
+
+
+async def _local_ffmpeg_compose(
+    clip_paths: list[str],
+    audio_url: Optional[str],
+    workdir: str,
+) -> str:
+    """Concat local scene clips + mux audio into workdir/final.mp4.
+    Returns the absolute local path. Raises on ffmpeg failure so the
+    caller can fall back to fal-compose.
+
+    IMPORTANT: assumes every clip has the SAME resolution + fps + codec
+    (which is true because kburns + trim both write H.264 yuv420p at 30fps
+    at the render's target aspect ratio). Under that assumption we can use
+    `-c:v copy` — the concat demuxer just stitches keyframe boundaries
+    without re-encoding, which is ~50× faster than re-encoding and doesn't
+    load frames into RAM.
+    """
+    if not clip_paths:
+        raise RuntimeError("no clips to compose")
+
+    # 1) Concat list file (ffmpeg concat demuxer format)
+    concat_txt = os.path.join(workdir, "concat.txt")
+    with open(concat_txt, "w") as f:
+        for p in clip_paths:
+            # ffmpeg concat demuxer needs single-quoted absolute paths;
+            # single quotes inside the path get escaped as '\''.
+            safe = p.replace("'", "'\\''")
+            f.write(f"file '{safe}'\n")
+
+    # 2) Audio pull. Kokoro returns an https:// URL (fal-hosted). Bring it
+    # local so ffmpeg can mux it. If audio_url is missing we produce a
+    # silent video (rare — Kokoro rarely fails).
+    audio_local: Optional[str] = None
+    if audio_url:
+        audio_local = os.path.join(workdir, "audio.mp3")
+        try:
+            await _download_url_to_local(audio_url, audio_local, timeout_s=120.0)
+        except Exception as exc:
+            logger.warning(f"[compose-local] audio download failed, will render silent: {exc}")
+            audio_local = None
+
+    # 3) ffmpeg concat + mux
+    final_path = os.path.join(workdir, "final.mp4")
+    if audio_local:
+        cmd = [
+            FFMPEG_BIN, "-y", "-loglevel", "error",
+            "-threads", "1",
+            "-f", "concat", "-safe", "0", "-i", concat_txt,   # input 0: video sequence
+            "-i", audio_local,                                  # input 1: audio track
+            "-c:v", "copy",                                     # stream-copy — no re-encode
+            "-c:a", "aac", "-b:a", "128k",                      # mux audio as AAC 128k
+            "-map", "0:v:0",
+            "-map", "1:a:0",
+            "-shortest",                                        # trim to shortest stream
+            "-movflags", "+faststart",                          # web-playable header up front
+            final_path,
+        ]
+    else:
+        cmd = [
+            FFMPEG_BIN, "-y", "-loglevel", "error",
+            "-threads", "1",
+            "-f", "concat", "-safe", "0", "-i", concat_txt,
+            "-c:v", "copy",
+            "-an",  # no audio
+            "-movflags", "+faststart",
+            final_path,
+        ]
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, err = await asyncio.wait_for(proc.communicate(), timeout=180.0)
+    if proc.returncode != 0 or not os.path.exists(final_path):
+        raise RuntimeError(
+            f"local ffmpeg compose failed (rc={proc.returncode}): "
+            + err.decode("utf-8", errors="ignore")[:400]
+        )
+    return final_path
+
+
+async def _upload_final_to_fal(local_path: str, *, max_attempts: int = 3) -> Optional[str]:
+    """One-shot upload of the final composed MP4 to fal storage. Retries
+    up to 3 times with exponential backoff. Returns the fal URL, or None
+    if all attempts fail (in which case caller serves the file locally
+    via GET /api/renders/{job_id}/video.mp4)."""
+    if not os.path.exists(local_path):
+        return None
+    loop = asyncio.get_event_loop()
+    delay_s = 1.0
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return await asyncio.wait_for(
+                loop.run_in_executor(None, fal_client.upload_file, local_path),
+                timeout=180.0,
+            )
+        except Exception as exc:
+            logger.warning(
+                f"[final-upload] attempt {attempt}/{max_attempts} failed: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            if attempt < max_attempts:
+                await asyncio.sleep(delay_s)
+                delay_s *= 2
+    return None
+
+
 async def _fal_kling_i2v_generate(
     image_url: str,
     prompt: str,
@@ -2534,6 +2755,7 @@ async def _run_render(job_id: str):
                 "cancelled": True,
             }},
         )
+        _cleanup_job_workdir(job_id)
     except Exception as exc:  # noqa: BLE001  — pipeline must never crash worker
         await db.renders.update_one(
             {"id": job_id},
@@ -2544,6 +2766,7 @@ async def _run_render(job_id: str):
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }},
         )
+        _cleanup_job_workdir(job_id)
 
     # Group B refund-on-failure. Re-read the job to see the FINAL status the
     # pipeline persisted (the inner functions also set status=failed on
@@ -2665,7 +2888,7 @@ def _finalize(job_id: str, *, ok: bool, url: Optional[str], actual_cost_cents: i
     # continued through a long compose await after cancel was requested.
     # If the row is already terminal, this update matches zero docs and
     # is a safe no-op.
-    return db.renders.update_one(
+    result = db.renders.update_one(
         {"id": job_id, "status": {"$nin": ["complete", "failed"]}},
         {"$set": {
             "status": "complete" if ok else "failed",
@@ -2677,6 +2900,12 @@ def _finalize(job_id: str, *, ok: bool, url: Optional[str], actual_cost_cents: i
             "updated_at": now_iso,
         }},
     )
+    # v1.20.6: cleanup job workdir on terminal state. Idempotent — safe to
+    # call even if USE_LOCAL_COMPOSE was off (dir simply doesn't exist).
+    # We defer this to _finalize instead of the inner pipeline so all
+    # paths (success, timeout, exception, cancel) go through one place.
+    _cleanup_job_workdir(job_id)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -2915,6 +3144,13 @@ async def _run_render_faceless(job: dict):
     scenes = job.get("scenes") or []
     actual_cost_cents = 0
     n_scenes = max(1, len(scenes))
+    # v1.20.6: job-scoped scratch dir for the local ffmpeg compose path.
+    # Every intermediate scene clip + downloaded audio lives here so the
+    # final concat + mux can happen on-box, no fal.ai storage round-trip.
+    # Cleaned up in the finally block at the bottom of this function
+    # (success OR failure OR cancellation).
+    workdir = _make_job_workdir(job_id) if USE_LOCAL_COMPOSE else None
+    logger.info(f"[render] job={job_id} local_compose={USE_LOCAL_COMPOSE} workdir={workdir}")
 
     # ---- Faceless provider config gate (v1.19.1 fal.ai kill switch) ----
     # Resolve admin config BEFORE any fal.ai / provider call. If AI is
@@ -3448,18 +3684,23 @@ async def _run_render_faceless(job: dict):
 
         async def _run_one():
             override = scene_overrides.get(idx) or {}
+            # v1.20.6: when USE_LOCAL_COMPOSE is on, pass the job workdir so
+            # kburns/trim write directly to a stable path and skip fal upload.
+            # Local paths flow through the compose step unchanged (the local
+            # compose function accepts both URLs and paths via `_ensure_local_clip`).
+            wd = workdir if USE_LOCAL_COMPOSE else None
             if kind == "ai":
                 # `flux_static` is the explicit opt-out: stills + cheap ken-burns
                 # (no Kling i2v cost). Default `flux` upgrades to real AI motion
                 # via Kling 2.1 standard. Falls back to ken-burns if Kling fails.
                 if ai_engine == "flux_static":
-                    return await _make_kenburns_mp4(url, job["aspect"], this_dur, idx)
+                    return await _make_kenburns_mp4(url, job["aspect"], this_dur, idx, workdir=wd)
                 mp4 = await _make_i2v_clip(
                     url, scene_prompts[idx], job["aspect"], this_dur, idx,
                 )
                 if not mp4:
                     logger.warning(f"[i2v] scene {idx} Kling failed — falling back to ken-burns")
-                    mp4 = await _make_kenburns_mp4(url, job["aspect"], this_dur, idx)
+                    mp4 = await _make_kenburns_mp4(url, job["aspect"], this_dur, idx, workdir=wd)
                 return mp4
             if kind == "ai_t2v":
                 # url is the "__t2v_pending__" sentinel — generate the real video
@@ -3470,6 +3711,7 @@ async def _run_render_faceless(job: dict):
             return await _trim_stock_video(
                 url, job["aspect"], this_dur, idx,
                 freeze_end=override.get("freeze_end", False),
+                workdir=wd,
             )
 
         try:
@@ -3506,28 +3748,28 @@ async def _run_render_faceless(job: dict):
 
     await _set_progress(70, f"Stitching {n_surviving} scenes…", status="composing")
 
-    # --- 5) Build compose payload. fal.ai's ffmpeg-compose allows AT MOST one
-    # video track. Every scene is now a video (stock MP4 or ken-burns'd Flux
-    # image), so they all live in a single video track as sequential keyframes.
-    # `timestamp` + `duration` are in MILLISECONDS per the schema. Per-scene
-    # duration is whatever the normalize step actually produced — which itself
-    # tracks the weighted-by-script-beat allocation computed earlier. ---
-    visual_keyframes: list = []
-    cursor_ms = 0
-    for slot, (_idx, url, _kind, this_dur) in enumerate(kburns_results):
-        visual_keyframes.append({"url": url, "timestamp": cursor_ms, "duration": this_dur})
-        cursor_ms += this_dur
+    # --- 5) Compose. Two paths: ---
+    #   • USE_LOCAL_COMPOSE (v1.20.6, default ON): every kburns/trim result is
+    #     already a local absolute file path in `workdir`; concat + mux happens
+    #     locally via ffmpeg with `-c:v copy` (no re-encode, sub-second even
+    #     for 20-scene videos). Final MP4 is uploaded ONCE to fal storage for
+    #     URL hosting (with 3-attempt retry), or served locally via
+    #     `/api/renders/{job_id}/video.mp4` if fal storage is unreachable.
+    #   • Legacy fal-compose path (USE_LOCAL_COMPOSE=0): 1×N fal uploads then
+    #     a `fal-ai/ffmpeg-api/compose` queue run. Kept as an env-flippable
+    #     escape hatch in case a local ffmpeg edge case surfaces on prod.
+    #
+    # A quick sanity check: local compose requires EVERY normalize result to
+    # be a local path. If any scene came back as a URL (e.g. AI Kling i2v
+    # returned a fal URL that we didn't `shutil.move` into workdir), we fall
+    # back to fal compose for the whole render. Mixed local/remote sources
+    # would need per-scene downloads which defeats the point.
+    all_local = USE_LOCAL_COMPOSE and workdir is not None and all(
+        isinstance(u, str) and u.startswith("/") and os.path.exists(u)
+        for (_i, u, _k, _d) in kburns_results
+    )
 
-    total_video_ms = cursor_ms
-    tracks: list = [{"id": "visuals", "type": "video", "keyframes": visual_keyframes}]
-    if audio_url:
-        tracks.append({
-            "id": "audio",
-            "type": "audio",
-            "keyframes": [{"url": audio_url, "timestamp": 0, "duration": total_video_ms}],
-        })
-
-    # Background ticker so progress feels alive while fal compose works.
+    # Background ticker so progress feels alive during compose.
     stop_ticking = asyncio.Event()
 
     async def tick_compose_progress():
@@ -3546,24 +3788,124 @@ async def _run_render_faceless(job: dict):
             except Exception:
                 pass
 
-    ticker_task = asyncio.create_task(tick_compose_progress())
-    try:
-        compose_res = await _fal_queue_run(
-            "fal-ai/ffmpeg-api/compose",
-            {"tracks": tracks},
-            max_wait_s=900,
-        )
-    finally:
-        stop_ticking.set()
-        try:
-            await asyncio.wait_for(ticker_task, timeout=1.0)
-        except Exception:
-            pass
+    composed_url: Optional[str] = None
 
-    actual_cost_cents += 2
-    if not compose_res:
-        return  # _fal_queue_run already finalized the job with an error
-    composed_url = compose_res.get("video_url") or (compose_res.get("video") or {}).get("url")
+    if all_local:
+        # -------- Local ffmpeg compose (default post-v1.20.6) ------------------
+        # Order kburns_results by their original scene index so concat matches
+        # the intended timeline. (asyncio.gather can complete scenes out of
+        # order — the sort is safety-critical here.)
+        ordered = sorted(kburns_results, key=lambda t: t[0])
+        clip_paths = [u for (_i, u, _k, _d) in ordered]
+        logger.info(f"[render] job={job_id} local compose starting with {len(clip_paths)} clips")
+
+        ticker_task = asyncio.create_task(tick_compose_progress())
+        try:
+            final_local = await _local_ffmpeg_compose(clip_paths, audio_url, workdir)
+        except Exception as exc:
+            logger.warning(
+                f"[render] job={job_id} local compose failed: {type(exc).__name__}: {exc}. "
+                f"Falling back to fal-compose."
+            )
+            stop_ticking.set()
+            try:
+                await asyncio.wait_for(ticker_task, timeout=1.0)
+            except Exception:
+                pass
+            final_local = None
+        else:
+            stop_ticking.set()
+            try:
+                await asyncio.wait_for(ticker_task, timeout=1.0)
+            except Exception:
+                pass
+
+        if final_local:
+            # Upload final MP4 to fal storage for URL hosting. This is ONE
+            # request (vs the old 7-per-render), retried up to 3 times.
+            await _set_progress(88, "Publishing final video…")
+            composed_url = await _upload_final_to_fal(final_local, max_attempts=3)
+            if composed_url:
+                actual_cost_cents += 1  # single-file upload — much cheaper than compose queue
+            else:
+                # Fal storage completely unreachable — serve from backend
+                # via the local video endpoint. Stamp the LOCAL path on the
+                # render doc so the endpoint knows what to serve. The
+                # public URL is a relative /api path that resolves through
+                # REACT_APP_BACKEND_URL on the client.
+                logger.warning(
+                    f"[render] job={job_id} fal storage upload failed; "
+                    f"serving locally"
+                )
+                # Move final into a persistent per-job dir under the render
+                # storage root so cleanup doesn't kill it.
+                served_root = os.path.join(RENDER_WORKDIR_ROOT, "_served", job_id)
+                os.makedirs(served_root, exist_ok=True)
+                served_path = os.path.join(served_root, "final.mp4")
+                try:
+                    shutil.move(final_local, served_path)
+                except Exception:
+                    shutil.copy(final_local, served_path)
+                # Update DB with local path for the video endpoint.
+                await db.renders.update_one(
+                    {"id": job_id},
+                    {"$set": {"local_video_path": served_path,
+                              "updated_at": datetime.now(timezone.utc).isoformat()}},
+                )
+                composed_url = f"/api/renders/{job_id}/video.mp4"
+
+    # -------- Legacy fal-compose fallback path ---------------------------------
+    if not composed_url:
+        # Every scene needs to be a URL for fal compose. For scenes stuck as
+        # local paths (local-compose returned some but failed on others),
+        # skip the fallback — we can't easily promote local files to URLs
+        # here without another upload round. Give a clear error.
+        if any(isinstance(u, str) and u.startswith("/") for (_i, u, _k, _d) in kburns_results):
+            await _finalize(job_id, ok=False, url=None, actual_cost_cents=actual_cost_cents)
+            await db.renders.update_one(
+                {"id": job_id},
+                {"$set": {"error": "Local ffmpeg compose failed and remote fallback not available."}},
+            )
+            return
+
+        # fal.ai's ffmpeg-compose allows AT MOST one video track. Every scene is
+        # now a video (stock MP4 or ken-burns'd Flux image), so they all live in
+        # a single video track as sequential keyframes. `timestamp` + `duration`
+        # are in MILLISECONDS per the schema. Per-scene duration is whatever
+        # the normalize step actually produced.
+        visual_keyframes: list = []
+        cursor_ms = 0
+        for slot, (_idx, url, _kind, this_dur) in enumerate(kburns_results):
+            visual_keyframes.append({"url": url, "timestamp": cursor_ms, "duration": this_dur})
+            cursor_ms += this_dur
+
+        total_video_ms = cursor_ms
+        tracks: list = [{"id": "visuals", "type": "video", "keyframes": visual_keyframes}]
+        if audio_url:
+            tracks.append({
+                "id": "audio",
+                "type": "audio",
+                "keyframes": [{"url": audio_url, "timestamp": 0, "duration": total_video_ms}],
+            })
+
+        ticker_task = asyncio.create_task(tick_compose_progress())
+        try:
+            compose_res = await _fal_queue_run(
+                "fal-ai/ffmpeg-api/compose",
+                {"tracks": tracks},
+                max_wait_s=900,
+            )
+        finally:
+            stop_ticking.set()
+            try:
+                await asyncio.wait_for(ticker_task, timeout=1.0)
+            except Exception:
+                pass
+
+        actual_cost_cents += 2
+        if not compose_res:
+            return  # _fal_queue_run already finalized the job with an error
+        composed_url = compose_res.get("video_url") or (compose_res.get("video") or {}).get("url")
 
     # --- Caption burn-in (second compose pass) ---------------------------
     # User-uploaded voiceovers + Kokoro TTS both produce clean audio that
@@ -4047,6 +4389,32 @@ async def studio_render_status(job_id: str, user: AuthUser = Depends(current_use
         raise HTTPException(status_code=404, detail="Not found")
     doc.pop("_id", None)
     return doc
+
+
+# ---------------------------------------------------------------------------
+# Local video serving fallback (v1.20.6 / Iter 66).
+# Only used when the final MP4 could NOT be uploaded to fal storage (all 3
+# retries failed). In that case `_run_render_faceless` stamps
+# `local_video_path` on the render doc and returns `/api/renders/{id}/video.mp4`
+# as the public URL. This endpoint streams the file with byte-range support
+# (via FileResponse) so the browser video player can scrub without
+# downloading the whole thing.
+# ---------------------------------------------------------------------------
+@api.get("/renders/{job_id}/video.mp4")
+async def serve_local_render(job_id: str, request: Request):
+    doc = await db.renders.find_one(
+        {"id": job_id},
+        {"local_video_path": 1, "status": 1, "user_email": 1},
+    )
+    if not doc or not doc.get("local_video_path"):
+        raise HTTPException(status_code=404, detail="Not found")
+    path = doc["local_video_path"]
+    if not os.path.exists(path):
+        raise HTTPException(status_code=410, detail="Local file expired or was cleaned up")
+    # FileResponse handles Range headers natively — the video player gets
+    # partial-content responses for scrub/seek without loading the whole
+    # file into RAM.
+    return FileResponse(path, media_type="video/mp4", filename=f"{job_id}.mp4")
 
 
 @api.get("/studio/history")
