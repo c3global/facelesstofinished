@@ -14,9 +14,17 @@
 //    See PRD.md → "Workflow rule: changelog must move with every deploy."
 // 4. Most recent on top. Each entry has version + date + bullet list.
 
-export const APP_VERSION = "1.20.1";
+export const APP_VERSION = "1.20.2";
 
 export const CHANGELOG = [
+  {
+    version: "1.20.2",
+    date: "2026-08-10",
+    changes: [
+      "🐛 Fixed the Faceless render getting stuck at 55% — added per-scene timeouts so one hung upload can no longer freeze the whole render. If a scene really can't process, we drop it and finish the rest instead of hanging forever",
+      "🐛 Fixed the 'origin overloaded' error on Show me 5 angles — the AI retry budget was creeping past the edge network's timeout on slow days, now capped so you always get a clean response inside 75 seconds",
+    ],
+  },
   {
     version: "1.20.1",
     date: "2026-08-03",

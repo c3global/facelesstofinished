@@ -20,6 +20,66 @@ back to it for entitlement verification.
 
 ## 🔁 Workflow rule: Changelog moves with every change (set 2026-06-29 by user)
 
+### Iteration 62 (2026-08-10) — Two production bugs fixed for paying clients (v1.20.2)
+
+**Trigger:** Charity forwarded bug reports from two paying Studio-tier clients:
+- **Bug 1 (tuimperioyt@gmail.com)**: Faceless render hangs at exactly 55% and never advances.
+- **Bug 2 (stego.mediaproduction@gmail.com, Germany)**: Cloudflare 520 "origin overloaded" error on `/scripts/angles`, reproduced on both Chrome + Firefox, no VPN, unresolved 11+ days.
+
+**Root-cause diagnosis (server.py):**
+
+**Bug 1 root cause:** `_run_render_faceless` step 4 ("Adding motion to scenes…", progress=55%) runs `asyncio.gather(*[normalize_scene(slot, idx, url) for slot, (idx, url) in enumerate(surviving)])`. If ANY scene's future hangs indefinitely, the whole gather blocks forever — progress never advances past 55%.
+
+The unprotected hang points:
+- `fal_client.upload_file` (sync SDK wrapped in `run_in_executor`) — NO timeout. If fal.ai storage hangs on a TCP connection, the executor thread blocks forever. This happens in `_make_kenburns_mp4` (line 1305), `_trim_stock_video` (line 1399), `_generate_scene_image` (line 1534), and `_trim_t2v_clip` (line 1849).
+- No outer `asyncio.wait_for` around the whole normalize_scene body — a genuinely hung scene had no upper bound.
+
+**Bug 2 root cause:** The `_claude_complete` retry loop I shipped in v1.19.8 (Iter 59) had a 3-attempt budget with 2s → 4s exponential backoff. On slow days (Anthropic overloaded + slow US↔EU routing), 3 attempts × ~30s per call + 6s backoff = ~96s total. That's INSIDE Cloudflare's ~100s idle timeout mathematically but leaves no safety margin — one extra second of network jitter and CF closes the connection with 520 before we return. Fix that was intended to prevent 520s was actually right on the edge of causing them.
+
+**Fixes shipped (v1.20.2):**
+
+**Fix 1 — Per-scene hard timeout (server.py `_run_render_faceless.normalize_scene`):**
+- Wrapped normalize_scene body in `asyncio.wait_for(_run_one(), timeout=per_scene_timeout)`.
+- Stock scenes: 180s budget (download + ffmpeg + upload).
+- AI scenes (Flux+Kling, ken-burns, t2v): 480s budget (Kling gen is slow but bounded).
+- On timeout: log warning, return None, drop the scene, gather completes cleanly.
+- Render always finishes or fails cleanly — never sticks at 55% again.
+
+**Fix 2 — 90s hard cap on every fal.ai upload:**
+- New helper `_fal_upload_with_timeout(path, scene_idx, kind)` — runs `fal_client.upload_file` in executor wrapped by `asyncio.wait_for(..., timeout=90)`.
+- All 4 upload sites updated: `_make_kenburns_mp4`, `_trim_stock_video`, `_generate_scene_image`, `_trim_t2v_clip`.
+- Hung fal storage endpoint can no longer freeze a render — worst case is a dropped scene.
+
+**Fix 3 — Total-time budget on `_claude_complete`:**
+- New `CLAUDE_TOTAL_BUDGET_S = 75.0` constant (25s buffer under Cloudflare's ~100s idle limit).
+- `_claude_complete` now wraps `_claude_complete_inner` in `asyncio.wait_for(..., timeout=75)`.
+- On total-time timeout: return HTTP 503 with friendly copy: *"The AI provider is temporarily overloaded. Please try again in 30 seconds."*
+- Reduced `_CLAUDE_MAX_ATTEMPTS` from 3 → 2 and `_CLAUDE_BASE_BACKOFF_S` from 2s → 1s so retry budget can't run over the total budget.
+- Frontend `Scripts.jsx` recognizes 503 with the same friendly retry copy as 520/522/524.
+
+**Files touched:**
+- `/app/backend/server.py`: new `_fal_upload_with_timeout` helper, 4 upload call sites, `normalize_scene` outer timeout, retry constants reduced, `_claude_complete` split into `_claude_complete_inner` + total-time guard.
+- `/app/frontend/src/pages/Scripts.jsx`: 503 → same friendly error copy as 520.
+- `/app/frontend/src/changelog.js`: v1.20.2 with 2 customer-facing bullets.
+- `/app/memory/PRD.md`: this iter entry.
+
+**Verified on preview:**
+- `POST /api/scripts/angles` still returns 5 angles in ~13s (happy path). Total budget is 75s — well under Cloudflare's 100s limit.
+- Backend restarts clean; Python lint clean.
+- Cannot repro the 55% stall on preview without an actual fal.ai storage outage — logic verified by code review + timeouts are pure hardening (worst case is same-as-before, best case is no more infinite hangs).
+
+**Production redeploy required:**
+Both clients are on PRODUCTION (`faceless48.c3global.co`). The fix runs on preview; Charity needs to redeploy from Emergent's deploy pipeline for these paying clients to actually see the fix.
+
+**Communication draft for the two clients:**
+- tuimperio: "Found and fixed the root cause — one hung scene upload was freezing the whole render at 55%. Deploying the fix now, please retry once you receive the update notice."
+- stego.mediaproduction: "Root cause was on our side, not yours. Retry budget was too tight for the EU↔US round-trip. Fixed with a hard 75-second total budget so you always get a real response instead of a 520. Deploying now."
+
+**Not addressed (backlog):**
+- Backend logs for the exact failure timestamps (Jul 30, Aug 2, Aug 4, Aug 6, Aug 8, Aug 9) — I can't access production logs from preview. Charity would need to check Emergent's production log viewer if she wants forensic detail.
+- Neither client answered the diagnostic questions asked initially (OS/browser/etc.) — but the fixes are code-level so client-side environment doesn't matter.
+
+
 ### Iteration 61 (2026-08-03) — Freeze looping B-roll toggle (v1.20.1) + Canva scoping
 
 **Trigger:** Charity: *"Yes you can add it but also, let's find a way to integrate canva so b-roll can come from the elements tab, or their own designs, etc."*

@@ -1301,8 +1301,10 @@ async def _make_kenburns_mp4(image_url: str, aspect: str, duration_ms: int, scen
             logger.warning(f"[kburns] ffmpeg failed scene={scene_idx} rc={proc.returncode} stderr={err.decode()[-300:]}")
             return None
         # Upload to fal storage (sync API — run in default executor so we don't block).
-        loop = asyncio.get_event_loop()
-        fal_url = await loop.run_in_executor(None, fal_client.upload_file, dst)
+        # v1.20.2: hard 90s timeout via _fal_upload_with_timeout — the raw
+        # executor call could hang forever, freezing the whole normalize_scene
+        # gather at 55% (paying-client-reported bug).
+        fal_url = await _fal_upload_with_timeout(dst, scene_idx, "kburns")
         return fal_url
     except Exception as exc:
         logger.warning(f"[kburns] scene={scene_idx} exception: {type(exc).__name__}: {exc}")
@@ -1393,8 +1395,8 @@ async def _trim_stock_video(video_url: str, aspect: str, duration_ms: int, scene
         if proc.returncode != 0 or not os.path.exists(dst):
             logger.warning(f"[trim] ffmpeg failed scene={scene_idx} freeze_end={freeze_end} rc={proc.returncode} stderr={err.decode()[-300:]}")
             return None
-        loop = asyncio.get_event_loop()
-        fal_url = await loop.run_in_executor(None, fal_client.upload_file, dst)
+        # v1.20.2: hard 90s upload timeout — see _fal_upload_with_timeout.
+        fal_url = await _fal_upload_with_timeout(dst, scene_idx, "trim")
         return fal_url
     except Exception as exc:
         logger.warning(f"[trim] scene={scene_idx} exception: {type(exc).__name__}: {exc}")
@@ -1528,8 +1530,8 @@ async def _generate_scene_image(
             try:
                 with open(dst, "wb") as f:
                     f.write(png_bytes)
-                loop = asyncio.get_event_loop()
-                url = await loop.run_in_executor(None, fal_client.upload_file, dst)
+                # v1.20.2: hard 90s upload timeout — see _fal_upload_with_timeout.
+                url = await _fal_upload_with_timeout(dst, scene_idx, "nano-banana")
                 if url:
                     await db.flux_cache.update_one(
                         {"_id": cache_key},
@@ -1843,8 +1845,8 @@ async def _trim_t2v_clip(video_url: str, duration_ms: int, scene_idx: int) -> Op
         if proc.returncode != 0 or not os.path.exists(dst):
             logger.warning(f"[t2v-trim] ffmpeg failed scene={scene_idx} rc={proc.returncode} stderr={err.decode()[-300:]}")
             return None
-        loop = asyncio.get_event_loop()
-        fal_url = await loop.run_in_executor(None, fal_client.upload_file, dst)
+        # v1.20.2: hard 90s upload timeout — see _fal_upload_with_timeout.
+        fal_url = await _fal_upload_with_timeout(dst, scene_idx, "t2v-trim")
         return fal_url
     except Exception as exc:
         logger.warning(f"[t2v-trim] scene={scene_idx} exception: {type(exc).__name__}: {exc}")
@@ -1894,6 +1896,41 @@ KLING_I2V_MODEL = "fal-ai/kling-video/v2.1/standard/image-to-video"
 KLING_I2V_COST_CENTS_5S = 25
 KLING_I2V_COST_CENTS_10S = 50
 KLING_I2V_MAX_WAIT_S = 600
+
+
+# v1.20.2 (Iter 62): fal.ai storage uploads use the sync SDK wrapped in an
+# executor. Historically these had NO timeout — one hung upload could stall
+# `_run_render_faceless` at 55% ("Adding motion to scenes…") indefinitely
+# because `asyncio.gather` waits for every scene. Reported by paying client
+# tuimperioyt@gmail.com repeatedly stuck at exactly 55%. This wrapper
+# guarantees every upload either completes, errors, or times out cleanly
+# so a slow scene can never freeze the whole render.
+FAL_UPLOAD_TIMEOUT_S = 90
+
+
+async def _fal_upload_with_timeout(path: str, scene_idx: int, kind: str) -> Optional[str]:
+    """Upload a local file to fal.ai storage, with a hard 90-second timeout.
+
+    fal_client.upload_file is a synchronous SDK call, so we run it in the
+    default executor. Without the wait_for wrapper, a hung TCP connection
+    to fal storage could block the executor thread forever — and because
+    every scene's future goes through the same gather, one hung upload
+    would stall the whole render at "Adding motion to scenes…" (55%).
+    Returns None on timeout / exception so the caller can drop the scene
+    and continue instead of hanging the pipeline.
+    """
+    loop = asyncio.get_event_loop()
+    try:
+        return await asyncio.wait_for(
+            loop.run_in_executor(None, fal_client.upload_file, path),
+            timeout=FAL_UPLOAD_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(f"[{kind}] scene={scene_idx} fal upload timed out after {FAL_UPLOAD_TIMEOUT_S}s")
+        return None
+    except Exception as exc:
+        logger.warning(f"[{kind}] scene={scene_idx} fal upload exception: {type(exc).__name__}: {exc}")
+        return None
 
 
 async def _fal_kling_i2v_generate(
@@ -3121,33 +3158,56 @@ async def _run_render_faceless(job: dict):
             continue
 
     async def normalize_scene(slot: int, idx: int, url: str):
+        # v1.20.2: per-scene hard timeout guard. Without this, one hung
+        # scene (fal upload stall, Kling API silent hang, etc.) would
+        # freeze the entire `asyncio.gather` below and stick the render
+        # at 55% forever — the exact bug tuimperioyt@gmail.com hit and
+        # what prompted this iteration. Timeout budgets are conservative
+        # so legitimate slow scenes (Kling 10s clips take ~90s to gen)
+        # still fit, but a truly dead scene bails inside 6-7 minutes.
         this_dur = per_dur_ms_list[slot]
         kind = scene_kind[idx]
-        override = scene_overrides.get(idx) or {}
-        if kind == "ai":
-            # `flux_static` is the explicit opt-out: stills + cheap ken-burns
-            # (no Kling i2v cost). Default `flux` upgrades to real AI motion
-            # via Kling 2.1 standard. Falls back to ken-burns if Kling fails.
-            if ai_engine == "flux_static":
-                mp4 = await _make_kenburns_mp4(url, job["aspect"], this_dur, idx)
-            else:
+        # Per-scene timeout budget by kind:
+        # - stock: 3 min (download + ffmpeg + 90s upload = ~3 min worst case)
+        # - kburns: 2 min (image download + ffmpeg + upload, no external API)
+        # - kling/i2v: 8 min (real Kling gen can take 5-6 min, plus trim + upload)
+        # - t2v: 8 min (same as i2v)
+        per_scene_timeout = 180.0 if kind == "stock" else 480.0
+
+        async def _run_one():
+            override = scene_overrides.get(idx) or {}
+            if kind == "ai":
+                # `flux_static` is the explicit opt-out: stills + cheap ken-burns
+                # (no Kling i2v cost). Default `flux` upgrades to real AI motion
+                # via Kling 2.1 standard. Falls back to ken-burns if Kling fails.
+                if ai_engine == "flux_static":
+                    return await _make_kenburns_mp4(url, job["aspect"], this_dur, idx)
                 mp4 = await _make_i2v_clip(
                     url, scene_prompts[idx], job["aspect"], this_dur, idx,
                 )
                 if not mp4:
                     logger.warning(f"[i2v] scene {idx} Kling failed — falling back to ken-burns")
                     mp4 = await _make_kenburns_mp4(url, job["aspect"], this_dur, idx)
-        elif kind == "ai_t2v":
-            # url is the "__t2v_pending__" sentinel — generate the real video
-            # via Kling/Veo/Pika using the stored prompt at this exact duration.
-            mp4 = await _make_t2v_clip(
-                scene_prompts[idx], job["aspect"], this_dur, ai_engine, idx,
-            )
-        else:
-            mp4 = await _trim_stock_video(
+                return mp4
+            if kind == "ai_t2v":
+                # url is the "__t2v_pending__" sentinel — generate the real video
+                # via Kling/Veo/Pika using the stored prompt at this exact duration.
+                return await _make_t2v_clip(
+                    scene_prompts[idx], job["aspect"], this_dur, ai_engine, idx,
+                )
+            return await _trim_stock_video(
                 url, job["aspect"], this_dur, idx,
                 freeze_end=override.get("freeze_end", False),
             )
+
+        try:
+            mp4 = await asyncio.wait_for(_run_one(), timeout=per_scene_timeout)
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"[normalize_scene] scene {idx} timed out after {per_scene_timeout}s "
+                f"(kind={kind}) — dropping scene so gather can complete"
+            )
+            return None
         if mp4:
             return (idx, mp4, "video", this_dur)
         # ffmpeg/upload failed — drop the scene so we keep the track uniform.
@@ -3930,8 +3990,16 @@ CLAUDE_MODEL = "claude-sonnet-4-5-20250929"
 # complaint: "the script engine is busy"). Both entry points now retry with
 # exponential backoff on 429 / 5xx / overloaded / timeout errors — auth /
 # 400 / 402 fail fast so the caller sees a real error, not a stalled loop.
-_CLAUDE_MAX_ATTEMPTS = 3
-_CLAUDE_BASE_BACKOFF_S = 2.0   # attempt 1 fail → wait 2s → attempt 2 fail → wait 4s → attempt 3 or give up
+#
+# v1.20.2 (Iter 62, 2026-08-10): tightened retry budget after a paying
+# German client (stego.mediaproduction@gmail.com) kept hitting Cloudflare
+# 520 on `/scripts/angles`. Root cause: 3 retries × ~30s Claude call time
+# + backoff could exceed Cloudflare's 100s idle timeout, so the 520 was
+# happening BEFORE the retry loop could return a real error. Reduced max
+# attempts 3→2 and backoff 2s→1s so total time is now ~62s worst case,
+# well under CF's 100s window.
+_CLAUDE_MAX_ATTEMPTS = 2
+_CLAUDE_BASE_BACKOFF_S = 1.0   # attempt 1 fail → wait 1s → attempt 2 → give up
 _CLAUDE_TRANSIENT_MARKERS = (
     "529", "overloaded", "rate_limit", "rate limit", "rate-limit",
     "timeout", "timed out", "connection", "temporarily unavailable",
@@ -4014,7 +4082,32 @@ async def _claude_complete(system_prompt: str, user_message: str, session_id: st
     5xx) up to `_CLAUDE_MAX_ATTEMPTS` times with exponential backoff before
     surfacing a clean 502 to the client. Prevents the "Cloudflare 520 —
     origin overloaded" cascade users hit when Anthropic has a bad minute.
+
+    v1.20.2: total-time hard cap via `asyncio.wait_for` so this function
+    ALWAYS returns (either success, HTTPException, or the total-time
+    guard's own 503) inside CLAUDE_TOTAL_BUDGET_S seconds. Guarantees
+    Cloudflare's ~100s idle timeout never fires — we always return a
+    real HTTP response first. Fixes the CF 520 that stego.mediaproduction
+    hit repeatedly from Germany.
     """
+    try:
+        return await asyncio.wait_for(
+            _claude_complete_inner(system_prompt, user_message, session_id, user_email),
+            timeout=CLAUDE_TOTAL_BUDGET_S,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(f"[claude] total-time guard tripped after {CLAUDE_TOTAL_BUDGET_S}s — returning 503")
+        raise HTTPException(
+            status_code=503,
+            detail="The AI provider is temporarily overloaded. Please try again in 30 seconds.",
+        )
+
+
+CLAUDE_TOTAL_BUDGET_S = 75.0  # Cloudflare edge closes idle at ~100s; leave 25s buffer.
+
+
+async def _claude_complete_inner(system_prompt: str, user_message: str, session_id: str | None = None, user_email: str | None = None) -> str:
+    """Actual retry loop. See `_claude_complete` for the total-time guard wrapper."""
     # BYOK: customer's own Anthropic key takes precedence (consumes their quota).
     if user_email:
         try:
