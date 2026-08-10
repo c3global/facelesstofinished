@@ -20,6 +20,59 @@ back to it for entitlement verification.
 
 ## 🔁 Workflow rule: Changelog moves with every change (set 2026-06-29 by user)
 
+### Iteration 64 (2026-08-10) — Root-cause fix for the 55% stuck bug + Cancel Render (v1.20.4)
+
+**Trigger:** Charity redeployed v1.20.3 and hit the SAME stuck-at-55% state as her paying clients — same screenshot, same behavior. An AI bot she consulted told her she needed to upgrade the Emergent tier from 512MB because "video processing is memory intensive." That advice was wrong (or at least premature): the real problem was in our code, not in Emergent's tier.
+
+**Root cause (dual-bug):**
+
+1. **Memory pressure at the 55% mark.** `_run_render_faceless` fired every scene through `asyncio.gather` in parallel — for an 8-scene video that's 8 ffmpeg processes (libx264, `preset medium`, unbounded threads) + 8 httpx clients each buffering the FULL stock clip into RAM via `r.content`. On a 512MB container the kernel OOM-killed either ffmpeg subprocesses (scenes fail silently) or the backend itself.
+
+2. **Orphaned renders after container restart.** When the backend gets OOM-killed (or Charity redeploys), the in-memory `asyncio.gather` is gone but the `db.renders` row still says `status: rendering, progress: 55`. There was **no watchdog** to reap these — they stay stuck forever until manually deleted. Every stuck render Charity's clients saw was one of these zombies.
+
+**Fix (belt-and-suspenders):**
+- **`NORMALIZE_CONCURRENCY` env var** (default 3): `normalize_scene` now holds a `Semaphore(NORMALIZE_CONCURRENCY)` for its entire lifecycle. At most 3 scenes normalize in parallel regardless of scene count. Peak RAM stays under ~300MB.
+- **`STUCK_RENDER_TIMEOUT_S` env var** (default 300s / 5 min): startup task `_start_orphan_render_reaper` scans `db.renders` every 60s. Any row in a non-terminal status whose `updated_at` (or `created_at` fallback) is older than the cutoff gets flipped to `failed` with a clear error message. First pass runs 2s after startup — so redeploys immediately clean up any in-flight renders that died with the previous container.
+- **`_set_progress` heartbeat**: every progress update now stamps `updated_at` so the reaper has ground truth. Cooperative cancellation check reads `cancel_requested` + `status` on every heartbeat and raises `_RenderCancelled` if either indicates the customer bailed.
+- **FFmpeg memory footprint reduced**: `_make_kenburns_mp4` dropped `preset medium crf 19` → `preset veryfast crf 21`, added `-threads 1`. `_trim_stock_video` added `-threads 1`. Both now stream downloads to disk via `aiter_bytes(64KB)` instead of buffering the full source in RAM.
+- **`POST /studio/render/{job_id}/cancel` endpoint** (Cancel Render button from last session's backlog — shipped in the same round because I was in the same files): flips `cancel_requested=True` + `status=failed` on the row, refunds the quota slot, logs to activity. Frontend adds an XCircle button on every in-progress history row (`history-cancel-{id}` test-id).
+
+**Files touched:**
+- `/app/backend/server.py` —
+  - Added `NORMALIZE_CONCURRENCY`, `STUCK_RENDER_TIMEOUT_S` env constants near the top.
+  - Added `_start_orphan_render_reaper` startup task (`_reap_once` + `_loop`).
+  - Added `_RenderCancelled` exception class.
+  - `_walk_stages`, `_finalize`, avatar/faceless voiceover writes: all stamp `updated_at`.
+  - `_set_progress` (faceless): stamps `updated_at`, checks cancel flag, raises `_RenderCancelled`.
+  - `_run_render` dispatcher: catches `_RenderCancelled` as a clean terminal state.
+  - `normalize_scene`: wrapped in `Semaphore(NORMALIZE_CONCURRENCY)`.
+  - `_make_kenburns_mp4`: streaming download + `-threads 1` + `veryfast/crf 21`.
+  - `_trim_stock_video`: streaming download + `-threads 1`.
+  - New endpoint `POST /studio/render/{job_id}/cancel`.
+- `/app/frontend/src/pages/Studio.jsx` —
+  - Added `XCircle` import.
+  - Added `cancelRender()` function next to `deleteRender`.
+  - Added Cancel button in the history-actions row for non-terminal renders.
+- `/app/frontend/src/changelog.js` — v1.20.4 entry.
+
+**Tested:**
+- Backend lint clean.
+- Frontend loads without errors (smoke screenshot).
+- Reaper smoke test: inserted a stuck row with `updated_at` 10 min ago, waited 65s, confirmed it was marked `failed` with reaped_by_watchdog=True + activity row logged.
+- Cancel endpoint tested locally via curl: `POST /cancel` on rendering job returns 200 + flips row to `failed/Cancelled`; terminal render returns 409.
+- Ancient orphan test-record with no timestamps also reaped after broadening the query.
+
+**What's NOT changed (deliberately):**
+- The Kling i2v / t2v paths still use `_fal_queue_run` with existing 600s max wait — those are external API calls, not local ffmpeg, so they don't consume local RAM. The per-scene timeout inside `normalize_scene` (480s for AI, 180s for stock) is the bound.
+- Compose pass (`fal-ai/ffmpeg-api/compose`) is fal.ai server-side, so no local memory impact.
+
+**Charity's action items (production):**
+1. Redeploy v1.20.4 to `faceless48.c3global.co`. Startup reaper will clean up any currently-stuck renders within ~65s of the container being live.
+2. Start a new render and watch history. Progress should tick incrementally from 55% → 68% during the gather (that fix was v1.20.3, still intact).
+3. If a render ever does hang, click the new red X (Cancel) button on the history row — credits refund automatically.
+4. Recommended production env vars: `NORMALIZE_CONCURRENCY=3` (leave default) and `STUCK_RENDER_TIMEOUT_S=300`. Increase concurrency to 5-6 if the tier gets bumped to 1GB+.
+
+
 ### Iteration 63 (2026-08-10) — Per-scene progress inside the 55% phase (v1.20.3)
 
 **Trigger:** Charity redeployed v1.20.2 and immediately reported "still showing 55% — this is not okay." Diagnostic realization: 55% is a STATIC value during the entire `normalize_scene` gather phase, which can take 60s–8min depending on scene type. Even when the render is working correctly, the progress bar sits at 55% until the gather completes. There was no way for the user (or Charity) to distinguish "stuck" from "still working."

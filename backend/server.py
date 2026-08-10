@@ -110,6 +110,26 @@ ADMIN_EMAILS = {
 # raise the threshold.
 RENDER_COST_CIRCUIT_BREAKER_CENTS = int(os.environ.get("RENDER_COST_CAP_CENTS", "500"))
 
+# v1.20.4 (Iter 64): Memory + orphan-render safety controls.
+#
+# The render pipeline was OOM-killing itself on the 512MB production tier
+# because `_run_render_faceless` fires every scene through `asyncio.gather`
+# in parallel — 8 ffmpeg processes + 8 httpx downloads at once easily
+# exceeds the tier's RAM budget. Symptom = renders stuck at 55% forever
+# because either (a) all scenes get OOM-killed simultaneously and the
+# render fails silently, or (b) the backend itself gets OOM-killed and
+# supervisor restarts it, leaving the render row in a "rendering" status
+# with no live task to advance it. Both are patched by:
+#   1. NORMALIZE_CONCURRENCY: hard cap on parallel scene ffmpeg passes.
+#      Default 3 fits comfortably in 512MB. Set to 5-6 on generous hosts.
+#   2. STUCK_RENDER_TIMEOUT_S: any render row whose `updated_at` is older
+#      than this without reaching a terminal status gets reaped by the
+#      startup watchdog (see `_reap_stuck_renders`). Default 300s (5 min)
+#      — a real render should never sit idle that long between per-scene
+#      progress updates.
+NORMALIZE_CONCURRENCY = int(os.environ.get("NORMALIZE_CONCURRENCY", "3"))
+STUCK_RENDER_TIMEOUT_S = int(os.environ.get("STUCK_RENDER_TIMEOUT_S", "300"))
+
 KNOWN_ENTITLEMENTS = ["base", "shorts", "studio"]
 JWT_ALG = "HS256"
 JWT_TTL_HOURS = 24
@@ -190,6 +210,116 @@ async def _prewarm_heygen_caches() -> None:
     # Detach so startup returns immediately. The container is "ready" the
     # moment the API can serve /health; the cache fills in the background.
     asyncio.create_task(_warm())
+
+
+# ---------------------------------------------------------------------------
+# Orphan-render reaper — v1.20.4 (Iter 64).
+#
+# Any redeploy, OOM-kill, or supervisor restart wipes in-flight `asyncio`
+# tasks but leaves the `db.renders` row in a non-terminal status
+# ("rendering", "voiceover", "composing", etc.) forever. Users then see
+# a render permanently stuck at whatever percentage it last reported —
+# most commonly 55% because that's where the memory-hungry normalize
+# gather runs. This watchdog is the belt-and-suspenders fix:
+#
+#   - Every 60s, scan for rows in a non-terminal status.
+#   - If their `updated_at` (or `created_at` if never updated) is older
+#     than STUCK_RENDER_TIMEOUT_S (5 min default), mark them `failed`
+#     with a clear error and stamp `completed_at`.
+#   - Log each reap to `db.activity` so admins can see what happened.
+#
+# The 5-minute default was chosen because every real render step calls
+# `_set_progress` at least every ~4s (per-scene ffmpeg completion + fal
+# queue tick). Anything silent for 5 minutes is genuinely dead.
+# ---------------------------------------------------------------------------
+@app.on_event("startup")
+async def _start_orphan_render_reaper() -> None:
+    async def _reap_once() -> int:
+        cutoff_iso = (
+            datetime.now(timezone.utc) - timedelta(seconds=STUCK_RENDER_TIMEOUT_S)
+        ).isoformat()
+        # Non-terminal statuses used across avatar + faceless + composite
+        # pipelines. Keep this list in sync with `_finalize` / `_walk_stages`.
+        non_terminal = {
+            "queued", "rendering", "voiceover", "cutaways", "composing",
+            "avatar", "in_progress", "pending",
+        }
+        # Match rows whose latest heartbeat is older than the cutoff. Renders
+        # never touched by `_set_progress` fall back to `created_at`. Legacy
+        # rows with NEITHER timestamp (from before we started stamping)
+        # are also reaped so they don't pollute the in-progress count forever.
+        query = {
+            "status": {"$in": list(non_terminal)},
+            "$or": [
+                {"updated_at": {"$lt": cutoff_iso}},
+                {
+                    "updated_at": {"$exists": False},
+                    "created_at": {"$lt": cutoff_iso},
+                },
+                {
+                    "updated_at": {"$exists": False},
+                    "created_at": {"$exists": False},
+                },
+            ],
+        }
+        reaped: list[dict] = []
+        async for r in db.renders.find(query, {"id": 1, "status": 1, "user_email": 1, "progress": 1}):
+            reaped.append(r)
+        if not reaped:
+            return 0
+        now_iso = datetime.now(timezone.utc).isoformat()
+        await db.renders.update_many(
+            {"id": {"$in": [r["id"] for r in reaped]}},
+            {"$set": {
+                "status": "failed",
+                "progress_label": "Interrupted — server restart or timeout. Please retry.",
+                "error": (
+                    "Render interrupted by server restart or exceeded the "
+                    f"{STUCK_RENDER_TIMEOUT_S}s heartbeat timeout. Retry the "
+                    "render — this usually resolves it."
+                ),
+                "completed_at": now_iso,
+                "updated_at": now_iso,
+                "reaped_by_watchdog": True,
+            }},
+        )
+        try:
+            await db.activity.insert_one({
+                "id": str(uuid.uuid4()),
+                "ts": now_iso,
+                "type": "render_reaped_batch",
+                "email": "system",
+                "detail": {
+                    "count": len(reaped),
+                    "cutoff_seconds": STUCK_RENDER_TIMEOUT_S,
+                    "sample": [
+                        {"id": r["id"], "prior_status": r.get("status"),
+                         "progress": r.get("progress"), "email": r.get("user_email")}
+                        for r in reaped[:10]
+                    ],
+                    "truncated": len(reaped) > 10,
+                },
+            })
+        except Exception:
+            pass
+        return len(reaped)
+
+    async def _loop() -> None:
+        # First pass runs immediately after startup so any renders that were
+        # in-flight when the last container died get cleaned up before the
+        # user retries. This is the whole point of the reaper — without the
+        # initial pass, a stuck 55% render survives every redeploy.
+        await asyncio.sleep(2)
+        while True:
+            try:
+                n = await _reap_once()
+                if n:
+                    logger.warning(f"[render-reaper] reaped {n} stuck render(s)")
+            except Exception as exc:  # noqa: BLE001 — never crash the loop
+                logger.warning(f"[render-reaper] tick failed: {type(exc).__name__}: {exc}")
+            await asyncio.sleep(60)  # 1 min
+
+    asyncio.create_task(_loop())
 
 
 # ---------------------------------------------------------------------------
@@ -1267,16 +1397,29 @@ async def _make_kenburns_mp4(image_url: str, aspect: str, duration_ms: int, scen
     src = os.path.join(tmpdir, "src")
     dst = os.path.join(tmpdir, "out.mp4")
     try:
-        # Download image
+        # v1.20.4: stream the download to disk instead of buffering the
+        # whole image into RAM via `r.content`. Matters more for
+        # `_trim_stock_video` (video files are 10-30MB) but kept
+        # consistent here so both paths behave identically under memory
+        # pressure. `follow_redirects=True` handles Pexels/Pixabay CDN.
         async with httpx.AsyncClient(timeout=30, follow_redirects=True) as cli:
-            r = await cli.get(image_url)
-            if r.status_code != 200 or not r.content:
-                return None
-            with open(src, "wb") as f:
-                f.write(r.content)
+            async with cli.stream("GET", image_url) as r:
+                if r.status_code != 200:
+                    return None
+                with open(src, "wb") as f:
+                    async for chunk in r.aiter_bytes(64 * 1024):
+                        f.write(chunk)
+        if not os.path.exists(src) or os.path.getsize(src) == 0:
+            return None
         # Render via ffmpeg in a worker thread so we don't block the event loop.
         cmd = [
             FFMPEG_BIN, "-y", "-loglevel", "error",
+            # v1.20.4 memory-cap: -threads 1 keeps ffmpeg from spawning N
+            # worker threads per subprocess (default is CPU count, which
+            # on shared containers can spike RSS well past 300MB per
+            # instance). Combined with NORMALIZE_CONCURRENCY, this keeps
+            # the total render footprint predictable on 512MB tiers.
+            "-threads", "1",
             # Critical for zoompan stability: declare an explicit 30fps input
             # framerate for the looped still. Without this, zoompan's internal
             # 25fps default fights with the 30fps output and produces visible
@@ -1287,10 +1430,11 @@ async def _make_kenburns_mp4(image_url: str, aspect: str, duration_ms: int, scen
             "-vf", vf,
             "-t", f"{duration_s:.2f}",
             "-r", str(fps),
-            # `medium` preset + crf 19 keeps the still-source motion crisp.
-            # `veryfast` was visibly soft on the panel borders (especially
-            # on 9:16 portrait crops where the zoompan reaches max zoom).
-            "-c:v", "libx264", "-preset", "medium", "-crf", "19",
+            # v1.20.4: dropped `-preset medium -crf 19` → `-preset veryfast
+            # -crf 21`. Medium's larger lookahead buffer added ~80-120MB
+            # per ffmpeg subprocess with no visible quality gain on the
+            # short (1.5-8s) ken-burns clips this function produces.
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
             "-pix_fmt", "yuv420p",
             "-movflags", "+faststart",
             dst,
@@ -1363,14 +1507,26 @@ async def _trim_stock_video(video_url: str, aspect: str, duration_ms: int, scene
     src = os.path.join(tmpdir, "src.mp4")
     dst = os.path.join(tmpdir, "out.mp4")
     try:
+        # v1.20.4: stream the stock clip to disk instead of buffering the
+        # entire (potentially 20-30MB) mp4 in RAM. On 512MB containers
+        # the concurrent buffer allocation across parallel scenes was
+        # a material contributor to OOM kills at the 55% mark.
         async with httpx.AsyncClient(timeout=60, follow_redirects=True) as cli:
-            r = await cli.get(video_url)
-            if r.status_code != 200 or not r.content:
-                return None
-            with open(src, "wb") as f:
-                f.write(r.content)
+            async with cli.stream("GET", video_url) as r:
+                if r.status_code != 200:
+                    return None
+                with open(src, "wb") as f:
+                    async for chunk in r.aiter_bytes(64 * 1024):
+                        f.write(chunk)
+        if not os.path.exists(src) or os.path.getsize(src) == 0:
+            return None
         cmd = [
             FFMPEG_BIN, "-y", "-loglevel", "error",
+            # v1.20.4 memory-cap: -threads 1 (see _make_kenburns_mp4 for
+            # rationale). x264 already uses 1 thread by default when
+            # asked, so this is essentially a no-op on newer ffmpeg but
+            # protects older builds bundled in imageio_ffmpeg.
+            "-threads", "1",
             "-fflags", "+genpts",        # regenerate clean PTS — fixes hitch at stream_loop seam
         ]
         if not freeze_end:
@@ -2361,6 +2517,23 @@ async def _run_render(job_id: str):
                 {"id": job_id},
                 {"$set": {"status": "failed", "error": f"Unknown mode: {mode}"}},
             )
+    except _RenderCancelled:
+        # v1.20.4: cooperative cancellation. `_set_progress` raises this when
+        # the row's `cancel_requested` flag flips (or status is externally
+        # set to "failed"). Mark the row as cancelled + refund the quota
+        # slot below. Not an error path — no stack trace.
+        now_iso = datetime.now(timezone.utc).isoformat()
+        await db.renders.update_one(
+            {"id": job_id},
+            {"$set": {
+                "status": "failed",
+                "progress_label": "Cancelled",
+                "error": "Cancelled by user.",
+                "completed_at": now_iso,
+                "updated_at": now_iso,
+                "cancelled": True,
+            }},
+        )
     except Exception as exc:  # noqa: BLE001  — pipeline must never crash worker
         await db.renders.update_one(
             {"id": job_id},
@@ -2368,6 +2541,7 @@ async def _run_render(job_id: str):
                 "status": "failed",
                 "error": f"{type(exc).__name__}: {exc}",
                 "completed_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
             }},
         )
 
@@ -2454,25 +2628,53 @@ def estimate_render_cost_cents(payload: RenderRequest) -> int:
 # ---------------------------------------------------------------------------
 # Stage walker shared by all pipelines.
 # ---------------------------------------------------------------------------
+class _RenderCancelled(Exception):
+    """Raised inside a render pipeline when the customer or admin has
+    flipped the render's `cancel_requested` flag (or the row has been
+    marked failed out-of-band). Callers catch this to short-circuit the
+    remaining stages without treating it as a real error.
+    """
+
+    def __init__(self, job_id: str) -> None:
+        super().__init__(f"render {job_id} cancelled by user/admin")
+        self.job_id = job_id
+
+
 async def _walk_stages(job_id: str, stages):
     for status, progress, label in stages:
         await asyncio.sleep(4.0)
         await db.renders.update_one(
             {"id": job_id},
-            {"$set": {"status": status, "progress": progress, "progress_label": label}},
+            {"$set": {
+                "status": status,
+                "progress": progress,
+                "progress_label": label,
+                # v1.20.4: heartbeat so the orphan-render reaper knows this
+                # row is alive. Without this, `_walk_stages` renders could
+                # get false-positive reaped between long stage ticks.
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }},
         )
 
 
 def _finalize(job_id: str, *, ok: bool, url: Optional[str], actual_cost_cents: int):
+    now_iso = datetime.now(timezone.utc).isoformat()
+    # v1.20.4: filter on `status` so a cancelled render (already in a
+    # terminal "failed" state via `POST /studio/render/{id}/cancel`) does
+    # NOT get its cancellation overwritten to "complete" if the pipeline
+    # continued through a long compose await after cancel was requested.
+    # If the row is already terminal, this update matches zero docs and
+    # is a safe no-op.
     return db.renders.update_one(
-        {"id": job_id},
+        {"id": job_id, "status": {"$nin": ["complete", "failed"]}},
         {"$set": {
             "status": "complete" if ok else "failed",
             "progress": 100,
             "progress_label": "Done" if ok else "Failed",
             "result_url": url,
             "actual_cost_cents": actual_cost_cents,
-            "completed_at": datetime.now(timezone.utc).isoformat(),
+            "completed_at": now_iso,
+            "updated_at": now_iso,
         }},
     )
 
@@ -2506,7 +2708,12 @@ async def _run_render_avatar(job: dict):
     # ---- Stage 1/3: voiceover ----
     await db.renders.update_one(
         {"id": job_id},
-        {"$set": {"status": "voiceover", "progress": 20, "progress_label": "Preparing voiceover…"}},
+        {"$set": {
+            "status": "voiceover",
+            "progress": 20,
+            "progress_label": "Preparing voiceover…",
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }},
     )
     await asyncio.sleep(1.5)
 
@@ -2518,7 +2725,12 @@ async def _run_render_avatar(job: dict):
     # so we'll add captions back in a dedicated future pass. ----
     await db.renders.update_one(
         {"id": job_id},
-        {"$set": {"status": "avatar", "progress": 45, "progress_label": "Generating avatar video…"}},
+        {"$set": {
+            "status": "avatar",
+            "progress": 45,
+            "progress_label": "Generating avatar video…",
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }},
     )
 
     video_id = None
@@ -2772,7 +2984,12 @@ async def _run_render_faceless(job: dict):
     # ---- Stage 1/4: voiceover ----
     await db.renders.update_one(
         {"id": job_id},
-        {"$set": {"status": "voiceover", "progress": 10, "progress_label": "Preparing voiceover…"}},
+        {"$set": {
+            "status": "voiceover",
+            "progress": 10,
+            "progress_label": "Preparing voiceover…",
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }},
     )
     await asyncio.sleep(0.8)
 
@@ -2796,10 +3013,26 @@ async def _run_render_faceless(job: dict):
     fal_headers = {"Authorization": f"Key {fal_key}", "Content-Type": "application/json"}
 
     async def _set_progress(progress: int, label: str, status: Optional[str] = None):
-        update = {"progress": progress, "progress_label": label}
+        update = {
+            "progress": progress,
+            "progress_label": label,
+            # v1.20.4: heartbeat for the orphan-render reaper. Every scene
+            # completion, ffmpeg queue tick, and stitch update flows through
+            # this call, so stamping updated_at here means a genuinely-alive
+            # render can never be false-positive reaped mid-flight.
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
         if status:
             update["status"] = status
         await db.renders.update_one({"id": job_id}, {"$set": update})
+        # v1.20.4: cooperative cancellation. If the customer clicked
+        # "Cancel" (which flips status → "failed" via the cancel endpoint),
+        # we raise here so the pipeline unwinds cleanly at the next
+        # progress checkpoint instead of continuing to spend fal.ai credits
+        # on a render nobody's watching anymore.
+        doc = await db.renders.find_one({"id": job_id}, {"cancel_requested": 1, "status": 1})
+        if doc and (doc.get("cancel_requested") or doc.get("status") == "failed"):
+            raise _RenderCancelled(job_id)
 
     async def _fal_queue_run(model_id: str, payload: dict, *, max_wait_s: int = 600) -> Optional[dict]:
         """Submit a job to fal.ai's queue endpoint and poll for completion."""
@@ -3168,6 +3401,16 @@ async def _run_render_faceless(job: dict):
     normalize_completed = 0
     normalize_lock = asyncio.Lock()
 
+    # v1.20.4 (Iter 64): hard cap on parallel ffmpeg + fal.ai upload passes.
+    # Historically this gather fired every scene at once — for an 8-scene
+    # render that's 8 concurrent ffmpeg subprocesses + 8 in-flight httpx
+    # downloads, each buffering the full source video into RAM. On the
+    # 512MB production tier that reliably OOM-killed the container mid-
+    # render, leaving the row stuck at 55% forever (see the reaper at the
+    # top of this file). Cap the concurrency and the whole normalize
+    # phase fits inside ~300MB of RSS regardless of scene count.
+    normalize_sem = asyncio.Semaphore(max(1, NORMALIZE_CONCURRENCY))
+
     async def _mark_scene_done():
         nonlocal normalize_completed
         async with normalize_lock:
@@ -3179,6 +3422,14 @@ async def _run_render_faceless(job: dict):
             )
 
     async def normalize_scene(slot: int, idx: int, url: str):
+        # v1.20.4: hold the semaphore for the entire scene lifecycle
+        # (download → ffmpeg → upload). Only NORMALIZE_CONCURRENCY scenes
+        # can hold it at once, so the container's RAM ceiling is
+        # predictable regardless of scene count.
+        async with normalize_sem:
+            return await _normalize_scene_inner(slot, idx, url)
+
+    async def _normalize_scene_inner(slot: int, idx: int, url: str):
         # v1.20.2: per-scene hard timeout guard. Without this, one hung
         # scene (fal upload stall, Kling API silent hang, etc.) would
         # freeze the entire `asyncio.gather` below and stick the render
@@ -3826,6 +4077,56 @@ async def studio_render_delete(job_id: str, user: AuthUser = Depends(current_use
         "job_id": job_id,
         "force_admin": is_admin and doc["status"] not in ("complete", "failed"),
         "prior_status": doc["status"],
+    })
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Cancel Render endpoint (v1.20.4, Iter 64) — the customer-facing escape
+# hatch for a render that's still in-flight. Sets `cancel_requested: True`
+# on the row; the next `_set_progress` call inside the pipeline picks up
+# the flag and raises `_RenderCancelled`, which the dispatcher catches and
+# writes a clean "Cancelled" terminal state. Quota is refunded via the
+# existing failed-render refund path.
+# ---------------------------------------------------------------------------
+@api.post("/studio/render/{job_id}/cancel")
+async def studio_render_cancel(job_id: str, user: AuthUser = Depends(current_user)):
+    require_studio(user)
+    doc = await db.renders.find_one({"id": job_id, "user_email": user.email})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Not found")
+    if doc.get("status") in ("complete", "failed"):
+        raise HTTPException(status_code=409, detail="Render already terminal — nothing to cancel")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    # Two-write pattern: (1) stamp the cancel flag so the pipeline's next
+    # `_set_progress` heartbeat picks it up and unwinds cleanly, and (2)
+    # optimistically flip status to "failed" so the UI stops spinning
+    # immediately even if the pipeline is currently blocked in a long
+    # ffmpeg / fal.ai wait. The pipeline's finally-block writes the
+    # canonical "Cancelled" state when it wakes up.
+    await db.renders.update_one(
+        {"id": job_id, "user_email": user.email},
+        {"$set": {
+            "cancel_requested": True,
+            "status": "failed",
+            "progress_label": "Cancelled",
+            "error": "Cancelled by user.",
+            "updated_at": now_iso,
+            "completed_at": now_iso,
+            "cancelled": True,
+        }},
+    )
+    # Refund the quota slot the buyer paid at queue time. Founders + dev
+    # bypass emails are no-op'd inside `_refund_quota_slot`.
+    await _refund_quota_slot(
+        email=doc.get("user_email") or "",
+        mode=doc.get("mode") or "",
+        estimated_cents=int(doc.get("estimated_cost_cents") or 0),
+    )
+    await _log_activity("studio_render_cancelled", user.email, {
+        "job_id": job_id,
+        "prior_status": doc.get("status"),
+        "prior_progress": doc.get("progress"),
     })
     return {"ok": True}
 

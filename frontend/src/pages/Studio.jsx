@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { UserCircle2, Mic, Ratio, Film, ChevronDown, Play, Trash2, Sparkles, Wand2, Loader2, RotateCw, Cpu, FolderOpen, Image as ImageIcon, Check, Captions, CaptionsOff, Clock } from "lucide-react";
+import { UserCircle2, Mic, Ratio, Film, ChevronDown, Play, Trash2, Sparkles, Wand2, Loader2, RotateCw, Cpu, FolderOpen, Image as ImageIcon, Check, Captions, CaptionsOff, Clock, XCircle } from "lucide-react";
 import { apiClient, useAuth } from "../App";
 import {
   AvatarPicker,
@@ -687,6 +687,29 @@ export default function Studio() {
       setHistory((h) => h.filter((r) => r.id !== jobId));
     } catch (e) {
       alert(e?.response?.data?.detail || "Could not delete.");
+    }
+  };
+
+  // v1.20.4: Cancel Render — customer-facing escape hatch for a render
+  // that's still in-flight. Flags the row `cancel_requested=True` on the
+  // backend; the pipeline's next `_set_progress` heartbeat picks it up
+  // and unwinds cleanly (quota refunded automatically via the failed-
+  // render refund path).
+  const cancelRender = async (jobId) => {
+    if (!window.confirm("Cancel this render? Any credits used so far will be refunded.")) return;
+    try {
+      await apiClient.post(`/studio/render/${jobId}/cancel`);
+      // Optimistic local flip so the row stops spinning immediately.
+      // The polling loop will replace this with the canonical DB state
+      // within a couple seconds.
+      setHistory((h) => h.map((r) => (
+        r.id === jobId
+          ? { ...r, status: "failed", progress_label: "Cancelled", error: "Cancelled by user." }
+          : r
+      )));
+      setToast("Render cancelled — credits refunded.");
+    } catch (e) {
+      alert(e?.response?.data?.detail || "Could not cancel this render.");
     }
   };
 
@@ -1601,6 +1624,17 @@ export default function Studio() {
                       title="Resume tracking this render"
                     >
                       <Play size={14} />
+                    </button>
+                  )}
+                  {!terminal && (
+                    <button
+                      className="icon-btn is-danger"
+                      data-testid={`history-cancel-${r.id}`}
+                      onClick={() => cancelRender(r.id)}
+                      aria-label="Cancel render"
+                      title="Cancel this render (credits will be refunded)"
+                    >
+                      <XCircle size={14} />
                     </button>
                   )}
                   {r.status === "complete" && r.result_url && (

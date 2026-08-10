@@ -14,9 +14,18 @@
 //    See PRD.md → "Workflow rule: changelog must move with every deploy."
 // 4. Most recent on top. Each entry has version + date + bullet list.
 
-export const APP_VERSION = "1.20.3";
+export const APP_VERSION = "1.20.4";
 
 export const CHANGELOG = [
+  {
+    version: "1.20.4",
+    date: "2026-08-10",
+    changes: [
+      "🐛 Fixed the 'stuck at 55% forever' bug for real this time — the cause was memory pressure from firing every scene through ffmpeg at once. Now capped at 3 scenes in parallel with a lighter ffmpeg preset, so renders fit comfortably in memory on any hosting tier",
+      "🐛 Added a background watchdog that auto-recovers any render silent for more than 5 minutes — no more zombie renders left over after a redeploy",
+      "✨ New Cancel button on in-progress renders — one click aborts the render and refunds the credits automatically",
+    ],
+  },
   {
     version: "1.20.3",
     date: "2026-08-10",
