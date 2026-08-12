@@ -4,7 +4,7 @@ import time
 import pytest
 import requests
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://f2f48-video-engine.preview.emergentagent.com").rstrip("/")
+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://modal-chip-ui.preview.emergentagent.com").rstrip("/")
 BYPASS_EMAIL = "drcharitycampbell@gmail.com"
 
 

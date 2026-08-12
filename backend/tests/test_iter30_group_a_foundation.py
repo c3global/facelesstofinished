@@ -31,7 +31,7 @@ from dotenv import load_dotenv
 # sync with the running server's actual database.
 load_dotenv("/app/backend/.env")
 
-BASE_URL = os.environ["REACT_APP_BACKEND_URL"].rstrip("/") if os.environ.get("REACT_APP_BACKEND_URL") else "https://f2f48-video-engine.preview.emergentagent.com"
+BASE_URL = os.environ["REACT_APP_BACKEND_URL"].rstrip("/") if os.environ.get("REACT_APP_BACKEND_URL") else "https://modal-chip-ui.preview.emergentagent.com"
 MONGO_URL = os.environ["MONGO_URL"]
 DB_NAME = os.environ["DB_NAME"]
 ADMIN_EMAIL = "drcharitycampbell@gmail.com"

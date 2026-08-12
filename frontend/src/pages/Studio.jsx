@@ -28,7 +28,7 @@ const MODES = { AVATAR: "avatar", FACELESS: "faceless" };
 // via Kokoro TTS), so we tell the user to switch modes if they need
 // the full script.
 const AVATAR_SCRIPT_MAX_CHARS = 5000;
-const MAX_SCENES = 12;
+const MAX_SCENES = 200;
 const SOURCE_HINT = {
   ai:       "AI still image generated via Gemini Nano Banana — professional photorealistic quality.",
   pexels:   "We'll search the Pexels stock library.",
@@ -719,13 +719,20 @@ export default function Studio() {
   // per-scene weight (= word count of each beat) so the render pipeline can
   // give each scene a duration PROPORTIONAL to its sentence length —
   // visuals change exactly when the voiceover pauses.
+  //
+  // v1.20.9: also capture the timeline preview stats (total scene count,
+  // estimated duration, total visual clip count including auto-cutaways)
+  // so the UI can show "45 scenes · 13 min · 128 clips with cutaways"
+  // above the prompts before render.
+  const [timelinePreview, setTimelinePreview] = useState(null);
+
   const generatePromptsFromScript = async () => {
     if (!script.trim()) return;
     setPromptsErr("");
     setGeneratingPrompts(true);
     try {
       const r = await apiClient.post("/studio/broll-prompts", { script });
-      const sceneObjs = (r.data.scenes || []).slice(0, 12);
+      const sceneObjs = (r.data.scenes || []).slice(0, MAX_SCENES);
       const lines = sceneObjs.map((s) => s.prompt);
       const weights = sceneObjs.map((s) => s.weight || 1);
       setBulkPrompts(lines.join("\n"));
@@ -736,6 +743,14 @@ export default function Studio() {
       // the prompt → thumbnail mapping is positional.
       setSceneCandidates({});
       setCandidatesErr("");
+      // v1.20.9: stash timeline preview stats
+      setTimelinePreview({
+        totalScenes: r.data.total_scene_count || sceneObjs.length,
+        totalCutawayClips: r.data.total_cutaway_count || sceneObjs.length,
+        estMinutes: r.data.estimated_total_duration_min || 0,
+        perSceneMs: sceneObjs.map((s) => s.estimated_duration_ms || 0),
+        cutawayCounts: sceneObjs.map((s) => s.cutaway_count || 1),
+      });
     } catch (e) {
       setPromptsErr(e?.response?.data?.detail || "Could not generate prompts. Try again.");
     } finally {
@@ -1142,6 +1157,22 @@ export default function Studio() {
               </span>
             </div>
           </div>
+          {timelinePreview && sceneLines.length > 0 && (
+            <div className="timeline-preview-banner" data-testid="timeline-preview-banner">
+              <span className="tpb-stat">
+                <strong>{timelinePreview.totalScenes}</strong>&nbsp;{timelinePreview.totalScenes === 1 ? "scene" : "scenes"}
+              </span>
+              <span className="tpb-sep">·</span>
+              <span className="tpb-stat">
+                <strong>~{timelinePreview.estMinutes}</strong>&nbsp;min video
+              </span>
+              <span className="tpb-sep">·</span>
+              <span className="tpb-stat">
+                <strong>{timelinePreview.totalCutawayClips}</strong>&nbsp;total clips with cutaways
+              </span>
+              <span className="tpb-hint">Auto-cutaways insert extra B-roll on scenes over 5 seconds.</span>
+            </div>
+          )}
           {promptsErr && <p className="cta-error" data-testid="prompts-err">{promptsErr}</p>}
           {candidatesErr && <p className="cta-error" data-testid="candidates-err">{candidatesErr}</p>}
           <textarea

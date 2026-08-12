@@ -1,142 +1,168 @@
-<analysis>**original_problem_statement**: 
-Moving F2F48 (Script Engine + Studio) from Netlify-Functions + React + Blobs to emergent.sh. The core goal is to rebuild the Studio UI to match the Jogg.ai/HeyGen modal-chip pattern and improve the render pipelines. The new stack should be React + FastAPI + MongoDB. 
-
-PRODUCT REQUIREMENTS:
-1. Retain existing working features: Email login, Script Engine (Long-form + Shorts), Admin dashboard, Resource Library.
-2. Rebuild Studio UI: Modal-chip pattern for Avatar, Voice, Aspect, Captions, and B-Roll Source.
-3. Integrate real render pipelines: HeyGen for Avatar video, fal.ai (Kokoro TTS, Flux, ffmpeg) for Faceless video.
-4. Smart Script Engine UI: Multi-platform output, saved angles, Markdown formatting, sprint mode for multiple generations.
-5. Production Render behavior: No dry-runs, real credit utilization, concurrent video renders allowed, and a silent  cost backstop instead of visible dollar caps.
+<analysis>**original_problem_statement**: Moving F2F48 (Script Engine + Studio) from Netlify to emergent.sh. Rebuild the Studio UI to match the modal-chip pattern, improve render pipelines, and natively host an Admin Panel gated by JWT. The product has pivoted to a 27/mo community membership model. 
+PRODUCT REQUIREMENTS: 
+1. Retain working features: Script Engine, Studio, Auth, Admin Panel.
+2. Rebuild Studio UI with Modal-chip patterns.
+3. Improve Render Pipelines (parallel execution, local FFmpeg compose, graceful fallbacks).
+4. Implement new Tier System (Starter, Legacy, Founder, Premium).
+5. BYOK (Bring Your Own Key) enabled for all users.
 
 **User's preferred language**: English (INSTRUCT next agent to respond in English only)
 
 **what currently exists?** 
-A functional React + FastAPI + MongoDB app. The Studio page currently supports Avatar (HeyGen) and Faceless (fal.ai) generation. The application has been fully shifted to Production Mode, meaning all guardrails like dry-run, admin-only checks, and customer-facing dollar caps have been removed. Concurrent video generations are fully supported with inline, granular progress polling. The backend includes smart HeyGen v3 to v2 fallback logic and corrected fal.ai ffmpeg-compose architectures to handle complex video stitching.
+A React + FastAPI + MongoDB app. It features a Script Engine, Studio UI, Admin Panel, Timeline Editor MVP, and Magic Link auth with admin bypass. The tier system has been fully migrated to support the new business model. The rendering engine relies on an async background worker in FastAPI. The composition step now utilizes local FFmpeg processing (with a 3-tier fallback system) to stitch audio, stock/AI video, and captions, dramatically reducing reliance on external fal.ai storage.
 
 **Last working item**: 
-    - Last item agent was working: Enabling concurrent rendering capabilities and extending the fal.ai timeout window. The disabled lock on the Render button was removed, a background polling interval was added to track multiple renders simultaneously in the history list, inline progress bars were added to history rows, and the timeout limit for fal.ai compose was bumped to 15 minutes (900s).
+    - Last item agent was working: Fixing the local FFmpeg compose fallback logic (v1.20.7). The fast-path stream-copy () failed when stock clips had varying H.264 profiles. The agent implemented a 3-tier fallback: (1) Stream-copy, (2) Re-encode locally, (3) Upload to fal.ai for remote composition.
     - Status: USER VERIFICATION PENDING
     - Agent Testing Done: Y
-    - Which testing method agent to use?: Frontend testing agent/ screenshot tool
-    - User Testing Done: N
+    - Which testing method agent to use?: backend testing agent/ curl / python -c
+    - User Testing Done: N (User needs to redeploy to production to see the fix).
 
-**All Pending/In progress Issue list**:
-  Issue 1: Optimize Faceless Render Speeds (Large Pexels Videos) [P1]
-     - Attempted fixes: Track types ( vs ) and timestamps (milliseconds vs seconds) were fixed to stop endless fal.ai hangs. Timeout bumped to 900s to accommodate heavy 4K stock video renders.
-     - Next debug checklist: Monitor fal.ai completion times. If 8+ scene Pexels videos still take too long, consider implementing logic to fetch lower-resolution (720p) Pexels URLs instead of 4K, or enforce a soft limit on scene count.
-     - Why fix this issue and what will be achieved with the fix?: Renders taking 10-15 minutes create poor UX and risk exceeding cloud function limits.
-     - Status: TESTING PENDING
-     - Is recurring issue? Y (fal.ai composition bottlenecks)
+**All Pending/In progress Issue list**:  
+  Issue 1: Long-format renders (15-25 min) look repetitive and boring [P0]
+     - Attempted fixes: Agent analyzed the math and proposed a solution but user explicitly said Do not touch any code for now.
+     - Next debug checklist: 1. Implement Length-adaptive scene caps in  ( should change from fixed 12 to 20 for medium, and 40 for long). 2. Implement Auto-cutaways for scenes lasting > 10s.
+     - Why fix this issue and what will be achieved with the fix?: Currently, a 25-minute video only generates 12 scenes (average 2 minutes per stock clip), which is terrible UX. 
+     - Status: NOT STARTED (Awaiting user go signal).
+     - Is recurring issue? N
      - Should Test frontend/backend/both after fix?: Backend
+     - Blocked on other issue: User approval
+
+  Issue 2: Timeline Editor is only available post-render [P1]
+     - Attempted fixes: None yet.
+     - Next debug checklist: Rethink the UX in  so users can edit the timeline/beats *before* the heavy render composition phase executes.
+     - Why fix this issue and what will be achieved with the fix?: User explicitly complained: I dont like that it is only available in post."
+     - Status: NOT STARTED
+     - Is recurring issue? N
+     - Should Test frontend/backend/both after fix?: Both
      - Blocked on other issue: None
 
-**In progress Task List**:
-  Task 1: Decide on AI Text-to-Video Engine for Faceless Mode
-     - Where to resume: Awaiting user response on whether to implement a true text-to-video model (e.g., Pika 2.1, Kling, Veo) instead of or alongside the current Flux 1.1 Pro (which only generates static images that are Ken-Burnsed). 
-     - What will be achieved with this?: Better AI Video quality vs standard static image slideshows.
-     - Status: BLOCKED
-     - Should Test frontend/backend/both after fix?: Both
-     - Blocked on something: User decision on cost vs. quality tradeoff.
+  Issue 3: Phase 2 Provider Abstraction Refactor in `server.py` [P2]
+     - Attempted fixes: Deferred to handle urgent pipeline stability bugs.
+     - Next debug checklist: Refactor `server.py` to build abstract provider classes (`ImageProvider`, `VideoMotionProvider`, `VoiceProvider`, `StockProvider`, `RenderCompositionProvider`). 
+     - Why fix this issue and what will be achieved with the fix?: `server.py` is over 5,600 lines long. Refactoring deeply uncouples the app from monolithic dependencies.
+     - Status: NOT STARTED
+     - Is recurring issue? N
+     - Should Test frontend/backend/both after fix?: Both (Requires rigorous backend testing agent use)
+     - Blocked on other issue: None
 
-**Upcoming and Future Tasks**:
+**In progress Task List**: None.
+
+**Upcoming and Future Tasks**
     Upcoming Tasks:
-    - [P1] Implement Faceless video subtitles (Caption burn-in). Mostly wired via the second fal.ai compose pass, but needs real-world regression validation.
-    - [P2] Real composite orchestration (Intertwining HeyGen and fal.ai outputs). *Deferred by user until independent render pipelines are perfectly stable.*
+    - [P1] Timeline Editor v2: Add drag sliders, waveform visualization, and per-sentence TTS timing.
+    - [P2] Build a Demo Sales Page at `/` (Homepage for non-logged-in users).
     
     Future Tasks:
-    - Server.py refactor (Splitting the large file into modular routes/services). *Deferred by user.*
-    - Cross-origin auth-me deployment. *Deferred by user.*
-    - Admin panel + Resources port. *Deferred by user.*
+    - [P2] Canva Integration for B-Roll import (Paused due to API approval logistics).
+    - [P2] Brand Voice Profiles.
+    - [P2] Content Series Builder.
 
-**Completed work in this session**:
-- Migrated Avatar pipeline to HeyGen v3 () to support  for 9:16 videos and built-in caption burn-in (). (DONE)
-- Added silent HeyGen v3 -> v2 API fallback for legacy Avatar III models (). (DONE)
-- Shifted Studio to fully Production behavior: removed , admin-only overrides, .50 UI cap. Implemented silent  backend circuit-breaker. (DONE)
-- Fixed fal.ai  timeout root causes: Converted duration/timestamps to milliseconds and corrected track types ( for Flux PNGs,  for MP4s) (). (DONE)
-- Replaced flat progress bar with a video forming skeleton displaying granular per-scene statuses (e.g., Stitching scene 2 of 5) (, ). (DONE)
-- Added Flux 1.1 Pro and Stock Video attributions to storyboard placeholders (). (DONE)
-- Built inline video player modal for History row Play buttons, bypassing HeyGen's blank CDN tab issue (). (DONE)
-- Enabled concurrent rendering, background history row progress polling, and extended timeout caps to 900s (, ). (DONE)
-- Restricted 9:16 avatar picker logic strictly to  tags, preventing aggressive body cropping (, ). (DONE)
+**Completed work in this session**
+- Addressed 55% stuck render memory issue: Added Startup Reaper for orphaned renders, Semaphore concurrency cap for scene generation, and tuned FFmpeg memory usage. (DONE)
+- Added "Cancel Render" backend endpoint and frontend UI button. (DONE)
+- Implemented Tier Pivot & BYOK for all: Renamed tiers to Starter, Legacy, Founder, and Premium. Wrote migration script, updated UI/CSS. (DONE)
+- Replaced fal.ai compose dependency with local FFmpeg composition (reduced render time by 21s and cut costs). (DONE)
+- Built robust 3-tier fallback for local compose to handle mismatched bitstreams (Copy -> Re-encode -> Remote fal). (DONE)
 
-**Earlier issues found/mentioned but not fixed**:
-  None
+**Earlier issues found/mentioned but not fixed**
+None.
 
-**Known issue recurrence from previous fork**:
-  - Issue recurrence in previous fork: fal.ai  hangs/times out
-  - Recurrence count: 3
-  - Status: RESOLVED (Fixed by correcting milliseconds conversion and / track mapping in fal.ai schema payload).
+**Known issue recurrence from previous fork**
+  - Issue recurrence in previous fork: Renders failing/hanging (55% or at compose step).
+  - Recurrence count: 3+
+  - Status: RESOLVED (Handled via concurrency caps, watchdog reaper, and shifting composition to local FFmpeg with robust fallbacks).
+  Note: Be highly cautious modifying the render pipeline in `server.py` as it is extremely brittle regarding memory constraints and external API timeouts.
 
-**Code Architecture**:
+**Code Architecture**
+```
+/app/
+├── backend/
+│   ├── server.py (Main routes, heavy render orchestration, FFmpeg processing - >5.6k lines)
+│   ├── tier_config.py (Rewritten for new business model)
+│   ├── caption_burn_in.py
+│   ├── prompts.py
+│   └── tools/
+│       └── migrate_tiers.py
+├── frontend/
+│   ├── src/
+│   │   ├── pages/ (Login, Studio, SettingsKeys, etc.)
+│   │   ├── components/ (TimelineModal.jsx, Admin tabs)
+│   │   └── App.js, App.css
+```
 
+**Key Technical Concepts**
+- React frontend + FastAPI backend + MongoDB.
+- Async render pipeline with heavy background processing.
+- FFmpeg local processing (`-c:v copy` and re-encoding).
+- Resend Magic Link Auth with Admin Override.
 
-**Key Technical Concepts**:
-- React frontend with FastAPI backend.
-- Background asynchronous polling architecture for multiple concurrent heavy generation jobs (HeyGen, fal.ai).
-- fal.ai async queue submit pattern (, Kokoro TTS, Flux).
-- HeyGen v3 Video Generation API with v2 silent fallback support.
+**key DB schema**
+  - `buyers`: {email, tier, entitlements, byok_allowed, founders, status}
+  - `renders` / `jobs`: {id, status, progress, progress_label, error, local_video, cancel_requested}
 
-**key DB schema**:
-  - : {id, status, type, input_data, result_data, created_at, updated_at, actual_cost_cents}
+**changes in tech stack**
+  - Fal.ai is no longer the primary video composition engine. Local FFmpeg is now the primary engine, with Fal.ai acting strictly as a tier-3 fallback.
 
-**changes in tech stack**:
-  - Transitioned Avatar logic from HeyGen v2 to HeyGen v3 as the primary generation API.
+**All files of reference** 
+  - `/app/backend/server.py` (Heavily modified for Reaper, Concurrency limits, FFmpeg local compose, and fallbacks).
+  - `/app/backend/tier_config.py` (Rewritten to define Starter, Legacy, Founder, Premium tiers).
+  - `/app/backend/tools/migrate_tiers.py` (Created for one-shot DB migration).
+  - `/app/frontend/src/pages/Studio.jsx` (Added Cancel button, made Timeline button more prominent).
+  - `/app/frontend/src/App.css` (Updated ent-chip colors).
+  - `/app/frontend/src/components/admin/LicensesTab.jsx` & `UsageTab.jsx` (Removed AppSumo bias).
 
-**All files of reference**:
-  - : Core logic for API routes, , , pricing caps, fallback logic. Needs refactoring in future.
-  - : Active render UI, skeleton frames, multi-render polling, history viewer, modal video player.
-  - : Avatar aspect ratio filtering.
-  - : Animations and video container styling.
+**Areas that need refactoring**
+  - `/app/backend/server.py` needs modularization (Phase 2 Provider Abstraction). It is far too large and handles too much orchestration.
 
-**Areas that need refactoring**:
-  -  is bloated (~1500 lines) and urgently needs to be split into modular routes, services, and pipeline definitions once render stability is verified.
+**key api endpoints**
+  - `POST /studio/render/{job_id}/cancel` (New Cancel endpoint)
+  - `POST /studio/render`
+  - `GET /user/byok`
 
-**key api endpoints**:
-  -  (Queues real renders, no more dry runs)
-  -  (Calculates cost without rendering)
-  -  (Bulk deletes jobs)
-  -  (Fetches HeyGen avatars with pose tagging)
+**Critical Info for New Agent** 
+- **ENVIRONMENT CONFUSION:** The user strictly tests on their **PRODUCTION** deployment (`faceless48.c3global.co`), but you only have access to the **PREVIEW** environment. When the user complains that "its still broken, it is often because they haven't redeployed the fixes you just merged in preview. Fix the code in preview and politely wait for the user to test (do not lecture them on deployment ops).
+- **Video Logic:** The render pipeline is highly sensitive. The transition to local FFmpeg was done to save fal.ai API timeouts. Do not revert to uploading intermediate clips to Fal.ai unless it is the final fallback.
+- **Tiers:** Starter (Base), Legacy (Base+Shorts), Founder (Base+Shorts+Studio lifetime), Premium (Base+Shorts+Studio 27/mo). BYOK is allowed for ALL tiers.
 
-**Critical Info for New Agent**:
-- **EVERY RENDER COSTS REAL MONEY**. Dry runs have been permanently deleted. Renders execute immediately against HeyGen and fal.ai.
-- Concurrent renders are fully enabled. Users can click Render multiple times, pushing previous renders into the history queue with background polling.
-- The 9:16 HeyGen Avatar crop relies heavily on , available *only* in HeyGen v3. If a legacy avatar (Avatar III) is used,  silently falls back to HeyGen v2.
-- fal.ai's compose API strictly demands milliseconds for  and , and exact  identifiers ( for PNGs,  for MP4s). Altering these will result in massive timeout loops. 
-- Studio UI has been stripped of dev metrics (like raw API errors and explicit dollar caps). Errors map to friendly text, and runaway costs are blocked silently at /render.
-
-**documents and test reports created in this job**:
+**documents and test reports created in this job**
+  -  
   -  
   - 
 
-**Last 10 User Messages and any pending HUMAN messages**:
-1. (Latest) User asked why only one render was allowed at a time, complained about faceless render timeouts, and requested the timeout limit be bumped to 15 minutes. (Agent implemented concurrent renders, bumped timeout to 900s).
-2. User realized Flux is an image generator (not video) and asked if that's causing the timeout. Also reported HeyGen 9:16 chopped half the avatar's body, and the Play history button opens a blank tab.
-3. User agreed to silent v2 fallback for HeyGen, simple Flux 1.1 Pro attribution, and skeleton loader. Urged agent to fix fal.ai compose timeouts in the same pass.
-4. User provided screenshots showing Avatar failure (HeyGen v3 doesn't support Avatar IV) and Faceless 600s timeout. Complained about lack of visual stitching feedback during the loading phase and un-attributed AI models.
-5. User finalized pricing/cost strategy: remove all customer-facing cost guardrails, use a silent  circuit breaker, repurpose dry run to Regenerate and allow full production generation behavior.
-6. User initially mentioned going directly to launch product without dry-runs.
-7. User reported that everything was rendering as a false render/dry run and asked to enable real rendering to test.
-8. User asked for  class in CSS so 9:16 video outputs don't display letterboxed in the frontend container.
-9. User noticed 9:16 HeyGen outputs were still letterboxed 16:9 crops and captions weren't burned in.
-10. User provided specific code correction requests for HeyGen (setting exact 1080x1920 resolutions, removing undocumented fields, fixing pose tagging logic).
+**Last 10 User Messages and any pending HUMAN messages** 
+1. (Latest) User stated that the local FFmpeg compose failed on their end (in prod) and the fallback didn't work. (Agent fixed the bitstream mismatch bug with a 3-tier fallback).
+2. User asked how long a 25-minute video takes and complained that 12 scenes is too few for long videos. Demanded agent do not touch any code.
+3. User rejected UI enhancements (Premium checkout/Landing pages) and demanded focus solely on render stability.
+4. User corrected agent on Tier structure: Starter, Legacy, Founder, Premium. Approved migration.
+5. User expressed extreme frustration that the timeline editor is only available post-render.
+6. User complained about a 75-second timeout error for a specific client (Volker) in Germany.
+7. User authorized tier rename and enabling BYOK for everyone.
+8. User complained that the app was stuck at 55% memory and an AI bot told them to upgrade server RAM.
+9. User confirmed Reaper timeouts (5m) and concurrency caps (3).
+10. User handed off session.
 
-**Project Health Check**:
-- Broken: None (Pending user verification of fal.ai heavy workloads with the new 15-minute timeout window).
-- Mocked: None (Dry runs fully removed).
+**Project Health Check:**
+- Broken: UX for Timeline Editor (User hates it being post-render). Long-render visual pacing (capped at 12 scenes).
+- Mocked: None.
 
-**3rd Party Integrations**:
+**3rd Party Integrations** 
 - Anthropic Claude (Emergent LLM Key)
+- Gemini Nano Banana (Emergent LLM Key)
+- OpenAI (Emergent LLM Key)
 - HeyGen (User API Key)
-- fal.ai (User API Key)
+- ElevenLabs (User API Key)
+- fal.ai (User API Key - now used primarily for storage/fallback)
+- Kokoro TTS
 
-**Testing status**:
-- Testing agent used after significant changes: NO (Screenshot tool utilized instead due to UI/UX nature of the fixes).
-- Troubleshoot agent used after agent stuck in loop: NO
-- Test files created: None
-- Known regressions: None
+**Testing status**
+  - Testing agent used after significant changes: NO (Heavy reliance on manual bash Python scripts to simulate FastAPI background tasks to avoid context bloat).
+  - Troubleshoot agent used after agent stuck in loop: NO
+  - Test files created: ,  (Deleted after testing).
+  - Known regressions: None currently known in preview.
 
-**Credentials to test flow**:
+**Credentials to test flow:**
 Available in .
 
-**What agent forgot to execute**:
-The agent proposed multiple paths for introducing real Text-to-Video models (Pika, Kling, Veo) to replace or augment Flux 1.1 Pro for the Faceless pipeline. The user has not yet replied to these options. The next agent should follow up on this proposal based on user input.</analysis>
+**What agent forgot to execute**
+The agent addressed the long video scene cap conceptually (suggesting 40 scenes + auto cutaways) but did not implement it because the user explicitly ordered Do not touch any code while they were querying render metrics. This remains a high-priority UX fix to pick up once the user approves.</analysis>

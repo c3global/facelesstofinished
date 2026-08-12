@@ -14,9 +14,26 @@
 //    See PRD.md → "Workflow rule: changelog must move with every deploy."
 // 4. Most recent on top. Each entry has version + date + bullet list.
 
-export const APP_VERSION = "1.20.7";
+export const APP_VERSION = "1.20.9";
 
 export const CHANGELOG = [
+  {
+    version: "1.20.9",
+    date: "2026-08-11",
+    changes: [
+      "🎬 Long-form videos now feel professional — scene count scales with script length so a 25-minute video gets 60-90 scenes (instead of 12) and an average scene is ~15 seconds instead of 2 minutes of looping stock footage.",
+      "✂️ Auto-cutaways — any scene where the voiceover runs longer than 5 seconds automatically gets 2-4 different B-roll clips (same topic, different footage) so nothing loops or drags.",
+      "📏 New Extended length option (25-35 minute videos, ~4,000-5,500 words) — for deeper educational, documentary, or storytelling formats.",
+      "👁️ Pre-render preview banner — after 'Generate from script' you'll see the scene count, estimated video duration, and total clip count (with cutaways) so you know what you're rendering before you commit.",
+    ],
+  },
+  {
+    version: "1.20.8",
+    date: "2026-08-11",
+    changes: [
+      "🚚 Faster, more reliable video downloads — finished videos now publish to Cloudflare's global network instead of the old storage host. Faster playback, more reliable download links, and no more broken links when the old host has a bad moment.",
+    ],
+  },
   {
     version: "1.20.7",
     date: "2026-08-10",

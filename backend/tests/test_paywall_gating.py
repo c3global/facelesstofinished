@@ -26,7 +26,7 @@ for line in _BACKEND_ENV.read_text().splitlines():
 JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALG = "HS256"
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://f2f48-video-engine.preview.emergentagent.com").rstrip("/")
+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://modal-chip-ui.preview.emergentagent.com").rstrip("/")
 
 
 def _mint(email: str, entitlements: list[str], is_admin: bool = False) -> str:

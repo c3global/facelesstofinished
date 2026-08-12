@@ -15,7 +15,7 @@ import pytest
 
 BASE_URL = os.environ.get(
     "REACT_APP_BACKEND_URL",
-    "https://f2f48-video-engine.preview.emergentagent.com",
+    "https://modal-chip-ui.preview.emergentagent.com",
 ).rstrip("/")
 ADMIN_EMAIL = "drcharitycampbell@gmail.com"
 

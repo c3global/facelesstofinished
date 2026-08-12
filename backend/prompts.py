@@ -7,9 +7,10 @@ from __future__ import annotations
 
 
 LENGTH_TARGETS = {
-    "short":  {"mins": "5–8 minutes",  "words": "about 800–1,200 words of narration"},
-    "medium": {"mins": "10–15 minutes", "words": "about 1,500–2,200 words of narration"},
-    "long":   {"mins": "18–25 minutes", "words": "about 2,700–3,800 words of narration"},
+    "short":    {"mins": "5–8 minutes",   "words": "about 800–1,200 words of narration"},
+    "medium":   {"mins": "10–15 minutes", "words": "about 1,500–2,200 words of narration"},
+    "long":     {"mins": "18–25 minutes", "words": "about 2,700–3,800 words of narration"},
+    "extended": {"mins": "25–35 minutes", "words": "about 4,000–5,500 words of narration"},
 }
 
 

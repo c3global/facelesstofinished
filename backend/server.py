@@ -1598,6 +1598,157 @@ async def _trim_stock_video(video_url: str, aspect: str, duration_ms: int, scene
 
 
 # ---------------------------------------------------------------------------
+# Auto-cutaway wrapper (v1.20.9 / Iter 68) — one scene can produce 2-4 clips.
+#
+# When a scene's voiceover duration exceeds ~5s, a single Pexels clip trimmed
+# to fill it either loops visibly (boring) or freezes at the end (dead air).
+# For long-form videos (v1.20.9's 60-125 scene target), scene durations
+# average 15-25s — well past that threshold — so cutaways became essential.
+#
+# Design:
+#   • 5-10s scene:   2 clips (halves)
+#   • 10-18s scene:  3 clips
+#   • 18+s scene:    4 clips
+#   • Under 5s:      1 clip (falls straight through to _trim_stock_video)
+#
+# Each cutaway sub-clip uses a DIFFERENT Pexels/Pixabay result for the same
+# search query (via _fetch_multiple_stock_urls). The caller passes a shared
+# `used_urls` set so cutaways within one render never repeat clips across
+# scenes — a 90-scene long-form video with 3 cutaways each = 270 unique
+# stock clips, well within Pexels' per-query pool for most queries.
+#
+# Sub-clips are stitched inside this function via copy-concat (fast, low
+# memory) so the surrounding compose logic is unchanged — each scene
+# produces exactly one .mp4 as before.
+# ---------------------------------------------------------------------------
+def _cutaway_count_for_duration(duration_ms: int) -> int:
+    if duration_ms >= 18000:
+        return 4
+    if duration_ms >= 10000:
+        return 3
+    if duration_ms >= 5000:
+        return 2
+    return 1
+
+
+async def _trim_stock_video_with_cutaways(
+    primary_url: str,
+    search_query: str,
+    source: str,
+    aspect: str,
+    duration_ms: int,
+    scene_idx: int,
+    freeze_end: bool = False,
+    workdir: Optional[str] = None,
+    used_urls: Optional[set] = None,
+) -> Optional[str]:
+    """Auto-cutaway wrapper around _trim_stock_video. If duration_ms is
+    short (<5s) or we can't fetch additional clips, behaves identically
+    to a single _trim_stock_video call. Otherwise fetches N-1 additional
+    unique clips for the same search_query and stitches N sub-clips into
+    a single scene MP4."""
+    n_cuts = _cutaway_count_for_duration(duration_ms)
+    if n_cuts == 1 or not search_query:
+        return await _trim_stock_video(
+            primary_url, aspect, duration_ms, scene_idx, freeze_end, workdir,
+        )
+
+    # Fetch additional URLs for cutaways.
+    orientation = "portrait" if aspect == "9_16" else "landscape"
+    exclude: set = set(used_urls) if used_urls is not None else set()
+    exclude.add(primary_url)
+    additional = await _fetch_multiple_stock_urls(
+        source, search_query, orientation, n_cuts - 1, exclude,
+    )
+    all_urls = [primary_url] + additional
+    # If Pexels/Pixabay didn't yield enough unique clips, drop to fewer
+    # cutaways (or 1) rather than repeating the primary clip.
+    if len(all_urls) < 2:
+        return await _trim_stock_video(
+            primary_url, aspect, duration_ms, scene_idx, freeze_end, workdir,
+        )
+    n_cuts = len(all_urls)
+
+    # Per-cut duration — remainder goes to the last cut so total exactly matches.
+    per_cut_ms = duration_ms // n_cuts
+    cut_durations = [per_cut_ms] * (n_cuts - 1)
+    cut_durations.append(duration_ms - sum(cut_durations))
+
+    # Trim each sub-clip. Use unique scene_idx sub-slots so cache/temp
+    # files don't collide when NORMALIZE_CONCURRENCY renders scenes in
+    # parallel. Freeze-end only applies to the LAST sub-clip.
+    sub_paths: list[str] = []
+    for j, (cut_url, cut_dur) in enumerate(zip(all_urls, cut_durations)):
+        this_freeze = freeze_end if j == n_cuts - 1 else False
+        # Use a unique sub-slot so _trim_stock_video's temp names don't collide.
+        sub_slot = scene_idx * 100 + j
+        # Route sub-clips into a per-cut workdir file so we can concat later.
+        sub_path = await _trim_stock_video(
+            cut_url, aspect, cut_dur, sub_slot, this_freeze, workdir,
+        )
+        if sub_path:
+            sub_paths.append(sub_path)
+            if used_urls is not None:
+                used_urls.add(cut_url)
+
+    if not sub_paths:
+        return None
+    if len(sub_paths) == 1:
+        return sub_paths[0]
+
+    # Concat via copy-demuxer (fast, low memory). All sub-clips came from
+    # the same _trim_stock_video pass so they share encoder headers.
+    if workdir is None:
+        workdir = tempfile.mkdtemp(prefix="cutaways_")
+    final_path = os.path.join(workdir, f"scene_{scene_idx:03d}.mp4")
+    concat_txt = os.path.join(workdir, f"scene_{scene_idx:03d}.concat.txt")
+    with open(concat_txt, "w") as f:
+        for p in sub_paths:
+            safe = p.replace("'", "'\\''")
+            f.write(f"file '{safe}'\n")
+
+    cmd = [
+        FFMPEG_BIN, "-y", "-loglevel", "error", "-threads", "1",
+        "-f", "concat", "-safe", "0", "-i", concat_txt,
+        "-c:v", "copy", "-an",
+        "-movflags", "+faststart",
+        final_path,
+    ]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        _, err = await asyncio.wait_for(proc.communicate(), timeout=90)
+        rc = proc.returncode
+    except Exception as exc:
+        logger.warning(f"[cutaway-concat] scene={scene_idx} exception: {exc}")
+        rc = -1
+        err = b""
+    try:
+        os.unlink(concat_txt)
+    except Exception:
+        pass
+
+    if rc != 0 or not os.path.exists(final_path):
+        logger.warning(
+            f"[cutaway-concat] scene={scene_idx} concat failed rc={rc} — "
+            f"returning first sub-clip only. stderr: {err.decode(errors='ignore')[-200:]}"
+        )
+        return sub_paths[0]
+
+    # Delete sub-clips now that the merged scene exists (freeing disk).
+    for p in sub_paths:
+        if p != final_path and os.path.exists(p):
+            try:
+                os.unlink(p)
+            except Exception:
+                pass
+    return final_path
+
+
+
+
+# ---------------------------------------------------------------------------
 # Scene still-image generation — Flux primary, Nano Banana fallback.
 # ---------------------------------------------------------------------------
 # Iter 49 (2026-07-01): Charity reported $100+ in fal.ai testing burn with
@@ -1880,6 +2031,78 @@ async def _auto_search_stock_url(source: str, query: str, orientation: str) -> O
                 logger.warning(f"[auto-stock] {src}/{query}: {exc}")
                 continue
     return None
+
+
+async def _fetch_multiple_stock_urls(
+    source: str, query: str, orientation: str, count: int, exclude: set
+) -> list[str]:
+    """Fetch up to `count` UNIQUE stock-video URLs for the query, skipping
+    anything in `exclude`. Used by the auto-cutaway path so a long scene
+    gets 2-4 DIFFERENT visual clips instead of the same one looping.
+
+    Returns [] if the search returns nothing beyond what's excluded. The
+    caller is responsible for falling back (e.g., reusing the primary URL).
+    """
+    if count <= 0:
+        return []
+    sources = ["pexels", "pixabay"] if source == "mix" else [source]
+    search_query = _extract_stock_query(query) or query
+    keyword_set = {w for w in search_query.split() if w}
+    out: list[str] = []
+    async with httpx.AsyncClient(timeout=15) as client:
+        for src in sources:
+            if len(out) >= count:
+                break
+            try:
+                if src == "pexels" and PEXELS_API_KEY:
+                    r = await client.get(
+                        "https://api.pexels.com/videos/search",
+                        headers={"Authorization": PEXELS_API_KEY},
+                        params={"query": search_query, "orientation": orientation, "per_page": 30},
+                    )
+                    if r.status_code != 200:
+                        continue
+                    candidates = r.json().get("videos") or []
+                    candidates.sort(key=lambda v: _score_pexels_hit(v, keyword_set), reverse=True)
+                    for v in candidates:
+                        if len(out) >= count:
+                            break
+                        files = v.get("video_files") or []
+                        files.sort(key=lambda f: (f.get("height") or 0))
+                        pick = next(
+                            (f for f in files if 720 <= (f.get("height") or 0) <= 1080),
+                            None,
+                        )
+                        if not pick and files:
+                            higher = [f for f in files if (f.get("height") or 0) >= 720]
+                            pick = higher[0] if higher else None
+                        link = pick.get("link") if pick else None
+                        if link and link not in exclude and link not in out:
+                            out.append(link)
+                elif src == "pixabay" and PIXABAY_API_KEY:
+                    r = await client.get(
+                        "https://pixabay.com/api/videos/",
+                        params={"key": PIXABAY_API_KEY, "q": search_query, "per_page": 30},
+                    )
+                    if r.status_code != 200:
+                        continue
+                    candidates = r.json().get("hits") or []
+                    candidates.sort(
+                        key=lambda v: sum(1 for k in keyword_set if k in (v.get("tags") or "").lower()),
+                        reverse=True,
+                    )
+                    for v in candidates:
+                        if len(out) >= count:
+                            break
+                        videos = v.get("videos") or {}
+                        pick = videos.get("large") or videos.get("medium")
+                        link = pick.get("url") if pick else None
+                        if link and link not in exclude and link not in out:
+                            out.append(link)
+            except Exception as exc:
+                logger.warning(f"[cutaway-fetch] {src}/{query}: {exc}")
+                continue
+    return out
 
 
 # --- AI Text-to-Video engines (Faceless mode, optional alternative to Flux) ---
@@ -2388,6 +2611,103 @@ async def _upload_final_to_fal(local_path: str, *, max_attempts: int = 3) -> Opt
     return None
 
 
+# ---------------------------------------------------------------------------
+# Cloudflare R2 upload (v1.20.8 / Iter 68) — primary storage for final MP4s.
+#
+# R2 is S3-compatible with zero egress fees, so we hit it via boto3. When
+# any of the R2_* env vars are missing we fall back cleanly (returns None
+# without raising), letting the caller cascade to fal storage.
+#
+# Design notes:
+#   • ONE upload per render (not per scene) — same as _upload_final_to_fal.
+#   • Key layout: renders/{job_id}/final.mp4 — keeps per-job files grouped
+#     so future cleanup (e.g., 30-day expiry) can just delete the prefix.
+#   • Content-Type: video/mp4 is mandatory. Without it R2 serves as
+#     application/octet-stream and browsers force download instead of
+#     letting the HTML5 player scrub.
+#   • Public URL comes from R2_PUBLIC_URL (r2.dev subdomain today, custom
+#     domain later). We just append the object key.
+#   • Uploads run in an executor because boto3 is sync. 180s per attempt
+#     matches the fal path so long-form videos aren't cut short.
+# ---------------------------------------------------------------------------
+_R2_ACCOUNT_ID = os.environ.get("R2_ACCOUNT_ID", "").strip()
+_R2_ACCESS_KEY_ID = os.environ.get("R2_ACCESS_KEY_ID", "").strip()
+_R2_SECRET_ACCESS_KEY = os.environ.get("R2_SECRET_ACCESS_KEY", "").strip()
+_R2_BUCKET_NAME = os.environ.get("R2_BUCKET_NAME", "").strip()
+_R2_PUBLIC_URL = os.environ.get("R2_PUBLIC_URL", "").strip().rstrip("/")
+_R2_ENDPOINT_URL = os.environ.get("R2_ENDPOINT_URL", "").strip()
+
+_R2_ENABLED = all([
+    _R2_ACCESS_KEY_ID, _R2_SECRET_ACCESS_KEY,
+    _R2_BUCKET_NAME, _R2_PUBLIC_URL, _R2_ENDPOINT_URL,
+])
+
+
+def _r2_client():
+    """Lazy-construct a boto3 S3 client pointed at R2. Returns None if
+    R2 is not configured. Called per upload — cheap enough (~ms) and
+    avoids module-level state that's a pain to reset in tests."""
+    if not _R2_ENABLED:
+        return None
+    try:
+        import boto3
+        from botocore.config import Config
+        return boto3.client(
+            "s3",
+            endpoint_url=_R2_ENDPOINT_URL,
+            aws_access_key_id=_R2_ACCESS_KEY_ID,
+            aws_secret_access_key=_R2_SECRET_ACCESS_KEY,
+            config=Config(signature_version="s3v4", region_name="auto"),
+        )
+    except Exception as exc:
+        logger.warning(f"[r2] client construction failed: {exc}")
+        return None
+
+
+async def _upload_final_to_r2(
+    local_path: str, job_id: str, *, max_attempts: int = 3
+) -> Optional[str]:
+    """Upload final composed MP4 to Cloudflare R2. Returns public URL
+    (via r2.dev subdomain or custom domain) on success, None on failure
+    so the caller can cascade to fal storage."""
+    if not _R2_ENABLED:
+        return None
+    if not os.path.exists(local_path):
+        return None
+    client = _r2_client()
+    if client is None:
+        return None
+
+    key = f"renders/{job_id}/final.mp4"
+    loop = asyncio.get_event_loop()
+    delay_s = 1.0
+
+    def _do_upload():
+        client.upload_file(
+            local_path, _R2_BUCKET_NAME, key,
+            ExtraArgs={"ContentType": "video/mp4"},
+        )
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            await asyncio.wait_for(
+                loop.run_in_executor(None, _do_upload),
+                timeout=180.0,
+            )
+            public_url = f"{_R2_PUBLIC_URL}/{key}"
+            logger.info(f"[r2] uploaded final job={job_id} → {public_url}")
+            return public_url
+        except Exception as exc:
+            logger.warning(
+                f"[r2-upload] attempt {attempt}/{max_attempts} failed: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            if attempt < max_attempts:
+                await asyncio.sleep(delay_s)
+                delay_s *= 2
+    return None
+
+
 async def _fal_kling_i2v_generate(
     image_url: str,
     prompt: str,
@@ -2560,6 +2880,27 @@ async def _burn_in_captions(video_url: str, style_key: str, position_key: str = 
 #     pause in the audio instead of mid-sentence.
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z\"'\u201c])")
 _LONG_SENTENCE_WORDS = 25
+
+
+def _target_beat_count_from_words(word_count: int) -> tuple[int, int]:
+    """Return (min_beats, max_beats) target based on script word count.
+    Scales scene count with video length so long-form doesn't end up with
+    a handful of 2-minute clips looping. Numbers picked to hit an average
+    of ~15-25s per scene across all lengths.
+
+    Buckets align with LENGTH_TARGETS in prompts.py:
+      • <1,500 words   → Short:    15-25 scenes
+      • 1,500-2,500    → Medium:   30-45 scenes
+      • 2,500-4,000    → Long:     60-90 scenes
+      • 4,000+         → Extended: 90-125 scenes
+    """
+    if word_count < 1500:
+        return (max(3, min(15, word_count // 60)), 25)
+    if word_count < 2500:
+        return (30, 45)
+    if word_count < 4000:
+        return (60, 90)
+    return (90, 125)
 
 
 def split_script_into_beats(script: str, *, min_beats: int = 3, max_beats: int = 12) -> list[tuple[str, int]]:
@@ -3696,6 +4037,11 @@ async def _run_render_faceless(job: dict):
     # (from the Timeline Editor re-render endpoint), build a per-scene
     # lookup so `normalize_scene` can pass `freeze_end=True` to
     # `_trim_stock_video` for the exact scenes the user flagged.
+    # v1.20.9 (Iter 68): shared set of stock URLs already used by cutaways
+    # inside THIS render. Prevents the same Pexels clip from appearing in
+    # multiple scenes' cutaways of a long-form video.
+    used_stock_urls: set = set()
+
     scene_overrides = {}
     for ov in (job.get("scene_overrides") or []):
         try:
@@ -3786,10 +4132,21 @@ async def _run_render_faceless(job: dict):
                 return await _make_t2v_clip(
                     scene_prompts[idx], job["aspect"], this_dur, ai_engine, idx,
                 )
-            return await _trim_stock_video(
-                url, job["aspect"], this_dur, idx,
+            # v1.20.9 (Iter 68): auto-cutaway wrapper. For scenes with
+            # voiceover >5s, produce 2-4 sub-clips using different Pexels
+            # results for the same search_query. Sub-clips are concat'd
+            # into a single scene MP4 so downstream logic is unchanged.
+            scene_meta = scenes[idx] if idx < len(scenes) else {}
+            return await _trim_stock_video_with_cutaways(
+                primary_url=url,
+                search_query=(scene_meta.get("search_query") or scene_meta.get("prompt") or ""),
+                source=(scene_meta.get("source") or global_source or "pexels"),
+                aspect=job["aspect"],
+                duration_ms=this_dur,
+                scene_idx=idx,
                 freeze_end=override.get("freeze_end", False),
                 workdir=wd,
+                used_urls=used_stock_urls,
             )
 
         try:
@@ -3901,13 +4258,23 @@ async def _run_render_faceless(job: dict):
                 pass
 
         if final_local:
-            # Upload final MP4 to fal storage for URL hosting. This is ONE
-            # request (vs the old 7-per-render), retried up to 3 times.
+            # v1.20.8: Upload final MP4 to Cloudflare R2 (primary) with
+            # fal.ai as a fallback. R2 has zero egress and is S3-compatible.
+            # If R2 fails and fal fails, serve locally via the /api endpoint.
             await _set_progress(88, "Publishing final video…")
-            composed_url = await _upload_final_to_fal(final_local, max_attempts=3)
+            composed_url = await _upload_final_to_r2(final_local, job_id, max_attempts=3)
             if composed_url:
-                actual_cost_cents += 1  # single-file upload — much cheaper than compose queue
+                # R2 upload is ~free vs fal's per-storage cost — no cost bump.
+                pass
             else:
+                # R2 unavailable or failed 3× — cascade to fal storage.
+                logger.warning(
+                    f"[render] job={job_id} R2 upload failed; falling back to fal storage"
+                )
+                composed_url = await _upload_final_to_fal(final_local, max_attempts=3)
+                if composed_url:
+                    actual_cost_cents += 1  # single-file fal upload
+            if not composed_url:
                 # Fal storage completely unreachable — serve from backend
                 # via the local video endpoint. Stamp the LOCAL path on the
                 # render doc so the endpoint knows what to serve. The
@@ -4980,7 +5347,11 @@ async def studio_broll_prompts(payload: BrollPromptsRequest, user: AuthUser = De
     # Split the script into natural beats FIRST so we get a deterministic
     # scene count + per-scene word weights. Claude only handles wording each
     # beat into a stock-friendly prompt — not deciding how many to generate.
-    beats = split_script_into_beats(payload.script, min_beats=3, max_beats=12)
+    # v1.20.9: scale beat count with script length so long-form videos don't
+    # end up with 12 scenes × 2-minute loops. See _target_beat_count_from_words.
+    word_count = len((payload.script or "").split())
+    min_b, max_b = _target_beat_count_from_words(word_count)
+    beats = split_script_into_beats(payload.script, min_beats=min_b, max_beats=max_b)
     if not beats:
         return {"prompts": [], "scenes": []}
 
@@ -5040,6 +5411,15 @@ async def studio_broll_prompts(payload: BrollPromptsRequest, user: AuthUser = De
     # Pair prompts with beat weights (word counts). If Claude returned fewer
     # prompts than beats, fall back to the beat text itself for the missing
     # slots — better to ship a less-polished prompt than to drop a scene.
+    #
+    # v1.20.9 (Iter 68): also compute PER-SCENE ESTIMATED DURATION (ms) and
+    # the CUTAWAY COUNT (1-4) so the frontend can render a proper pre-render
+    # timeline preview. Estimated duration is based on Kokoro's ~155 WPM
+    # cadence; the actual render measures real TTS output via ffprobe so
+    # the estimate is a preview only.
+    KOKORO_WORDS_PER_MIN = 155.0
+    total_words = sum(w for _, w in beats) or 1
+    total_est_ms = int(round((total_words / KOKORO_WORDS_PER_MIN) * 60 * 1000))
     scenes: list[dict] = []
     for i, (beat_text, weight) in enumerate(beats):
         prompt = prompts_parsed[i] if i < len(prompts_parsed) else beat_text[:60]
@@ -5047,15 +5427,28 @@ async def studio_broll_prompts(payload: BrollPromptsRequest, user: AuthUser = De
             searches_parsed[i] if i < len(searches_parsed) and searches_parsed[i]
             else _extract_stock_query(prompt) or beat_text[:60]
         )
+        # Per-scene ms proportional to weight (same math as _run_render_faceless).
+        est_ms = max(1000, int((total_est_ms * weight) // total_words))
         scenes.append({
             "prompt": prompt,
             "search_query": search_query,
             "weight": weight,
+            "text": beat_text,
+            "estimated_duration_ms": est_ms,
+            "cutaway_count": _cutaway_count_for_duration(est_ms),
         })
+    # Sanity: durations should sum near total; fix drift on last scene.
+    diff = total_est_ms - sum(s["estimated_duration_ms"] for s in scenes)
+    if scenes and diff != 0:
+        scenes[-1]["estimated_duration_ms"] += diff
 
     return {
         "prompts": [s["prompt"] for s in scenes],
         "scenes": scenes,
+        "estimated_total_duration_ms": total_est_ms,
+        "estimated_total_duration_min": round(total_est_ms / 60000.0, 1),
+        "total_scene_count": len(scenes),
+        "total_cutaway_count": sum(s["cutaway_count"] for s in scenes),
     }
 
 
@@ -5211,7 +5604,7 @@ async def studio_ai_previews(payload: AIPreviewsRequest, user: AuthUser = Depend
 # GET /api/scripts/job/{id} every couple seconds. Mirrors the /api/studio/render
 # pattern that's been in production since iteration 1.
 
-LENGTH_VALID = {"short", "medium", "long"}
+LENGTH_VALID = {"short", "medium", "long", "extended"}
 ANGLE_CATEGORIES = {"curiosity", "contrarian", "how-to", "story", "list"}
 
 
@@ -5496,7 +5889,7 @@ async def _enqueue_script(*, user: AuthUser, mode: str, topic: str, system_promp
 
 class LongScriptRequest(BaseModel):
     topic: str
-    length: str = "medium"  # "short" | "medium" | "long"
+    length: str = "medium"  # "short" | "medium" | "long" | "extended"
     angle: Optional[str] = None  # legacy free-text hint
     chosen_angle: Optional[dict] = None  # {name, framing, category} — locked angle from step 1
     include_hooks: bool = True

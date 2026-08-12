@@ -20,6 +20,77 @@ back to it for entitlement verification.
 
 ## 🔁 Workflow rule: Changelog moves with every change (set 2026-06-29 by user)
 
+### Iteration 68 (2026-08-11) — Long-form pacing rebuild + R2 storage (v1.20.8 + v1.20.9)
+
+**Trigger:** Charity confirmed prod renders failing at ~60% (post fal upload phase, killed by Startup Reaper's 5-min heartbeat cutoff) AND separately called out that long-form videos "look boring" because 25-min renders only got 12 scenes (~2 min per clip loop). Both problems shipped in one iteration.
+
+**v1.20.8 — R2 storage (Suspect #3 fix):**
+- `boto3==1.43.21` added to `requirements.txt`.
+- `_upload_final_to_r2()` helper: single-file upload to Cloudflare R2 with mandatory `ContentType=video/mp4` header (browser scrub support), 3-attempt retry with exponential backoff.
+- Compose flow now cascades: R2 primary → fal storage fallback → local-served (`/api/renders/{id}/video.mp4`) as absolute last resort.
+- `.env` gained 6 R2 keys: `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME` (`f48-renders`), `R2_PUBLIC_URL`, `R2_ENDPOINT_URL`.
+- Verified end-to-end: real MP4 → HTTP 200 from `pub-*.r2.dev` URL with correct `video/mp4` content-type. Uploads sub-second vs. fal's multi-minute for same file. This likely resolves the "60% timeout" cascade because the ~9-min worst-case fal upload window collapses to seconds on R2.
+
+**v1.20.9 — Long-form sync rebuild (5 principles Charity approved verbatim):**
+
+Principles she approved (from strategy chat):
+1. TTS-first duration (measure real Kokoro output, don't estimate).
+2. Cuts land on natural voiceover boundaries.
+3. One beat = one semantic idea (not "12 max regardless of length").
+4. Cutaways match speech rhythm (5-10s → 2 clips, 10-18s → 3, 18+s → 4).
+5. Pre-render preview so user sees the sync BEFORE burning credits.
+
+**Backend changes (`server.py` + `prompts.py`):**
+- `LENGTH_TARGETS["extended"]` (25-35 min, ~4,000-5,500 words).
+- `LENGTH_VALID` set includes "extended"; `RenderRequest.length` docstring updated.
+- NEW `_target_beat_count_from_words()` — scales max_beats by script word count:
+  - <1,500 words (short): 25 cap
+  - 1,500-2,500 (medium): 45 cap
+  - 2,500-4,000 (long): 90 cap
+  - 4,000+ (extended): 125 cap
+- `split_script_into_beats` signature unchanged, but `studio_broll_prompts` now calls it with the scaled `(min_b, max_b)` — replaces the hardcoded `max_beats=12` that was the root cause of "long videos only get 12 scenes."
+- NEW `_cutaway_count_for_duration(duration_ms)` — returns 1/2/3/4 based on scene voiceover length.
+- NEW `_fetch_multiple_stock_urls()` — batch-fetch N unique Pexels/Pixabay URLs matching a query, skipping anything in an `exclude` set. Same scoring as `_auto_search_stock_url` but returns up to N results.
+- NEW `_trim_stock_video_with_cutaways()` — auto-cutaway wrapper. For scenes ≥5s, fetches 2-4 different Pexels/Pixabay clips for the same search_query, trims each to a portion of the scene duration, and copy-concats them into a single per-scene MP4. Downstream compose logic is unchanged.
+- `_run_render_faceless` normalize_scene stock branch now calls the cutaway wrapper instead of raw `_trim_stock_video`. Shared `used_stock_urls: set` prevents cutaways across scenes from repeating clips.
+- `studio_broll_prompts` response enhanced: each scene carries `estimated_duration_ms` + `cutaway_count`; top-level `total_scene_count`, `total_cutaway_count`, `estimated_total_duration_min` for the frontend preview banner.
+
+**Frontend changes:**
+- `scriptsConstants.js` — LENGTHS array includes "Extended" (25-35 min).
+- `Studio.jsx` — `MAX_SCENES` bumped from 12 → 200. `generatePromptsFromScript` no longer truncates via `.slice(0, 12)`; now uses `MAX_SCENES`. New `timelinePreview` state captures scene count, est duration, cutaway count from the enhanced broll-prompts response. New `.timeline-preview-banner` above the bulk-prompts textarea surfaces "N scenes · X min video · Y total clips with cutaways" with a hint explaining cutaways.
+- `App.css` — `.timeline-preview-banner` styles (purple-accent border, stat pills, hint line).
+- `changelog.js` — v1.20.8 + v1.20.9 entries, customer-facing language.
+
+**Simulation verified (no external credit spend):**
+- Beat-count scaling: 1,000-word script → 25 beats, 2,000 → 45, 3,500 → 90, 5,000 → 125 (as designed).
+- Extended-length realistic script (4,165 words, varied sentences): 125 scenes averaging 12.9s each, 358 total visual clips with cutaways (33 scenes × 2 clips, 76 × 3, 16 × 4).
+- Cutaway wrapper end-to-end: 15s scene with query "person typing laptop" → fetched 3 unique Pexels URLs → produced valid 2.7MB stitched MP4 via copy-concat.
+- OOM simulation (separate diagnostic): 20-scene re-encode path uses ~2.8 GB peak RSS — confirmed why the OOM fallback path was killing production on the 512 MB tier. With v1.20.9's uniform per-scene encoder settings + the R2 upload speedup, the re-encode path should rarely fire. Chunked-batch re-encode as a second safety net stays on the backlog.
+
+**Charity's action items (production):**
+1. Redeploy v1.20.9 to `faceless48.c3global.co`. R2 credentials are already in `.env` — the auto-cutaway path is on by default, no config needed.
+2. ROTATE the R2 API token in Cloudflare (delete the one pasted in the fork-agent chat, create a new one, hand me the new secret). This is standard hygiene since the paste is logged.
+3. Test a real long-form render in preview first to confirm the 60-90 scene count + cutaways feel right visually. If cutaway count needs tuning (e.g., wants MORE cutaways on shorter scenes, or FEWER on very-long scenes), tweak `_cutaway_count_for_duration` thresholds.
+
+**Deliberately deferred (Batch 2):**
+- Per-scene Kokoro TTS + ffprobe (true TTS-first duration). Current approach uses per-scene weight × Kokoro cadence estimate + full-track ffprobe for total; scene boundaries are computed proportional, not measured. Good enough for most cases; not perfect for beats with unusual word density.
+- Whisper transcription for cuts on real word-level pauses (currently cuts on midpoint proportional split, not detected pauses).
+- Full drag-to-edit pre-render Timeline modal (currently shows summary banner only; existing `TimelineModal.jsx` remains post-render only for now).
+- Chunked-batch re-encode fallback for the compose OOM safety net.
+
+**Files touched:**
+- `/app/backend/server.py` — LENGTH_VALID + RenderRequest docstring + `_target_beat_count_from_words` + `_cutaway_count_for_duration` + `_fetch_multiple_stock_urls` + `_trim_stock_video_with_cutaways` + `_upload_final_to_r2` + R2 env constants + `_r2_client` + compose cascade + normalize_scene stock branch + broll-prompts response enrichment + `used_stock_urls` set + `studio_broll_prompts` scaling call.
+- `/app/backend/prompts.py` — LENGTH_TARGETS gains "extended".
+- `/app/backend/requirements.txt` — `boto3==1.43.21`.
+- `/app/backend/.env` — 6 R2 keys.
+- `/app/frontend/src/components/scripts/scriptsConstants.js` — Extended LENGTHS entry.
+- `/app/frontend/src/pages/Studio.jsx` — MAX_SCENES + timelinePreview state + banner render.
+- `/app/frontend/src/App.css` — `.timeline-preview-banner` block.
+- `/app/frontend/src/changelog.js` — v1.20.8 + v1.20.9.
+- `/app/memory/PRD.md` — this entry.
+
+
+
 ### Iteration 67 (2026-08-10) — Two-tier local compose + true fal fallback (v1.20.7)
 
 **Trigger:** Charity redeployed v1.20.6 to prod. Both her renders (9:16 and 16:9 in parallel) failed with `Render failed: Local ffmpeg compose failed and remote fallback not available.` The bug I shipped: when local ffmpeg fails, my fallback branch checked `if any(u.startswith("/"))` and refused to run fal compose because clip URLs were local paths — instead of promoting those local paths to fal URLs via `_fal_upload_with_timeout`. The whole point of a "fallback" is to save the render, not print a clear diagnostic and give up.

@@ -14,9 +14,10 @@ export const STEPS = {
 };
 
 export const LENGTHS = [
-  { id: "short",  label: "Short",  desc: "5–8 min · 800–1,200 words" },
-  { id: "medium", label: "Medium", desc: "10–15 min · 1,500–2,200 words" },
-  { id: "long",   label: "Long",   desc: "18–25 min · 2,700–3,800 words" },
+  { id: "short",    label: "Short",    desc: "5–8 min · 800–1,200 words" },
+  { id: "medium",   label: "Medium",   desc: "10–15 min · 1,500–2,200 words" },
+  { id: "long",     label: "Long",     desc: "18–25 min · 2,700–3,800 words" },
+  { id: "extended", label: "Extended", desc: "25–35 min · 4,000–5,500 words" },
 ];
 
 export const PLATFORMS = [
