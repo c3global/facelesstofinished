@@ -1640,6 +1640,174 @@
 }
 .timeline-btn-primary:hover:not(:disabled) { background: var(--accent-strong, #a78bfa); border-color: var(--accent-strong, #a78bfa); }
 
+/* v1.20.10 (Iter 68 Batch 2): Pre-render Timeline Editor modal styles.
+   Distinct from post-render TimelineModal — this one is more of a
+   "commit your render" review UI with editable per-scene clip strips. */
+.timeline-modal-header {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(139, 92, 246, 0.18);
+}
+.timeline-modal-title {
+  display: flex; align-items: center; gap: 8px;
+  font-weight: 700; font-size: 15px; color: var(--fg, #e8e4ff);
+}
+.timeline-modal-close {
+  background: transparent; border: 1px solid var(--border, #2a2352);
+  color: var(--muted, #9b93bd);
+  width: 30px; height: 30px; border-radius: 8px;
+  cursor: pointer; display: grid; place-items: center;
+  transition: background 0.15s, border-color 0.15s;
+}
+.timeline-modal-close:hover { border-color: var(--accent, #8b5cf6); color: var(--fg); }
+
+.timeline-modal-loading {
+  display: flex; flex-direction: column; align-items: center;
+  padding: 40px 20px; gap: 8px; text-align: center;
+}
+.timeline-modal-loading .hint {
+  font-size: 12px; color: var(--muted, #9b93bd); max-width: 380px; margin-top: 4px;
+}
+.timeline-modal-loading .spin { animation: spin 1s linear infinite; color: var(--accent, #8b5cf6); }
+
+.timeline-modal-error {
+  display: flex; align-items: center; gap: 8px;
+  padding: 12px 14px; margin-bottom: 12px;
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  border-radius: 10px;
+  background: rgba(239, 68, 68, 0.08);
+  color: #fca5a5; font-size: 13px;
+}
+
+.timeline-summary {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  padding: 10px 14px; margin-bottom: 14px;
+  border: 1px solid rgba(139, 92, 246, 0.22);
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(139, 92, 246, 0.06), rgba(139, 92, 246, 0.02));
+  font-size: 13px;
+}
+.timeline-summary-stat { display: inline-flex; gap: 4px; align-items: baseline; }
+.timeline-summary-stat strong { font-weight: 700; color: var(--accent, #8b5cf6); }
+.timeline-summary-edited {
+  margin-left: auto;
+  padding: 4px 10px; border-radius: 999px;
+  background: rgba(34, 197, 94, 0.14);
+  color: #86efac; font-size: 12px; font-weight: 600;
+}
+
+.timeline-scenes-scroll {
+  display: flex; flex-direction: column; gap: 12px;
+  max-height: 56vh; overflow-y: auto;
+  padding-right: 6px;
+  margin-bottom: 16px;
+}
+.timeline-scene-row {
+  display: grid; grid-template-columns: 32px 1fr auto;
+  gap: 12px; align-items: flex-start;
+  padding: 12px; border: 1px solid var(--border, #2a2352);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.timeline-scene-num {
+  padding-top: 4px;
+  font-size: 13px; font-weight: 700; color: var(--muted, #9b93bd);
+  text-align: center;
+}
+.timeline-scene-body { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.timeline-scene-text {
+  font-size: 13px; line-height: 1.45; color: var(--fg, #e8e4ff);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.timeline-scene-meta {
+  display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+  font-size: 11px; color: var(--muted, #9b93bd);
+}
+.timeline-audio-link {
+  display: inline-flex; align-items: center; gap: 3px;
+  color: var(--accent, #8b5cf6); text-decoration: none;
+}
+.timeline-audio-link:hover { text-decoration: underline; }
+
+.timeline-clip-strip {
+  display: flex; gap: 8px; flex-wrap: wrap;
+  margin-top: 6px;
+}
+.timeline-clip-thumb {
+  position: relative;
+  width: 88px; height: 50px;
+  border-radius: 8px; overflow: hidden;
+  background: #000;
+  border: 1.5px solid transparent;
+}
+.timeline-clip-thumb.is-primary { border-color: var(--accent, #8b5cf6); }
+.timeline-clip-thumb.is-cutaway { border-color: rgba(139, 92, 246, 0.35); }
+.timeline-clip-thumb video {
+  width: 100%; height: 100%; object-fit: cover; display: block;
+}
+.timeline-clip-label {
+  position: absolute; left: 4px; bottom: 3px;
+  padding: 1px 6px; border-radius: 4px;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff; font-size: 9px; letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.timeline-clip-remove {
+  position: absolute; top: 3px; right: 3px;
+  width: 20px; height: 20px; padding: 0;
+  border-radius: 50%; border: none;
+  background: rgba(220, 38, 38, 0.82);
+  color: white; cursor: pointer;
+  display: none; place-items: center;
+}
+.timeline-clip-thumb:hover .timeline-clip-remove { display: grid; }
+.timeline-clip-remove:hover { background: rgba(220, 38, 38, 1); }
+
+.timeline-scene-actions {
+  display: flex; flex-direction: column; gap: 4px;
+  padding-top: 2px;
+}
+.timeline-freeze-btn {
+  width: 28px; height: 28px; padding: 0;
+  border-radius: 8px; border: 1px solid var(--border, #2a2352);
+  background: transparent; color: var(--muted, #9b93bd);
+  cursor: pointer; display: grid; place-items: center;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.timeline-freeze-btn:hover { border-color: var(--accent, #8b5cf6); color: var(--fg); }
+.timeline-freeze-btn.is-on {
+  background: rgba(59, 130, 246, 0.14);
+  border-color: rgba(59, 130, 246, 0.5);
+  color: #93c5fd;
+}
+
+.timeline-modal-footer {
+  display: flex; justify-content: flex-end; gap: 10px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(139, 92, 246, 0.15);
+}
+.timeline-footer-secondary,
+.timeline-footer-primary {
+  padding: 10px 18px; border-radius: 10px; font-size: 13px; font-weight: 600;
+  cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+  transition: background 0.15s, border-color 0.15s;
+}
+.timeline-footer-secondary {
+  background: transparent; border: 1px solid var(--border, #2a2352);
+  color: var(--muted, #9b93bd);
+}
+.timeline-footer-secondary:hover { border-color: var(--accent, #8b5cf6); color: var(--fg); }
+.timeline-footer-primary {
+  background: var(--accent, #8b5cf6); border: 1px solid var(--accent, #8b5cf6);
+  color: #fff;
+}
+.timeline-footer-primary:hover:not(:disabled) { background: var(--accent-strong, #a78bfa); border-color: var(--accent-strong, #a78bfa); }
+.timeline-footer-primary:disabled { opacity: 0.55; cursor: not-allowed; }
+.timeline-footer-primary .spin { animation: spin 1s linear infinite; }
+
+
 .player-modal-close {
   position: absolute;
   top: 8px;

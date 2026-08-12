@@ -15,6 +15,7 @@ import MediaLibrary from "../components/MediaLibrary";
 import Toast from "../components/Toast";
 import StudioQuotaPill from "../components/StudioQuotaPill";
 import TimelineModal from "../components/TimelineModal";
+import PrerenderTimelineModal from "../components/PrerenderTimelineModal";
 
 const MODES = { AVATAR: "avatar", FACELESS: "faceless" };
 // HeyGen's API caps script text at exactly 5,000 characters on BOTH v3
@@ -273,6 +274,7 @@ export default function Studio() {
   // browser can't render the bare MP4 inline). Keeping playback in-app.
   const [playerModal, setPlayerModal] = useState(null);  // {url, aspect} | null
   const [timelineJobId, setTimelineJobId] = useState(null);  // Iter 60: timeline editor modal
+  const [showPrerenderTimeline, setShowPrerenderTimeline] = useState(false);  // v1.20.10: pre-render Timeline Editor
   // Per-row selection for bulk-delete in the Recent renders list.
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const toggleSelected = (id) => {
@@ -1397,6 +1399,18 @@ export default function Studio() {
         >
           Render your video
         </button>
+        {mode === MODES.FACELESS && (
+          <button
+            type="button"
+            className="cta-btn-secondary"
+            data-testid="preview-timeline-btn"
+            disabled={!canGenerate}
+            onClick={() => setShowPrerenderTimeline(true)}
+            title="See your video's timeline — voiceover, clips, and cutaways — before hitting render."
+          >
+            <Clock size={14} /> Preview timeline before render
+          </button>
+        )}
         <button
           type="button"
           className="cta-btn-secondary"
@@ -1854,6 +1868,30 @@ export default function Studio() {
           setTimelineJobId(null);
           setToast("Timeline re-render queued — watch history for the new job.");
           // Refresh history so the new render row appears immediately.
+          if (typeof loadHistory === "function") loadHistory();
+        }}
+      />
+
+      {/* v1.20.10 — Pre-render Timeline Editor. Shows the full manifest
+          (per-scene voiceover + primary + cutaway B-roll thumbnails)
+          BEFORE the user commits to a render. */}
+      <PrerenderTimelineModal
+        isOpen={showPrerenderTimeline}
+        onClose={() => setShowPrerenderTimeline(false)}
+        script={script}
+        aspect={aspect}
+        brollSource={brollSource}
+        ttsVoiceId={ttsVoice?.id}
+        renderPayloadExtras={{
+          captions,
+          caption_style: captionStyle,
+          caption_position: captionPosition,
+          auto_freeze_broll: autoFreezeBroll,
+          ai_engine: aiEngine,
+        }}
+        onRenderStarted={(newJobId) => {
+          setShowPrerenderTimeline(false);
+          setToast("Render started — watch history for progress.");
           if (typeof loadHistory === "function") loadHistory();
         }}
       />

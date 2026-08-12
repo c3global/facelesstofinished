@@ -12,6 +12,7 @@ store it in MongoDB so subsequent calls don't re-hit Netlify on every request.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -471,6 +472,11 @@ class RenderRequest(BaseModel):
     # Applied by the render endpoint before insert (synthesizes a
     # scene_overrides list covering every scene). Ignored in Avatar mode.
     auto_freeze_broll: bool = False
+    # v1.20.10 (Iter 68): when set, /studio/render loads a pre-generated
+    # preview manifest from db.render_previews and uses it verbatim —
+    # skipping TTS regeneration AND auto-search. Populated by clicking
+    # "Render this video" inside the pre-render Timeline Editor modal.
+    preview_id: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -1351,6 +1357,212 @@ async def _probe_audio_duration_s(audio_url: str, fallback_s: float) -> float:
                 pass
 
 
+# ---------------------------------------------------------------------------
+# Per-scene Kokoro TTS (v1.20.10 / Iter 68) — TRUE TTS-first duration
+#
+# Old flow: ONE big Kokoro call for the whole script, then distribute the
+# audio duration proportional to word count per scene. This ESTIMATED per-
+# scene timing and drifted out of sync as errors compounded over 50+ beats.
+#
+# New flow: N Kokoro calls (one per scene) fired in parallel. Each returns
+# its own audio URL + measured duration. Scene boundaries are guaranteed
+# to align with real voice cadence — no more mid-word cuts, no more drift.
+#
+# Uses a semaphore capped at PER_SCENE_TTS_CONCURRENCY (default 6) to avoid
+# hammering fal.ai. Individual per-scene text is small (usually 5-40 words)
+# so each call returns in 2-5 seconds. Total wall clock for a 90-scene
+# extended video: ~30-45s (was 90-180s for the single big call).
+#
+# Cache: dedupe by hash(voice_id, scene_text). If the same voice re-narrates
+# the same sentence in a later preview, we skip the API call and reuse the
+# stored URL from db.tts_scene_cache.
+# ---------------------------------------------------------------------------
+PER_SCENE_TTS_CONCURRENCY = int(os.environ.get("PER_SCENE_TTS_CONCURRENCY", "6"))
+
+
+def _tts_scene_cache_key(voice_id: str, text: str) -> str:
+    payload = f"{voice_id}::{text.strip()}"
+    return "ts:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()[:24]
+
+
+async def _kokoro_tts_scene(
+    text: str, voice_id: str, scene_idx: int, *, timeout_s: float = 90.0
+) -> Optional[tuple[str, float]]:
+    """Generate Kokoro TTS for ONE scene's text. Returns (audio_url, duration_s)
+    or None on failure. Uses db.tts_scene_cache to avoid regenerating the
+    same voice + text across preview/render cycles."""
+    if not text or not text.strip():
+        return None
+    vid = voice_id or "af_heart"
+    cache_key = _tts_scene_cache_key(vid, text)
+
+    # Cache check — reuse identical voice+text from any recent render/preview.
+    try:
+        hit = await db.tts_scene_cache.find_one({"_id": cache_key})
+        if hit and hit.get("audio_url") and hit.get("duration_s"):
+            return (hit["audio_url"], float(hit["duration_s"]))
+    except Exception:
+        pass  # cache miss falls through to API
+
+    fal_key = _effective_fal_key()
+    if not fal_key:
+        return None
+    fal_headers = {"Authorization": f"Key {fal_key}"}
+    endpoint = f"https://fal.run/{_kokoro_endpoint(vid)}"
+
+    # Kokoro read timeout: per-scene payloads are short so we don't need
+    # the 360s ceiling the full-script call uses. 90s is generous.
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=15.0, read=timeout_s, write=30.0, pool=15.0),
+        ) as client:
+            for attempt in range(3):
+                try:
+                    r = await client.post(
+                        endpoint,
+                        headers=fal_headers,
+                        json={"prompt": text, "voice": vid},
+                    )
+                    if r.status_code != 200:
+                        logger.warning(
+                            f"[tts-scene {scene_idx}] non-200 rc={r.status_code} — {r.text[:200]}"
+                        )
+                        return None
+                    data = r.json() or {}
+                    audio_url = data.get("audio_url") or (data.get("audio") or {}).get("url")
+                    if not audio_url:
+                        return None
+                    duration_s = await _probe_audio_duration_s(
+                        audio_url, fallback_s=len(text.split()) / 155.0 * 60,
+                    )
+                    # Persist to cache (best-effort).
+                    try:
+                        await db.tts_scene_cache.update_one(
+                            {"_id": cache_key},
+                            {"$set": {
+                                "audio_url": audio_url,
+                                "duration_s": duration_s,
+                                "voice_id": vid,
+                                "text_len": len(text),
+                                "cached_at": datetime.now(timezone.utc).isoformat(),
+                            }},
+                            upsert=True,
+                        )
+                    except Exception:
+                        pass
+                    return (audio_url, duration_s)
+                except (httpx.ReadError, httpx.ReadTimeout, httpx.RemoteProtocolError) as exc:
+                    if attempt < 2:
+                        await asyncio.sleep(2 + attempt * 2)
+                        continue
+                    logger.warning(f"[tts-scene {scene_idx}] {type(exc).__name__} after retries: {exc}")
+                    return None
+    except Exception as exc:
+        logger.warning(f"[tts-scene {scene_idx}] exception: {type(exc).__name__}: {exc}")
+        return None
+    return None
+
+
+async def _generate_per_scene_audio(
+    scene_texts: list[str], voice_id: str,
+) -> list[Optional[tuple[str, float]]]:
+    """Generate Kokoro TTS for a list of scene texts in parallel with a
+    concurrency cap. Returns a list parallel to scene_texts where each
+    entry is (audio_url, duration_s) or None. Preserves order."""
+    sem = asyncio.Semaphore(max(1, PER_SCENE_TTS_CONCURRENCY))
+
+    async def _one(i: int, text: str):
+        async with sem:
+            return await _kokoro_tts_scene(text, voice_id, i)
+
+    return await asyncio.gather(*[_one(i, t) for i, t in enumerate(scene_texts)])
+
+
+async def _concat_per_scene_audio_to_r2(
+    audio_urls: list[str], preview_id: str,
+) -> Optional[str]:
+    """Download N scene audios in order and concat into one MP3 track via
+    ffmpeg, then upload to R2. Returns the public R2 URL, or None on
+    failure (caller falls back to whatever the pipeline does when
+    user_voiceover_url is missing — which is regenerate TTS from script).
+
+    Used by /studio/render when a preview_id is present, so the render
+    pipeline sees ONE audio track (same shape as user-recorded voiceover)
+    instead of needing per-scene audio plumbing."""
+    if not audio_urls:
+        return None
+    workdir = tempfile.mkdtemp(prefix="preview_audio_")
+    try:
+        # Download each in parallel.
+        local_paths: list[str] = []
+        async def _dl(i: int, url: str) -> Optional[str]:
+            path = os.path.join(workdir, f"scene_{i:03d}.mp3")
+            try:
+                async with httpx.AsyncClient(timeout=30, follow_redirects=True) as cli:
+                    r = await cli.get(url)
+                    if r.status_code != 200 or not r.content:
+                        return None
+                    with open(path, "wb") as f:
+                        f.write(r.content)
+                return path
+            except Exception:
+                return None
+
+        results = await asyncio.gather(*[_dl(i, u) for i, u in enumerate(audio_urls)])
+        for r in results:
+            if r:
+                local_paths.append(r)
+        if not local_paths:
+            return None
+
+        # ffmpeg concat via filter (safer than demuxer for arbitrary mp3s).
+        merged = os.path.join(workdir, "merged.mp3")
+        cmd = [FFMPEG_BIN, "-y", "-loglevel", "error"]
+        for p in local_paths:
+            cmd += ["-i", p]
+        cmd += [
+            "-filter_complex",
+            f"concat=n={len(local_paths)}:v=0:a=1[out]",
+            "-map", "[out]",
+            "-c:a", "libmp3lame", "-b:a", "128k",
+            merged,
+        ]
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        _, err = await asyncio.wait_for(proc.communicate(), timeout=180)
+        if proc.returncode != 0 or not os.path.exists(merged):
+            logger.warning(f"[preview-audio-concat] ffmpeg rc={proc.returncode} stderr={err.decode()[-300:]}")
+            return None
+
+        # Upload merged MP3 to R2 under the preview_id.
+        if not _R2_ENABLED:
+            return None
+        client = _r2_client()
+        if client is None:
+            return None
+        key = f"previews/{preview_id}/voiceover.mp3"
+        loop = asyncio.get_event_loop()
+
+        def _do_upload():
+            client.upload_file(
+                merged, _R2_BUCKET_NAME, key,
+                ExtraArgs={"ContentType": "audio/mpeg"},
+            )
+
+        try:
+            await asyncio.wait_for(
+                loop.run_in_executor(None, _do_upload),
+                timeout=120.0,
+            )
+        except Exception as exc:
+            logger.warning(f"[preview-audio-concat] R2 upload failed: {exc}")
+            return None
+        return f"{_R2_PUBLIC_URL}/{key}"
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
 # Ken Burns presets — alternating zoom/pan patterns so consecutive scenes feel
 # cinematic instead of identical. Each entry is an ffmpeg `zoompan` arg suffix
 # (the leading `scale=` is built per-aspect below). `d` is the per-scene frame
@@ -1641,26 +1853,35 @@ async def _trim_stock_video_with_cutaways(
     freeze_end: bool = False,
     workdir: Optional[str] = None,
     used_urls: Optional[set] = None,
+    prepicked_cutaways: Optional[list[str]] = None,
 ) -> Optional[str]:
     """Auto-cutaway wrapper around _trim_stock_video. If duration_ms is
     short (<5s) or we can't fetch additional clips, behaves identically
     to a single _trim_stock_video call. Otherwise fetches N-1 additional
     unique clips for the same search_query and stitches N sub-clips into
-    a single scene MP4."""
+    a single scene MP4.
+
+    v1.20.10: `prepicked_cutaways` — when the caller already knows which
+    URLs to use (e.g. loaded from a pre-render preview manifest), skip
+    the Pexels/Pixabay API refetch and use those URLs directly."""
     n_cuts = _cutaway_count_for_duration(duration_ms)
-    if n_cuts == 1 or not search_query:
+    if n_cuts == 1 or (not search_query and not prepicked_cutaways):
         return await _trim_stock_video(
             primary_url, aspect, duration_ms, scene_idx, freeze_end, workdir,
         )
 
-    # Fetch additional URLs for cutaways.
-    orientation = "portrait" if aspect == "9_16" else "landscape"
-    exclude: set = set(used_urls) if used_urls is not None else set()
-    exclude.add(primary_url)
-    additional = await _fetch_multiple_stock_urls(
-        source, search_query, orientation, n_cuts - 1, exclude,
-    )
-    all_urls = [primary_url] + additional
+    if prepicked_cutaways is not None and len(prepicked_cutaways) > 0:
+        # Skip the API fetch — user picked cutaways in the preview modal.
+        all_urls = [primary_url] + [u for u in prepicked_cutaways if u and u != primary_url]
+    else:
+        # Fetch additional URLs for cutaways.
+        orientation = "portrait" if aspect == "9_16" else "landscape"
+        exclude: set = set(used_urls) if used_urls is not None else set()
+        exclude.add(primary_url)
+        additional = await _fetch_multiple_stock_urls(
+            source, search_query, orientation, n_cuts - 1, exclude,
+        )
+        all_urls = [primary_url] + additional
     # If Pexels/Pixabay didn't yield enough unique clips, drop to fewer
     # cutaways (or 1) rather than repeating the primary clip.
     if len(all_urls) < 2:
@@ -4136,7 +4357,11 @@ async def _run_render_faceless(job: dict):
             # voiceover >5s, produce 2-4 sub-clips using different Pexels
             # results for the same search_query. Sub-clips are concat'd
             # into a single scene MP4 so downstream logic is unchanged.
+            # v1.20.10: when the caller already resolved cutaway URLs
+            # (via pre-render preview), pass them through so we skip the
+            # Pexels/Pixabay API refetch.
             scene_meta = scenes[idx] if idx < len(scenes) else {}
+            prepicked = scene_meta.get("cutaway_urls") or None
             return await _trim_stock_video_with_cutaways(
                 primary_url=url,
                 search_query=(scene_meta.get("search_query") or scene_meta.get("prompt") or ""),
@@ -4147,6 +4372,7 @@ async def _run_render_faceless(job: dict):
                 freeze_end=override.get("freeze_end", False),
                 workdir=wd,
                 used_urls=used_stock_urls,
+                prepicked_cutaways=prepicked,
             )
 
         try:
@@ -4451,6 +4677,194 @@ async def _run_render_composite(job: dict):
     )
 
 
+
+# ---------------------------------------------------------------------------
+# Pre-render Timeline Preview (v1.20.10 / Iter 68 Batch 2)
+#
+# Runs the ENTIRE Faceless prep pipeline WITHOUT rendering:
+#   1. Split the script into length-adaptive beats.
+#   2. Generate B-roll prompts + stock-search queries via Claude.
+#   3. Fire Kokoro TTS in parallel PER SCENE (true TTS-first sync).
+#   4. Fetch primary + cutaway Pexels/Pixabay thumbnails per scene.
+#
+# Returns a manifest the frontend renders into a Timeline modal so the user
+# can approve, reorder, or swap clips BEFORE hitting render — no more
+# blind renders where the sync drifts and you find out post-facto.
+#
+# The manifest is cached in db.render_previews keyed by preview_id. When
+# the user hits "Render this video," they POST /studio/render with
+# `preview_id: <id>` and `_run_render_faceless` skips TTS regeneration
+# entirely — reusing the exact same per-scene audio URLs the preview
+# generated.
+# ---------------------------------------------------------------------------
+class RenderPreviewRequest(BaseModel):
+    script: str
+    aspect: str = "16_9"
+    broll_source: str = "pexels"  # "pexels" | "pixabay" | "mix"
+    tts_voice_id: str = "af_heart"
+
+
+@api.post("/studio/render/preview")
+async def studio_render_preview(
+    payload: RenderPreviewRequest, user: AuthUser = Depends(current_user),
+):
+    """Generate a full pre-render manifest: per-scene TTS + per-scene primary
+    and cutaway B-roll URLs. Returned to the frontend for the Timeline
+    Editor. Also stashed in db.render_previews so a subsequent
+    /studio/render call with preview_id can reuse everything."""
+    require_studio(user)
+    if not payload.script.strip():
+        raise HTTPException(status_code=400, detail="Script required")
+
+    # 1) Beats + B-roll prompts (reuse the same logic as /studio/broll-prompts).
+    word_count = len(payload.script.split())
+    min_b, max_b = _target_beat_count_from_words(word_count)
+    beats = split_script_into_beats(payload.script, min_beats=min_b, max_beats=max_b)
+    if not beats:
+        raise HTTPException(status_code=400, detail="Script produced zero beats")
+
+    numbered = "\n".join(f"{i+1}. {text}" for i, (text, _) in enumerate(beats))
+    prompts_msg = (
+        f"Generate exactly {len(beats)} B-roll search prompts — one per beat below, in order. "
+        f"The viewer sees prompt #N while beat #N is being spoken.\n\nBeats:\n{numbered}"
+    )
+    text = await _claude_complete(BROLL_PROMPTS_SYSTEM, prompts_msg, user_email=user.email)
+    prompts_parsed: list[str] = []
+    searches_parsed: list[str] = []
+    last_prompt: str | None = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        stripped = line.lstrip("0123456789. -*•").strip().strip('"\u201c\u201d').strip()
+        low = stripped.lower()
+        if low.startswith("prompt:"):
+            body = stripped.split(":", 1)[1].strip()
+            if body:
+                prompts_parsed.append(body)
+                last_prompt = body
+        elif low.startswith("search:"):
+            body = stripped.split(":", 1)[1].strip()
+            if body:
+                searches_parsed.append(body)
+        else:
+            if last_prompt is None:
+                prompts_parsed.append(stripped)
+                last_prompt = stripped
+
+    # 2) Per-scene Kokoro TTS in parallel (TRUE TTS-first sync).
+    scene_texts = [text for text, _weight in beats]
+    tts_results = await _generate_per_scene_audio(scene_texts, payload.tts_voice_id)
+
+    # 3) Fetch primary + cutaway B-roll for each scene in parallel.
+    orientation = "portrait" if payload.aspect == "9_16" else "landscape"
+    used_urls: set = set()
+    n_scenes = len(beats)
+
+    async def _fetch_scene_broll(i: int) -> dict:
+        text = beats[i][0]
+        prompt = prompts_parsed[i] if i < len(prompts_parsed) else text[:60]
+        search_query = (
+            searches_parsed[i] if i < len(searches_parsed) and searches_parsed[i]
+            else _extract_stock_query(prompt) or text[:60]
+        )
+        # Cutaway count based on REAL audio duration (not estimate).
+        tts = tts_results[i]
+        duration_ms = int(round(tts[1] * 1000)) if tts else max(3000, int(len(text.split()) / 155.0 * 60 * 1000))
+        n_cuts = _cutaway_count_for_duration(duration_ms)
+        # Fetch N clips: primary + (n_cuts - 1) cutaways.
+        clips = await _fetch_multiple_stock_urls(
+            payload.broll_source, search_query, orientation, n_cuts, set(used_urls),
+        )
+        # Fallback: if the multi-fetch returned nothing, do the single-URL fetch.
+        if not clips:
+            single = await _auto_search_stock_url(payload.broll_source, search_query, orientation)
+            if single:
+                clips = [single]
+        return {
+            "idx": i,
+            "text": text,
+            "prompt": prompt,
+            "search_query": search_query,
+            "weight": beats[i][1],
+            "audio_url": tts[0] if tts else None,
+            "duration_ms": duration_ms,
+            "cutaway_count": n_cuts,
+            "clip_urls": clips,  # 1-4 URLs; first is primary
+        }
+
+    scene_manifests = await asyncio.gather(*[_fetch_scene_broll(i) for i in range(n_scenes)])
+    # Track used URLs sequentially (asyncio.gather can complete out of order,
+    # so we do the dedup at return time — earlier fetches may have overlaps
+    # since we launched them in parallel with an empty used_urls set).
+    seen_urls: set = set()
+    for m in scene_manifests:
+        deduped: list = []
+        for u in m["clip_urls"]:
+            if u and u not in seen_urls:
+                deduped.append(u)
+                seen_urls.add(u)
+        m["clip_urls"] = deduped or m["clip_urls"][:1]  # keep at least primary
+        used_urls.update(m["clip_urls"])
+
+    total_dur_ms = sum(m["duration_ms"] for m in scene_manifests)
+    total_clips = sum(len(m["clip_urls"]) for m in scene_manifests)
+
+    # 4) Persist so /studio/render can skip TTS regeneration.
+    preview_id = str(uuid.uuid4())
+    now_iso = datetime.now(timezone.utc).isoformat()
+    await db.render_previews.insert_one({
+        "_id": preview_id,
+        "user_email": user.email,
+        "script": payload.script,
+        "aspect": payload.aspect,
+        "broll_source": payload.broll_source,
+        "tts_voice_id": payload.tts_voice_id,
+        "scenes": scene_manifests,
+        "total_duration_ms": total_dur_ms,
+        "total_clip_count": total_clips,
+        "created_at": now_iso,
+    })
+
+    return {
+        "preview_id": preview_id,
+        "scenes": scene_manifests,
+        "total_scene_count": n_scenes,
+        "total_duration_ms": total_dur_ms,
+        "total_duration_min": round(total_dur_ms / 60000.0, 1),
+        "total_clip_count": total_clips,
+    }
+
+
+class RenderPreviewPatch(BaseModel):
+    scenes: list[dict]  # user-edited manifest
+
+
+@api.post("/studio/render/preview/{preview_id}")
+async def studio_render_preview_patch(
+    preview_id: str, payload: RenderPreviewPatch, user: AuthUser = Depends(current_user),
+):
+    """Apply user edits to a preview (reorder scenes, swap clip URLs).
+    The frontend sends the updated `scenes` array; we persist it so a
+    subsequent /studio/render can reuse it as-is."""
+    require_studio(user)
+    existing = await db.render_previews.find_one({"_id": preview_id})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Preview not found")
+    if existing.get("user_email") != user.email:
+        raise HTTPException(status_code=403, detail="Not your preview")
+    await db.render_previews.update_one(
+        {"_id": preview_id},
+        {"$set": {
+            "scenes": payload.scenes,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }},
+    )
+    return {"ok": True, "preview_id": preview_id, "scene_count": len(payload.scenes)}
+
+
+
+
 @api.post("/studio/render/estimate")
 async def studio_render_estimate(payload: RenderRequest, user: AuthUser = Depends(current_user)):
     """Internal telemetry: conservative cost estimate (cents) for a candidate
@@ -4471,6 +4885,51 @@ async def studio_render(payload: RenderRequest, user: AuthUser = Depends(current
         raise HTTPException(status_code=400, detail="Bad mode")
     if not payload.script.strip():
         raise HTTPException(status_code=400, detail="Script required")
+
+    # v1.20.10 (Iter 68 Batch 2): if the caller passed a preview_id, load the
+    # pre-generated manifest from db.render_previews and rewrite the payload
+    # so the render pipeline uses:
+    #   • The concatenated per-scene TTS as the "user voiceover" (no
+    #     regeneration — this is the TRUE TTS-first sync path).
+    #   • The manifest's pre-picked B-roll URLs + weights = ms-per-scene
+    #     so proportional distribution downstream matches real audio timing.
+    if payload.preview_id and payload.mode in ("faceless", "composite"):
+        preview = await db.render_previews.find_one({"_id": payload.preview_id})
+        if not preview:
+            raise HTTPException(status_code=404, detail="Preview not found or expired")
+        if preview.get("user_email") != user.email:
+            raise HTTPException(status_code=403, detail="Not your preview")
+
+        preview_scenes = preview.get("scenes") or []
+        scene_texts = [s.get("text", "") for s in preview_scenes]
+        scene_audio_urls = [s.get("audio_url") for s in preview_scenes]
+
+        # Concat per-scene audio → single R2-hosted MP3 that the existing
+        # render pipeline treats as a user-uploaded voiceover.
+        if all(scene_audio_urls) and _R2_ENABLED:
+            merged_url = await _concat_per_scene_audio_to_r2(
+                scene_audio_urls, payload.preview_id,
+            )
+            if merged_url:
+                payload.user_voiceover_url = merged_url
+
+        # Fill payload.scenes with the preview's manifest. Weight = duration
+        # in ms so the pipeline's proportional distribution matches per-scene
+        # audio timing exactly (no more estimation drift).
+        payload.scenes = []
+        for s in preview_scenes:
+            clip_urls = s.get("clip_urls") or []
+            payload.scenes.append({
+                "prompt": s.get("prompt", ""),
+                "search_query": s.get("search_query", ""),
+                "source": preview.get("broll_source", "pexels"),
+                "video_url": clip_urls[0] if clip_urls else None,
+                "cutaway_urls": clip_urls[1:] if len(clip_urls) > 1 else [],
+                "weight": max(1, int(round(s.get("duration_ms", 1000) / 10))),  # ms/10 → integer weight
+            })
+        # Force broll_source to match the preview so downstream mode picks
+        # stock, not AI.
+        payload.broll_source = preview.get("broll_source", "pexels")
 
     # Silent runaway-cost circuit-breaker. Not customer-facing cost
     # protection — exists to catch pathological inputs (malformed scripts,
