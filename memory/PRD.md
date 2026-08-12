@@ -20,6 +20,27 @@ back to it for entitlement verification.
 
 ## 🔁 Workflow rule: Changelog moves with every change (set 2026-06-29 by user)
 
+### Iteration 69 (2026-08-12) — FAL_API_KEY restore + Pre-render Timeline Editor verified end-to-end
+
+**Trigger:** Charity: *"I just tried to regenerate a failed video from yesterday, and this is the error message that I received. Render failed: Voiceover error 401: {\"detail\": \"No user found for Key ID and Secret\"}"*.
+
+**Root cause:** `/app/backend/.env` `FAL_API_KEY` had been overwritten with a placeholder value (`modal-chip-ui:1c34eb3ef035bcd22951a084e6c6ca63` — the project slug, not a real fal.ai key). fal.ai rejected it with 401 on the very first Kokoro POST, killing every faceless render in preview. `.env` is gitignored so there's no revision trail; the overwrite happened in a previous session I don't have context for. Production (`faceless48.c3global.co`) has its own separate Emergent-managed `.env` and is unaffected.
+
+**Fix:** Charity re-pasted the real key (`7327c212-ef18-4fc3-a9f8-5aed9e05f649:1c34eb3ef035bcd22951a084e6c6ca63`). I updated `/app/backend/.env`, restarted backend via supervisor, and confirmed with a direct `curl POST https://fal.run/fal-ai/kokoro/american-english` — HTTP 200 with a real Kokoro `audio_url` returned.
+
+**Testing agent verified (iteration_42.json):**
+1. **Voiceover 401 is dead.** Every Kokoro POST since the swap returns 200 OK in `/var/log/supervisor/backend.*.log`.
+2. **Pre-render Timeline Editor works end-to-end.** `POST /studio/render/preview` returns a manifest with per-scene `audio_url` + `duration_ms` + `broll_url` + `cutaway_urls`. Passing that `preview_id` into `POST /studio/render` produces a real R2-hosted final MP4 in ~30s (2 R2 URLs generated: job d61bcbf2 + 459bbef3). This closes the last-working-item Charity rejected from the previous session.
+3. **Downstream minor (not shipped this iter, backlogged):** ultra-short 2-3 sentence scripts collapse to 1 scene in the DIRECT `/studio/render` path. If Pexels returns 0 results for that beat's search_query, render fails with "Could not resolve any scene visuals." The `/studio/render/preview` path splits the same script into 3 scenes and all 3 fetch stock cleanly. Recommend unifying beat-splitting on `_target_beat_count_from_words + split_script_into_beats(min_beats=2)` in both endpoints. Not a regression, not a voiceover bug.
+
+**Files touched:**
+- `/app/backend/.env` — `FAL_API_KEY` restored.
+- `/app/backend/tests/test_render_voiceover_fix.py` — new pytest coverage authored by the testing agent (5/6 passed, 1 skip is the orthogonal short-script downstream issue).
+
+**Charity's action items:** None. Preview is back to working. Continue any prod redeploys as normal — production `.env` was never touched.
+
+
+
 ### Iteration 68 (2026-08-11) — Long-form pacing rebuild + R2 storage (v1.20.8 + v1.20.9)
 
 **Trigger:** Charity confirmed prod renders failing at ~60% (post fal upload phase, killed by Startup Reaper's 5-min heartbeat cutoff) AND separately called out that long-form videos "look boring" because 25-min renders only got 12 scenes (~2 min per clip loop). Both problems shipped in one iteration.
