@@ -14,9 +14,18 @@
 //    See PRD.md → "Workflow rule: changelog must move with every deploy."
 // 4. Most recent on top. Each entry has version + date + bullet list.
 
-export const APP_VERSION = "1.20.9";
+export const APP_VERSION = "1.20.10";
 
 export const CHANGELOG = [
+  {
+    version: "1.20.10",
+    date: "2026-08-14",
+    changes: [
+      "🐛 Fixed the remaining 55-69% render stall — the watchdog now recognizes the scene-processing stage and automatically closes genuinely abandoned renders instead of leaving them in progress forever.",
+      "🛡️ Timed-out video processes are now fully stopped and cleaned up before another scene starts, preventing hidden memory buildup during larger renders.",
+      "💓 Slow AI scenes can keep working safely — an independent worker heartbeat distinguishes a provider that is still processing from a render worker that disappeared.",
+    ],
+  },
   {
     version: "1.20.9",
     date: "2026-08-11",

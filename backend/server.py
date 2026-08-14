@@ -59,6 +59,10 @@ import auth_magic_link  # noqa: E402  – magic-link token storage + helpers
 import email_delivery  # noqa: E402  – Resend → GHL → log magic-link delivery chain
 import ghl_integration  # noqa: E402  – outbound webhook to GHL (magic link email)
 import faceless_config  # noqa: E402  – fal.ai kill switch + stock-first defaults
+from render_runtime import (  # noqa: E402
+    communicate_process_with_timeout,
+    stale_render_query,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("f48")
@@ -129,8 +133,16 @@ RENDER_COST_CIRCUIT_BREAKER_CENTS = int(os.environ.get("RENDER_COST_CAP_CENTS", 
 #      startup watchdog (see `_reap_stuck_renders`). Default 300s (5 min)
 #      — a real render should never sit idle that long between per-scene
 #      progress updates.
-NORMALIZE_CONCURRENCY = int(os.environ.get("NORMALIZE_CONCURRENCY", "3"))
-STUCK_RENDER_TIMEOUT_S = int(os.environ.get("STUCK_RENDER_TIMEOUT_S", "300"))
+NORMALIZE_CONCURRENCY = max(1, int(os.environ.get("NORMALIZE_CONCURRENCY", "3")))
+STUCK_RENDER_TIMEOUT_S = max(60, int(os.environ.get("STUCK_RENDER_TIMEOUT_S", "300")))
+RENDER_HEARTBEAT_INTERVAL_S = max(5, int(os.environ.get("RENDER_HEARTBEAT_INTERVAL_S", "15")))
+BUILD_VERSION = os.environ.get("APP_VERSION", "1.20.10")
+BUILD_COMMIT = (
+    os.environ.get("GIT_COMMIT_SHA")
+    or os.environ.get("COMMIT_SHA")
+    or os.environ.get("SOURCE_VERSION")
+    or "unknown"
+)
 
 KNOWN_ENTITLEMENTS = ["base", "shorts", "studio", "byok"]
 JWT_ALG = "HS256"
@@ -240,51 +252,50 @@ async def _start_orphan_render_reaper() -> None:
         cutoff_iso = (
             datetime.now(timezone.utc) - timedelta(seconds=STUCK_RENDER_TIMEOUT_S)
         ).isoformat()
-        # Non-terminal statuses used across avatar + faceless + composite
-        # pipelines. Keep this list in sync with `_finalize` / `_walk_stages`.
-        non_terminal = {
-            "queued", "rendering", "voiceover", "cutaways", "composing",
-            "avatar", "in_progress", "pending",
-        }
+        # Match every non-terminal status instead of maintaining an allowlist.
+        # v1.20.9 used status="visuals" from 30% through the 55-69% normalize
+        # stage, but "visuals" was missing from the old allowlist. That made
+        # the reaper structurally unable to find the exact stuck jobs it was
+        # created to recover.
         # Match rows whose latest heartbeat is older than the cutoff. Renders
         # never touched by `_set_progress` fall back to `created_at`. Legacy
         # rows with NEITHER timestamp (from before we started stamping)
         # are also reaped so they don't pollute the in-progress count forever.
-        query = {
-            "status": {"$in": list(non_terminal)},
-            "$or": [
-                {"updated_at": {"$lt": cutoff_iso}},
-                {
-                    "updated_at": {"$exists": False},
-                    "created_at": {"$lt": cutoff_iso},
-                },
-                {
-                    "updated_at": {"$exists": False},
-                    "created_at": {"$exists": False},
-                },
-            ],
-        }
+        query = stale_render_query(cutoff_iso)
+        now_iso = datetime.now(timezone.utc).isoformat()
         reaped: list[dict] = []
-        async for r in db.renders.find(query, {"id": 1, "status": 1, "user_email": 1, "progress": 1}):
+        projection = {
+            "id": 1,
+            "status": 1,
+            "user_email": 1,
+            "mode": 1,
+            "progress": 1,
+            "estimated_cost_cents": 1,
+        }
+        async for r in db.renders.find(query, projection):
+            # Re-check staleness atomically. Another API worker or a freshly
+            # recovered render may update its heartbeat between find + update.
+            result = await db.renders.update_one(
+                {"$and": [{"id": r["id"]}, query]},
+                {"$set": {
+                    "status": "failed",
+                    "progress_label": "Interrupted — server restart or timeout. Please retry.",
+                    "error": (
+                        "Render interrupted by server restart or exceeded the "
+                        f"{STUCK_RENDER_TIMEOUT_S}s heartbeat timeout. Retry the "
+                        "render — this usually resolves it."
+                    ),
+                    "completed_at": now_iso,
+                    "updated_at": now_iso,
+                    "reaped_by_watchdog": True,
+                }},
+            )
+            if not result.modified_count:
+                continue
             reaped.append(r)
+            await _refund_render_quota_once(r)
         if not reaped:
             return 0
-        now_iso = datetime.now(timezone.utc).isoformat()
-        await db.renders.update_many(
-            {"id": {"$in": [r["id"] for r in reaped]}},
-            {"$set": {
-                "status": "failed",
-                "progress_label": "Interrupted — server restart or timeout. Please retry.",
-                "error": (
-                    "Render interrupted by server restart or exceeded the "
-                    f"{STUCK_RENDER_TIMEOUT_S}s heartbeat timeout. Retry the "
-                    "render — this usually resolves it."
-                ),
-                "completed_at": now_iso,
-                "updated_at": now_iso,
-                "reaped_by_watchdog": True,
-            }},
-        )
         try:
             await db.activity.insert_one({
                 "id": str(uuid.uuid4()),
@@ -534,7 +545,16 @@ async def require_admin(user: AuthUser = Depends(current_user)) -> AuthUser:
 # ---------------------------------------------------------------------------
 @api.get("/health")
 async def health():
-    return {"ok": True}
+    return {
+        "ok": True,
+        "build": BUILD_VERSION,
+        "commit": BUILD_COMMIT,
+        "render_runtime": {
+            "stuck_timeout_s": STUCK_RENDER_TIMEOUT_S,
+            "heartbeat_interval_s": RENDER_HEARTBEAT_INTERVAL_S,
+            "normalize_concurrency": NORMALIZE_CONCURRENCY,
+        },
+    }
 
 
 async def _resolve_signin(email: str) -> Optional[dict]:
@@ -1530,7 +1550,7 @@ async def _concat_per_scene_audio_to_r2(
         proc = await asyncio.create_subprocess_exec(
             *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
-        _, err = await asyncio.wait_for(proc.communicate(), timeout=180)
+        _, err = await communicate_process_with_timeout(proc, timeout_s=180)
         if proc.returncode != 0 or not os.path.exists(merged):
             logger.warning(f"[preview-audio-concat] ffmpeg rc={proc.returncode} stderr={err.decode()[-300:]}")
             return None
@@ -1653,7 +1673,7 @@ async def _make_kenburns_mp4(image_url: str, aspect: str, duration_ms: int, scen
             dst,
         ]
         proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-        _, err = await asyncio.wait_for(proc.communicate(), timeout=60)
+        _, err = await communicate_process_with_timeout(proc, timeout_s=60)
         if proc.returncode != 0 or not os.path.exists(dst):
             logger.warning(f"[kburns] ffmpeg failed scene={scene_idx} rc={proc.returncode} stderr={err.decode()[-300:]}")
             return None
@@ -1776,7 +1796,7 @@ async def _trim_stock_video(video_url: str, aspect: str, duration_ms: int, scene
             dst,
         ]
         proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-        _, err = await asyncio.wait_for(proc.communicate(), timeout=120)
+        _, err = await communicate_process_with_timeout(proc, timeout_s=120)
         if proc.returncode != 0 or not os.path.exists(dst):
             logger.warning(f"[trim] ffmpeg failed scene={scene_idx} freeze_end={freeze_end} rc={proc.returncode} stderr={err.decode()[-300:]}")
             return None
@@ -1939,7 +1959,7 @@ async def _trim_stock_video_with_cutaways(
         proc = await asyncio.create_subprocess_exec(
             *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
-        _, err = await asyncio.wait_for(proc.communicate(), timeout=90)
+        _, err = await communicate_process_with_timeout(proc, timeout_s=90)
         rc = proc.returncode
     except Exception as exc:
         logger.warning(f"[cutaway-concat] scene={scene_idx} exception: {exc}")
@@ -2471,7 +2491,7 @@ async def _trim_t2v_clip(video_url: str, duration_ms: int, scene_idx: int) -> Op
             dst,
         ]
         proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-        _, err = await asyncio.wait_for(proc.communicate(), timeout=120)
+        _, err = await communicate_process_with_timeout(proc, timeout_s=120)
         if proc.returncode != 0 or not os.path.exists(dst):
             logger.warning(f"[t2v-trim] ffmpeg failed scene={scene_idx} rc={proc.returncode} stderr={err.decode()[-300:]}")
             return None
@@ -2713,9 +2733,11 @@ async def _local_ffmpeg_compose(
             stderr=asyncio.subprocess.PIPE,
         )
         try:
-            _, err = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
+            _, err = await communicate_process_with_timeout(
+                proc,
+                timeout_s=timeout_s,
+            )
         except asyncio.TimeoutError:
-            proc.kill()
             return -1, f"{step_name} timed out after {timeout_s}s"
         err_tail = err.decode("utf-8", errors="ignore")[-800:]
         return proc.returncode, err_tail
@@ -3366,6 +3388,34 @@ async def _run_render(job_id: str):
     if not job:
         return
     mode = job.get("mode")
+
+    # Heartbeat independently of visible progress. AI motion generation is
+    # intentionally allowed to take up to 8 minutes per scene, longer than
+    # the 5-minute orphan timeout. Tying liveness only to scene completion
+    # would make the repaired reaper kill healthy, slow provider requests.
+    heartbeat_stop = asyncio.Event()
+
+    async def _heartbeat() -> None:
+        while not heartbeat_stop.is_set():
+            try:
+                await db.renders.update_one(
+                    {"id": job_id, "status": {"$nin": ["complete", "failed"]}},
+                    {"$set": {"updated_at": datetime.now(timezone.utc).isoformat()}},
+                )
+            except Exception as exc:  # noqa: BLE001 — retry on the next beat
+                logger.warning(
+                    f"[render-heartbeat] job={job_id} failed: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+            try:
+                await asyncio.wait_for(
+                    heartbeat_stop.wait(),
+                    timeout=RENDER_HEARTBEAT_INTERVAL_S,
+                )
+            except asyncio.TimeoutError:
+                pass
+
+    heartbeat_task = asyncio.create_task(_heartbeat())
     try:
         if mode == "avatar":
             await _run_render_avatar(job)
@@ -3407,6 +3457,12 @@ async def _run_render(job_id: str):
             }},
         )
         _cleanup_job_workdir(job_id)
+    finally:
+        heartbeat_stop.set()
+        try:
+            await asyncio.wait_for(heartbeat_task, timeout=2.0)
+        except Exception:
+            heartbeat_task.cancel()
 
     # Group B refund-on-failure. Re-read the job to see the FINAL status the
     # pipeline persisted (the inner functions also set status=failed on
@@ -3415,11 +3471,8 @@ async def _run_render(job_id: str):
     # time. Founders/dev/grant emails are no-op'd inside _refund_quota_slot.
     final = await db.renders.find_one({"id": job_id}, {"status": 1, "user_email": 1, "mode": 1, "estimated_cost_cents": 1})
     if final and final.get("status") == "failed":
-        await _refund_quota_slot(
-            email=final.get("user_email") or "",
-            mode=final.get("mode") or "",
-            estimated_cents=int(final.get("estimated_cost_cents") or 0),
-        )
+        final["id"] = job_id
+        await _refund_render_quota_once(final)
 
 
 # ---------------------------------------------------------------------------
@@ -5214,6 +5267,25 @@ async def _refund_quota_slot(*, email: str, mode: str, estimated_cents: int) -> 
         )
     except Exception as exc:
         logger.warning(f"[quota] refund failed for {email}: {type(exc).__name__}: {exc}")
+
+
+async def _refund_render_quota_once(render: dict) -> None:
+    """Refund a failed render at most once across worker + reaper races."""
+    job_id = render.get("id")
+    if not job_id:
+        return
+    now_iso = datetime.now(timezone.utc).isoformat()
+    claim = await db.renders.update_one(
+        {"id": job_id, "quota_refunded_at": {"$exists": False}},
+        {"$set": {"quota_refunded_at": now_iso}},
+    )
+    if not claim.modified_count:
+        return
+    await _refund_quota_slot(
+        email=render.get("user_email") or "",
+        mode=render.get("mode") or "",
+        estimated_cents=int(render.get("estimated_cost_cents") or 0),
+    )
 
 
 
