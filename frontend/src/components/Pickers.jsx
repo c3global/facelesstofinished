@@ -533,7 +533,7 @@ export function BRollSourcePicker({ open, onClose, value, onPick, providerConfig
   // is now HIDDEN entirely (previously shown dimmed with an inline
   // banner). The dimmed state was cluttering the picker with an
   // option nobody could use.
-  const aiDisabled = providerConfig && (!providerConfig.ai_visuals_enabled || !providerConfig.fal_ai_enabled);
+  const aiDisabled = providerConfig?.ai_visuals_available === false;
   const allOptions = [
     { id: "ai",       name: "Generate with AI",  icon: <Sparkles size={22} />, desc: "Every scene is generated with AI from your prompt. Best for abstract, stylized topics.", requiresByok: true, hideWhenDisabled: true },
     { id: "pexels",   name: "Stock from Pexels", icon: <Film size={22} />,     desc: "Free, premium stock footage. Strong on lifestyle, business, and nature." },
@@ -614,12 +614,10 @@ export function AIEnginePicker({ open, onClose, value, onPick, isAdmin = false, 
   // the user knows the option exists, but they can't fire an AI render
   // that would fail server-side anyway. `providerConfig` comes from the
   // public /api/config/faceless endpoint that Studio.jsx hydrates on mount.
-  const aiDisabled = providerConfig && (!providerConfig.ai_visuals_enabled || !providerConfig.fal_ai_enabled);
-  const disabledReason = providerConfig?.ai_visuals_enabled === false
-    ? "AI-generated visuals are currently disabled by admin. Stock-only mode."
-    : providerConfig?.fal_ai_enabled === false
-      ? "AI video engines are currently disabled by admin. Pick a stock source (Pexels / Pixabay / Uploaded) for now."
-      : null;
+  const aiDisabled = providerConfig?.ai_visuals_available === false;
+  const disabledReason = aiDisabled
+    ? "AI-generated visuals are currently unavailable. Pick stock or your uploaded media for now."
+    : null;
 
   // Engine catalogue. Cost field is only shown to admins per Charity's
   // instruction — customers see a quality/speed hint instead so the UI
@@ -627,35 +625,35 @@ export function AIEnginePicker({ open, onClose, value, onPick, isAdmin = false, 
   const options = [
     {
       id: "flux",
-      name: "Flux 1.1 Pro + Kling i2v · Image + Real Motion",
-      hint: "Recommended. Flux generates each still, Kling 2.1 brings it to life with real AI motion.",
+      name: isAdmin ? "Flux 1.1 Pro + Kling i2v · Image + Real Motion" : "Balanced · Image + Real Motion",
+      hint: isAdmin ? "Flux generates each still, then Kling adds motion." : "Recommended balance of quality, motion, and generation time.",
       adminCost: "~$0.29/scene",
       Icon: Sparkles,
     },
     {
       id: "flux_static",
-      name: "Flux 1.1 Pro · Static (cheapest)",
+      name: isAdmin ? "Flux 1.1 Pro · Static" : "Economy · AI Still",
       hint: "Budget option. Still images with simple ken-burns zoom — no AI motion.",
       adminCost: "~$0.04/scene",
       Icon: Sparkles,
     },
     {
       id: "kling",
-      name: "Kling 2.1 Master · Cinematic AI Video",
+      name: isAdmin ? "Kling 2.1 Master · Cinematic AI Video" : "Cinematic · AI Motion",
       hint: "Premium cinematic motion. Best for action, characters, and complex scenes.",
       adminCost: "~$0.50/scene",
       Icon: Film,
     },
     {
       id: "veo3",
-      name: "Google Veo 3.1 Fast · AI Video",
-      hint: "Google's highest fidelity. Best for realistic people, dialogue, and product shots.",
+      name: isAdmin ? "Google Veo 3.1 Fast · AI Video" : "Premium · AI Motion",
+      hint: "Highest fidelity. Best for realistic people, dialogue, and product shots.",
       adminCost: "~$1.00/scene",
       Icon: Film,
     },
     {
       id: "pika",
-      name: "Pika 2.1 · AI Video",
+      name: isAdmin ? "Pika 2.1 · AI Video" : "Stylized · AI Motion",
       hint: "Stylized AI video. Great for whimsical, dreamy, fashion-style content.",
       adminCost: "~$0.40/scene",
       Icon: Film,

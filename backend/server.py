@@ -63,6 +63,8 @@ from render_runtime import (  # noqa: E402
     communicate_process_with_timeout,
     stale_render_query,
 )
+from media_routing import classify_scene_kind, count_visual_scene_sources  # noqa: E402
+from render_privacy import scrub_render_for_customer  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("f48")
@@ -665,17 +667,13 @@ class MagicLinkRequest(BaseModel):
 
 @api.get("/config/faceless")
 async def get_faceless_config():
-    """Public read of the current Faceless provider config. No auth — the
-    Studio UI hits this on mount to hide the AI engine picker + show a
-    stock-first banner when fal.ai is disabled by admin."""
+    """Public, provider-opaque Faceless capability response."""
     cfg = await faceless_config.resolve_config(db)
-    # Strip admin-only telemetry (updated_by, exact caps) from the public
-    # response — just tell the UI what's enabled and what the default is.
     return {
-        "fal_ai_enabled": cfg["fal_ai_enabled"],
-        "ai_visuals_enabled": cfg["ai_visuals_enabled"],
+        "ai_visuals_available": bool(
+            cfg["fal_ai_enabled"] and cfg["ai_visuals_enabled"]
+        ),
         "default_broll_source": cfg["default_broll_source"],
-        "max_ai_scenes_per_render": cfg["max_ai_scenes_per_render"],
     }
 
 
@@ -3500,6 +3498,9 @@ def estimate_render_cost_cents(payload: RenderRequest) -> int:
     elif payload.mode == "faceless":
         # Kokoro TTS + per-scene visuals + compose
         scene_count = max(1, len(payload.scenes) or int(duration_s / 8))
+        ai_scenes, stock_scenes, _uploaded_scenes = count_visual_scene_sources(
+            payload.scenes, payload.broll_source or "pexels", scene_count,
+        )
         # ~$0.005 / 1k chars for Kokoro-class TTS — coefficient deliberately
         # conservative (real renders may cost less but we'd rather reject
         # a borderline payload than surprise-charge the user above the cap).
@@ -3508,12 +3509,9 @@ def estimate_render_cost_cents(payload: RenderRequest) -> int:
         # image + ken-burns) or one of the premium text-to-video engines.
         engine = (payload.ai_engine or "flux").lower()
         if engine in T2V_ENGINES:
-            # Worst case: every scene is an AI t2v clip. Real renders may mix
-            # in cheaper stock — but we estimate the ceiling for the circuit
-            # breaker so a 12-scene Veo render doesn't sneak past us.
-            ai_scenes = sum(1 for s in payload.scenes if (s.get("source") or payload.broll_source) == "ai") or scene_count
+            # Only explicitly AI-sourced scenes call a paid visual model.
+            # Uploaded B-roll contributes zero visual-provider cost.
             cents += ai_scenes * T2V_ENGINES[engine]["cost_cents"]
-            stock_scenes = max(0, scene_count - ai_scenes)
             cents += stock_scenes * 1.0  # stock search is essentially free
         else:
             # Default Flux (id="flux") upgrades to Kling i2v real motion at
@@ -3521,9 +3519,10 @@ def estimate_render_cost_cents(payload: RenderRequest) -> int:
             # ken-burns-only path at ~$0.04/scene. Charity approved both
             # paths in the 2026-02-22 bundle so cost-conscious renders can
             # still ship with stills.
-            cents += scene_count * 4.0   # Flux images (both modes)
+            cents += ai_scenes * 4.0   # Flux images for AI scenes only
             if engine != "flux_static":
-                cents += scene_count * KLING_I2V_COST_CENTS_5S   # Kling i2v motion
+                cents += ai_scenes * KLING_I2V_COST_CENTS_5S   # Kling i2v motion
+            cents += stock_scenes * 1.0  # free APIs + conservative overhead
         cents += 2.0                                   # compose overhead
     elif payload.mode == "composite":
         # Avatar talking-head + B-roll cutaway every N seconds
@@ -4129,25 +4128,33 @@ async def _run_render_faceless(job: dict):
         is_t2v = ai_engine in T2V_ENGINES
         ai_tasks: list = []          # (idx, prompt) — Flux text-to-image jobs (engine="flux" only)
         stock_search_tasks: list = []  # (idx, source, query, orientation) — auto-search jobs
-        scene_kind: list = ["" for _ in scenes]  # "ai" | "ai_t2v" | "stock"
+        scene_kind: list = ["" for _ in scenes]  # AI, stock, or local customer upload
         scene_prompts: list = ["" for _ in scenes]  # prompt text, used by ai_t2v + Flux-i2v scenes
 
         orientation = "portrait" if job["aspect"] == "9_16" else "landscape"
         for i, s in enumerate(scenes):
             effective_src = s.get("source") or global_source
-            if effective_src == "ai":
-                if is_t2v:
-                    scene_kind[i] = "ai_t2v"
-                    scene_prompts[i] = s.get("prompt") or ""
-                    # Sentinel — we have a "resolved" scene (prompt is ready);
-                    # the actual video is generated in normalize_scene.
-                    image_urls[i] = "__t2v_pending__"
+            kind = classify_scene_kind(s, global_source, is_t2v)
+            scene_kind[i] = kind
+            if kind == "uploaded_image" or kind == "uploaded_video":
+                # A customer upload is finished B-roll source material. It is
+                # never sent to FAL, KIE, stock search, or another visual AI
+                # provider. Images get local Ken Burns motion below; videos
+                # are locally trimmed/normalized below.
+                pre_picked = s.get("video_url") or s.get("url")
+                if pre_picked:
+                    image_urls[i] = pre_picked
                 else:
-                    scene_kind[i] = "ai"
-                    scene_prompts[i] = s.get("prompt") or ""  # needed by Kling i2v in normalize step
-                    ai_tasks.append((i, s.get("prompt", "")))
+                    logger.warning("[uploaded-broll] scene %s has no media URL", i)
+            elif kind == "ai_t2v":
+                scene_prompts[i] = s.get("prompt") or ""
+                # Sentinel — we have a "resolved" scene (prompt is ready);
+                # the actual video is generated in normalize_scene.
+                image_urls[i] = "__t2v_pending__"
+            elif kind == "ai":
+                scene_prompts[i] = s.get("prompt") or ""  # needed by Kling i2v in normalize step
+                ai_tasks.append((i, s.get("prompt", "")))
             else:
-                scene_kind[i] = "stock"
                 pre_picked = s.get("video_url") or s.get("url")
                 if pre_picked:
                     image_urls[i] = pre_picked
@@ -4378,7 +4385,11 @@ async def _run_render_faceless(job: dict):
         # - kburns: 2 min (image download + ffmpeg + upload, no external API)
         # - kling/i2v: 8 min (real Kling gen can take 5-6 min, plus trim + upload)
         # - t2v: 8 min (same as i2v)
-        per_scene_timeout = 180.0 if kind == "stock" else 480.0
+        per_scene_timeout = {
+            "uploaded_image": 120.0,
+            "uploaded_video": 180.0,
+            "stock": 180.0,
+        }.get(kind, 480.0)
 
         async def _run_one():
             override = scene_overrides.get(idx) or {}
@@ -4387,6 +4398,22 @@ async def _run_render_faceless(job: dict):
             # Local paths flow through the compose step unchanged (the local
             # compose function accepts both URLs and paths via `_ensure_local_clip`).
             wd = workdir if USE_LOCAL_COMPOSE else None
+            if kind == "uploaded_image":
+                # Customer-owned still B-roll: local ffmpeg motion only.
+                return await _make_kenburns_mp4(
+                    url, job["aspect"], this_dur, idx, workdir=wd,
+                )
+            if kind == "uploaded_video":
+                # Customer-owned video/screen recording: local trim and
+                # normalize only. Do not add stock cutaways or call visual AI.
+                return await _trim_stock_video(
+                    url,
+                    job["aspect"],
+                    this_dur,
+                    idx,
+                    freeze_end=override.get("freeze_end", False),
+                    workdir=wd,
+                )
             if kind == "ai":
                 # `flux_static` is the explicit opt-out: stills + cheap ken-burns
                 # (no Kling i2v cost). Default `flux` upgrades to real AI motion
@@ -4918,6 +4945,10 @@ async def studio_render_preview_patch(
 
 
 
+def _render_response_for_user(doc: dict, user: AuthUser) -> dict:
+    return doc if user.is_admin else scrub_render_for_customer(doc)
+
+
 @api.post("/studio/render/estimate")
 async def studio_render_estimate(payload: RenderRequest, user: AuthUser = Depends(current_user)):
     """Internal telemetry: conservative cost estimate (cents) for a candidate
@@ -4925,9 +4956,13 @@ async def studio_render_estimate(payload: RenderRequest, user: AuthUser = Depend
     lives in /studio/render and uses RENDER_COST_CIRCUIT_BREAKER_CENTS."""
     require_studio(user)
     cents = estimate_render_cost_cents(payload)
+    if not user.is_admin:
+        return {"within_capacity": cents <= RENDER_COST_CIRCUIT_BREAKER_CENTS}
     return {
+        "within_capacity": cents <= RENDER_COST_CIRCUIT_BREAKER_CENTS,
         "estimated_cost_cents": cents,
         "estimated_cost_dollars": round(cents / 100.0, 2),
+        "cap_cents": RENDER_COST_CIRCUIT_BREAKER_CENTS,
     }
 
 
@@ -5075,7 +5110,7 @@ async def studio_render(payload: RenderRequest, user: AuthUser = Depends(current
     asyncio.create_task(_run_render(job_id))
 
     doc.pop("_id", None)
-    return doc
+    return _render_response_for_user(doc, user)
 
 
 # ---------------------------------------------------------------------------
@@ -5392,7 +5427,7 @@ async def studio_render_both_aspects(payload: RenderRequest, user: AuthUser = De
         })
         asyncio.create_task(_run_render(job_id))
         doc.pop("_id", None)
-        jobs.append(doc)
+        jobs.append(_render_response_for_user(doc, user))
     return {"jobs": jobs}
 
 
@@ -5403,7 +5438,7 @@ async def studio_render_status(job_id: str, user: AuthUser = Depends(current_use
     if not doc:
         raise HTTPException(status_code=404, detail="Not found")
     doc.pop("_id", None)
-    return doc
+    return _render_response_for_user(doc, user)
 
 
 # ---------------------------------------------------------------------------
@@ -5439,7 +5474,7 @@ async def studio_history(user: AuthUser = Depends(current_user)):
     items = []
     async for doc in cursor:
         doc.pop("_id", None)
-        items.append(doc)
+        items.append(_render_response_for_user(doc, user))
     return {"items": items}
 
 
