@@ -6153,6 +6153,13 @@ async def studio_broll_prompts(payload: BrollPromptsRequest, user: AuthUser = De
 # for 5 prompts).
 class StockCandidatesRequest(BaseModel):
     prompts: list[str]
+    # v1.20.12 fix — per-scene LLM search query, aligned by index with
+    # `prompts`. When present + non-empty, it is used verbatim for the
+    # Pexels/Pixabay call. The detailed AI prompt is only sanitized as a
+    # fallback when the paired search query is missing — mirroring the
+    # renderer's `_resolve_stock_query_for_scene` contract so Preview
+    # Clips and Render always hit the same query.
+    search_queries: list[str] | None = None
     source: str = "pexels"  # pexels | pixabay | mix
     orientation: str = "portrait"  # portrait | landscape
 
@@ -6170,8 +6177,31 @@ async def studio_stock_candidates(
 
     sources_for_prompt = ["pexels", "pixabay"] if payload.source == "mix" else [payload.source]
 
+    # v1.20.12 — strict routing contract. Each scene's query for Pexels/
+    # Pixabay is chosen exactly the same way the renderer chooses it:
+    #   1. Prefer the paired `search_query` when it is non-empty.
+    #   2. Otherwise sanitize the prompt via `_extract_stock_query`.
+    #   3. Never fall back to the raw detailed AI prompt.
+    def resolve_query(prompt: str, search_query: str | None) -> str:
+        sq = (search_query or "").strip()
+        if sq:
+            return sq
+        return _extract_stock_query(prompt or "")
+
+    search_queries = payload.search_queries or []
+
     async def fetch_one(idx: int, prompt: str) -> dict:
-        query = _extract_stock_query(prompt) or prompt
+        sq = search_queries[idx] if idx < len(search_queries) else None
+        query = resolve_query(prompt, sq)
+        if not query:
+            # Nothing safe to send — surface an empty candidate list so the
+            # UI shows "no matches" instead of leaking the AI prompt.
+            logger.info(
+                "[stock-candidates] scene %s has neither search_query "
+                "nor a sanitizable prompt — returning empty",
+                idx,
+            )
+            return {"idx": idx, "prompt": prompt, "candidates": []}
         keyword_set = {w for w in query.split() if w}
         hits: list[dict] = []
         async with httpx.AsyncClient(timeout=15) as client:

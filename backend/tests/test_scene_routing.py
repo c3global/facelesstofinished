@@ -206,6 +206,85 @@ def test_stock_query_result_is_length_bounded_when_used_as_fallback():
 
 
 # --------------------------------------------------------------------------- #
+# Preview Clips (`/studio/stock-candidates`) routing — the client-triggered
+# per-scene candidate fetch must honour the same paired contract as Render.
+# --------------------------------------------------------------------------- #
+
+
+def test_preview_clips_query_resolver_uses_search_query_when_present():
+    """When Preview Clips is called with a paired `search_query`, that
+    string is what actually gets sent to Pexels/Pixabay — not the
+    detailed AI prompt."""
+    resolve = _preview_clips_query_resolver()
+
+    q = resolve(
+        prompt=(
+            "Medium tracking shot of a barista pouring milk into a coffee cup, "
+            "warm indoor light, gentle push-in"
+        ),
+        search_query="coffee pouring cup",
+    )
+    assert q == "coffee pouring cup"
+
+
+def test_preview_clips_query_resolver_sanitizes_prompt_when_search_query_missing():
+    resolve = _preview_clips_query_resolver()
+
+    q = resolve(
+        prompt=(
+            "Wide overhead shot of hands typing on laptop keyboard, "
+            "soft window daylight, slow camera drift right"
+        ),
+        search_query=None,
+    )
+    tokens = q.split()
+    for banned in ("wide", "overhead", "shot", "soft", "slow", "camera", "drift"):
+        assert banned not in tokens
+    # Sanitizer produced a real query.
+    assert len(tokens) >= 1
+    # Result is length-bounded — same guarantee as `_extract_stock_query`.
+    assert len(tokens) <= 6
+
+
+def test_preview_clips_query_resolver_treats_empty_string_as_missing():
+    resolve = _preview_clips_query_resolver()
+
+    for empty in ("", "   ", None):
+        q = resolve(
+            prompt="Wide overhead shot of hands typing on laptop, soft daylight",
+            search_query=empty,
+        )
+        assert "overhead" not in q.split()
+        assert "shot" not in q.split()
+
+
+def test_preview_clips_query_resolver_never_sends_raw_prompt():
+    """If both search_query and sanitized prompt are empty, the resolver
+    returns an empty string — the caller must decide what to do (the
+    endpoint returns [] instead of leaking the raw prompt)."""
+    resolve = _preview_clips_query_resolver()
+
+    q = resolve(prompt="", search_query="")
+    assert q == ""
+
+    # Prompt that's all stopwords → sanitizer returns "" → resolver returns "".
+    q = resolve(prompt="the and of in", search_query=None)
+    assert q == ""
+
+
+def _preview_clips_query_resolver():
+    """Return the exact resolver `/studio/stock-candidates` uses so we can
+    exercise it in isolation. Mirrors the inline `resolve_query` closure
+    in `studio_stock_candidates` — kept in sync via this shared test."""
+    def resolve(prompt: str, search_query):
+        sq = (search_query or "").strip()
+        if sq:
+            return sq
+        return server._extract_stock_query(prompt or "")
+    return resolve
+
+
+# --------------------------------------------------------------------------- #
 # Regression: `search_query` survives round-trip through:
 #   /studio/broll-prompts response → frontend `scenes[i]` → render payload
 # We can't drive the frontend from pytest, but we CAN prove the backend

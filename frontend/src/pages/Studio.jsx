@@ -152,14 +152,13 @@ export default function Studio() {
   // Payload is JSON { script, brollPrompts, sourceMode, topic, ts } as of iteration 5,
   // with backward-compat for a plain-string payload from older versions.
   //
-  // v1.20.12: when the handoff carries `brollPrompts` (detailed cues extracted
-  // from the script's B-Roll section) but no paired stock search queries,
-  // fire /studio/broll-prompts ONCE to derive concrete Pexels/Pixabay
-  // keywords for each beat. This upholds the routing contract that a
-  // detailed AI cue is never sent straight to a stock provider. Only one
-  // call per handoff; nothing happens during the render itself.
+  // v1.20.12: the handoff preserves the script author's `brollPrompts`
+  // EXACTLY — same order, same wording, same count. Nothing is regenerated
+  // on the client. Backend derives a safe `search_query` per prompt (via
+  // the same `_extract_stock_query` sanitizer the renderer uses) at
+  // Preview Clips + Render time, so a detailed AI cue never reaches a
+  // stock provider.
   useEffect(() => {
-    let cancelled = false;
     try {
       const raw = localStorage.getItem("f48_handoff_script");
       if (!raw) return;
@@ -169,9 +168,7 @@ export default function Studio() {
       catch { payload = { script: raw, brollPrompts: [], sourceMode: null, topic: null }; }
 
       if (payload.script) setScript(payload.script);
-      const hasRawCues =
-        Array.isArray(payload.brollPrompts) && payload.brollPrompts.length > 0;
-      if (hasRawCues) {
+      if (Array.isArray(payload.brollPrompts) && payload.brollPrompts.length) {
         setBulkPrompts(payload.brollPrompts.join("\n"));
         setSceneOverrides(payload.brollPrompts.map(() => ({})));
       }
@@ -194,41 +191,8 @@ export default function Studio() {
       });
       if (handoffBannerTimer.current) clearTimeout(handoffBannerTimer.current);
       handoffBannerTimer.current = setTimeout(() => setHandoffBanner(null), 10000);
-
-      // One-shot paired-outputs call. Runs when we have raw cues from the
-      // script but no `search_query` for each. Replaces the raw cues with
-      // the LLM's paired {prompt, search_query} scenes so the user sees
-      // sanitized stock keywords ready to render. If the call fails, the
-      // raw cues remain and the backend's `_extract_stock_query` fallback
-      // still guarantees no detailed cue reaches Pexels/Pixabay.
-      if (hasRawCues && payload.script) {
-        (async () => {
-          try {
-            const r = await apiClient.post("/studio/broll-prompts", {
-              script: payload.script,
-            });
-            if (cancelled) return;
-            const sceneObjs = (r.data.scenes || []).slice(0, MAX_SCENES);
-            if (sceneObjs.length === 0) return;
-            const lines = sceneObjs.map((s) => s.prompt);
-            const weights = sceneObjs.map((s) => s.weight || 1);
-            const searches = sceneObjs.map((s) =>
-              typeof s.search_query === "string" ? s.search_query : ""
-            );
-            setBulkPrompts(lines.join("\n"));
-            setSceneOverrides(lines.map(() => ({})));
-            autoPromptsRef.current = lines;
-            autoWeightsRef.current = weights;
-            autoSearchQueriesRef.current = searches;
-          } catch {
-            // Silent — the sanitizer fallback on the backend still keeps
-            // Pexels/Pixabay safe from raw AI cues.
-          }
-        })();
-      }
     } catch {}
     return () => {
-      cancelled = true;
       if (handoffBannerTimer.current) clearTimeout(handoffBannerTimer.current);
     };
   }, []);
@@ -866,7 +830,14 @@ export default function Studio() {
         if (stockGroups[src].length === 0) continue;
         reqs.push(
           apiClient.post("/studio/stock-candidates", {
+            // v1.20.12 fix — Preview Clips honours the same routing
+            // contract as Render: paired `search_query` per scene when
+            // present, sanitized prompt fallback only when missing. The
+            // detailed AI prompt is never sent verbatim to Pexels/Pixabay.
             prompts: stockGroups[src].map(({ s }) => s.prompt),
+            search_queries: stockGroups[src].map(({ s }) =>
+              typeof s.search_query === "string" ? s.search_query : ""
+            ),
             source: src,
             orientation,
           }).then((r) => ({ kind: "stock", payload: r.data.candidates || [], group: stockGroups[src] }))
