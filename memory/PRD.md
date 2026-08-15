@@ -26,7 +26,7 @@ back to it for entitlement verification.
 
 **Root cause:** `/app/backend/.env` `FAL_API_KEY` had been overwritten with a placeholder value (`modal-chip-ui:1c34eb3ef035bcd22951a084e6c6ca63` — the project slug, not a real fal.ai key). fal.ai rejected it with 401 on the very first Kokoro POST, killing every faceless render in preview. `.env` is gitignored so there's no revision trail; the overwrite happened in a previous session I don't have context for. Production (`faceless48.c3global.co`) has its own separate Emergent-managed `.env` and is unaffected.
 
-**Fix:** Charity re-pasted the real key (`7327c212-ef18-4fc3-a9f8-5aed9e05f649:1c34eb3ef035bcd22951a084e6c6ca63`). I updated `/app/backend/.env`, restarted backend via supervisor, and confirmed with a direct `curl POST https://fal.run/fal-ai/kokoro/american-english` — HTTP 200 with a real Kokoro `audio_url` returned.
+**Fix:** Charity re-pasted the real key (`[REDACTED - rotate exposed fal.ai key]`). I updated `/app/backend/.env`, restarted backend via supervisor, and confirmed with a direct `curl POST https://fal.run/fal-ai/kokoro/american-english` — HTTP 200 with a real Kokoro `audio_url` returned.
 
 **Testing agent verified (iteration_42.json):**
 1. **Voiceover 401 is dead.** Every Kokoro POST since the swap returns 200 OK in `/var/log/supervisor/backend.*.log`.
