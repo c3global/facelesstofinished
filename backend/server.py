@@ -6696,6 +6696,21 @@ register_roadmap_routes(
     ADMIN_EMAILS=ADMIN_EMAILS,
 )
 
+# KIE.ai webhook callback — HMAC-verified (KIE_WEBHOOK_HMAC_KEY).
+# Mounted on the /api sub-app so the public URL is
+# ``<host>/api/kie/webhook``. If KIE_WEBHOOK_HMAC_KEY is unset the route
+# still exists but returns 503 so KIE will retry after key rotation.
+from routes.kie_callback import build_router as _build_kie_router  # noqa: E402
+
+api.include_router(_build_kie_router(db))
+
+# Provider abstraction — public config + auth-gated cost estimate.
+# Frontend calls /api/config/render-providers on mount to hide unavailable
+# provider options; the pre-render preview calls /api/render/estimate.
+from routes.render_config import build_router as _build_render_config_router  # noqa: E402
+
+api.include_router(_build_render_config_router(current_user_dep=current_user))
+
 
 # ---------------------------------------------------------------------------
 # Mount
