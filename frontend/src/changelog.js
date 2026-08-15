@@ -23,6 +23,7 @@ export const CHANGELOG = [
     changes: [
       "🔒 Removed internal pricing details from the Studio experience.",
       "🔎 Stock clip searches now use concise visual keywords and load results automatically.",
+      "⏸️ Temporarily paused timeline tools so failed previews cannot consume generation resources.",
     ],
   },
   {

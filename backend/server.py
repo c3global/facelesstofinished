@@ -149,6 +149,10 @@ RENDER_JOB_CONCURRENCY = max(1, int(os.environ.get("RENDER_JOB_CONCURRENCY", "1"
 STOCK_SEARCH_TIMEOUT_S = max(5, int(os.environ.get("STOCK_SEARCH_TIMEOUT_S", "20")))
 STUCK_RENDER_TIMEOUT_S = max(60, int(os.environ.get("STUCK_RENDER_TIMEOUT_S", "300")))
 RENDER_HEARTBEAT_INTERVAL_S = max(5, int(os.environ.get("RENDER_HEARTBEAT_INTERVAL_S", "15")))
+# Timeline previews currently perform paid per-scene TTS before the preview
+# can be shown. Keep both timeline entry points fail-closed until the workflow
+# is made idempotent and can guarantee that failed previews do not spend.
+TIMELINE_FEATURES_ENABLED = os.environ.get("TIMELINE_FEATURES_ENABLED", "0").strip() == "1"
 BUILD_VERSION = os.environ.get("APP_VERSION", "1.20.13")
 BUILD_COMMIT = (
     os.environ.get("GIT_COMMIT_SHA")
@@ -573,6 +577,7 @@ async def health():
             "normalize_concurrency": NORMALIZE_CONCURRENCY,
             "render_job_concurrency": RENDER_JOB_CONCURRENCY,
             "stock_search_timeout_s": STOCK_SEARCH_TIMEOUT_S,
+            "timeline_features_enabled": TIMELINE_FEATURES_ENABLED,
         },
     }
 
@@ -4935,6 +4940,11 @@ async def studio_render_preview(
     Editor. Also stashed in db.render_previews so a subsequent
     /studio/render call with preview_id can reuse everything."""
     require_studio(user)
+    if not TIMELINE_FEATURES_ENABLED:
+        raise HTTPException(
+            status_code=503,
+            detail="Timeline preview is temporarily unavailable while reliability improvements are completed.",
+        )
     if not payload.script.strip():
         raise HTTPException(status_code=400, detail="Script required")
 
@@ -5070,6 +5080,8 @@ async def studio_render_preview_patch(
     The frontend sends the updated `scenes` array; we persist it so a
     subsequent /studio/render can reuse it as-is."""
     require_studio(user)
+    if not TIMELINE_FEATURES_ENABLED:
+        raise HTTPException(status_code=503, detail="Timeline preview is temporarily unavailable.")
     existing = await db.render_previews.find_one({"_id": preview_id})
     if not existing:
         raise HTTPException(status_code=404, detail="Preview not found")
@@ -5123,6 +5135,8 @@ async def studio_render(payload: RenderRequest, user: AuthUser = Depends(current
     #     regeneration — this is the TRUE TTS-first sync path).
     #   • The manifest's pre-picked B-roll URLs + weights = ms-per-scene
     #     so proportional distribution downstream matches real audio timing.
+    if payload.preview_id and not TIMELINE_FEATURES_ENABLED:
+        raise HTTPException(status_code=503, detail="Timeline preview is temporarily unavailable.")
     if payload.preview_id and payload.mode in ("faceless", "composite"):
         preview = await db.render_previews.find_one({"_id": payload.preview_id})
         if not preview:
@@ -5707,6 +5721,8 @@ async def studio_render_cancel(job_id: str, user: AuthUser = Depends(current_use
 @api.get("/studio/timeline/{job_id}")
 async def studio_timeline_get(job_id: str, user: AuthUser = Depends(current_user)):
     require_studio(user)
+    if not TIMELINE_FEATURES_ENABLED:
+        raise HTTPException(status_code=503, detail="Timeline tools are temporarily unavailable.")
     doc = await db.renders.find_one({"id": job_id, "user_email": user.email})
     if not doc:
         raise HTTPException(status_code=404, detail="Not found")
@@ -5775,6 +5791,8 @@ async def studio_timeline_rerender(
     """Clone the parent render's inputs, layer the user's per-scene overrides
     (freeze_end for MVP), kick off a fresh render, return the new job_id."""
     require_studio(user)
+    if not TIMELINE_FEATURES_ENABLED:
+        raise HTTPException(status_code=503, detail="Timeline tools are temporarily unavailable.")
     parent = await db.renders.find_one({"id": job_id, "user_email": user.email})
     if not parent:
         raise HTTPException(status_code=404, detail="Not found")
