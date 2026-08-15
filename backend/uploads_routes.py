@@ -18,6 +18,8 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from motor.motor_asyncio import AsyncIOMotorGridFSBucket
 
+from upload_paths import object_id_from_public_file_token
+
 
 # Allowed MIME types — explicit allowlist beats blocklist for safety.
 ALLOWED_BROLL_MIMES = {
@@ -126,7 +128,9 @@ def register_uploads_routes(api: APIRouter, db, current_user_dep, require_studio
         deleted files return 404."""
         try:
             from bson import ObjectId
-            oid = ObjectId(file_id)
+            # Upload responses intentionally append a codec suffix so media
+            # consumers can infer the format. GridFS stores only the ObjectId.
+            oid = ObjectId(object_id_from_public_file_token(file_id))
         except Exception:
             raise HTTPException(status_code=400, detail="Bad file id")
         files = db["uploads.files"]

@@ -63,7 +63,12 @@ from render_runtime import (  # noqa: E402
     communicate_process_with_timeout,
     stale_render_query,
 )
-from media_routing import classify_scene_kind, count_visual_scene_sources  # noqa: E402
+from media_routing import (  # noqa: E402
+    classify_scene_kind,
+    count_visual_scene_sources,
+    cutaway_subclip_slot,
+    is_local_media_reference,
+)
 from render_privacy import scrub_render_for_customer  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -1920,7 +1925,7 @@ async def _trim_stock_video_with_cutaways(
     for j, (cut_url, cut_dur) in enumerate(zip(all_urls, cut_durations)):
         this_freeze = freeze_end if j == n_cuts - 1 else False
         # Use a unique sub-slot so _trim_stock_video's temp names don't collide.
-        sub_slot = scene_idx * 100 + j
+        sub_slot = cutaway_subclip_slot(scene_idx, j)
         # Route sub-clips into a per-cut workdir file so we can concat later.
         sub_path = await _trim_stock_video(
             cut_url, aspect, cut_dur, sub_slot, this_freeze, workdir,
@@ -4513,9 +4518,9 @@ async def _run_render_faceless(job: dict):
     # Background ticker so progress feels alive during compose.
     stop_ticking = asyncio.Event()
 
-    async def tick_compose_progress():
+    async def tick_compose_progress(start_pct: int = 70):
         scene_idx = 1
-        progress_pct = 70
+        progress_pct = start_pct
         while not stop_ticking.is_set():
             try:
                 await asyncio.wait_for(stop_ticking.wait(), timeout=4.0)
@@ -4614,13 +4619,29 @@ async def _run_render_faceless(job: dict):
     # at least the customer gets their video" path.
     if not composed_url:
         await _set_progress(75, "Local compose failed — uploading to remote…")
+        # The local attempt stopped its ticker. Recovery can spend several
+        # minutes uploading a long render's scenes, so restart the heartbeat
+        # before the first upload to prevent the 300s reaper from falsely
+        # killing healthy work at 75%.
+        stop_ticking.clear()
+        ticker_task = asyncio.create_task(tick_compose_progress(start_pct=75))
         # Promote any local path in kburns_results to a fal URL. Upload
         # sequentially (not in parallel) since we're already in a
         # recovery path and don't want to spike memory during recovery.
         promoted: list = []
         upload_failures = 0
         for (i, u, k, d) in kburns_results:
-            if isinstance(u, str) and u.startswith("/") and os.path.exists(u):
+            if is_local_media_reference(u):
+                # A missing local path is a recovery failure, never a remote
+                # URL. Passing it through produces FAL compose HTTP 422.
+                if not os.path.exists(u):
+                    logger.warning(
+                        "[compose-recovery] scene=%s local clip is missing: %s",
+                        i,
+                        u,
+                    )
+                    upload_failures += 1
+                    continue
                 fal_url = await _fal_upload_with_timeout(u, i, "recovery")
                 if fal_url:
                     promoted.append((i, fal_url, k, d))
@@ -4649,6 +4670,33 @@ async def _run_render_faceless(job: dict):
                     "updated_at": datetime.now(timezone.utc).isoformat(),
                 }},
             )
+            stop_ticking.set()
+            try:
+                await asyncio.wait_for(ticker_task, timeout=1.0)
+            except Exception:
+                pass
+            _cleanup_job_workdir(job_id)
+            return
+
+        # Defense in depth: remote compose must never receive a local path,
+        # even if a future normalization branch returns one unexpectedly.
+        invalid_promoted = [u for (_i, u, _k, _d) in promoted if is_local_media_reference(u)]
+        if invalid_promoted:
+            await db.renders.update_one(
+                {"id": job_id},
+                {"$set": {
+                    "status": "failed",
+                    "error": "Remote compose recovery rejected unresolved local scene paths.",
+                    "actual_cost_cents": actual_cost_cents,
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }},
+            )
+            stop_ticking.set()
+            try:
+                await asyncio.wait_for(ticker_task, timeout=1.0)
+            except Exception:
+                pass
             _cleanup_job_workdir(job_id)
             return
 
@@ -4669,7 +4717,6 @@ async def _run_render_faceless(job: dict):
                 "keyframes": [{"url": audio_url, "timestamp": 0, "duration": total_video_ms}],
             })
 
-        ticker_task = asyncio.create_task(tick_compose_progress())
         try:
             compose_res = await _fal_queue_run(
                 "fal-ai/ffmpeg-api/compose",

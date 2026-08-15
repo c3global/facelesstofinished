@@ -73,3 +73,20 @@ def count_visual_scene_sources(
         else:
             stock_count += 1
     return ai_count, stock_count, uploaded_count
+
+
+def cutaway_subclip_slot(scene_idx: int, cut_idx: int) -> int:
+    """Return a temp-file slot that cannot collide with a final scene slot.
+
+    Final scene files use their zero-based scene index (currently capped at
+    200).  A high reserved namespace keeps parallel cutaway files distinct
+    from every final ``scene_NNN.mp4`` path.
+    """
+
+    return 1_000_000 + (scene_idx * 100) + cut_idx
+
+
+def is_local_media_reference(value: object) -> bool:
+    """Whether a compose reference denotes a local filesystem path."""
+
+    return isinstance(value, str) and value.startswith("/")
