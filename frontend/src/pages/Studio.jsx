@@ -464,10 +464,6 @@ export default function Studio() {
       prompt: s.prompt,
       video_url: s.pick?.video_url || null,
       thumb: s.pick?.thumb || null,
-      // Preserve uploaded media type end-to-end (MediaLibrary → Studio → backend →
-      // job doc → render pipeline). Uploaded videos take the free local-normalize
-      // path; uploaded images honour the customer's motion quality choice.
-      ...(s.pick?.kind ? { kind: s.pick.kind } : {}),
       // Weight = word count of the script sentence this scene covers.
       // Backend uses it for proportional per-scene duration so cuts land on
       // natural voiceover pauses. Omitted when scenes were hand-edited.

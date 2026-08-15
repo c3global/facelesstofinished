@@ -4355,93 +4355,6 @@ async def _run_render_faceless(job: dict):
                 f"Adding motion to scenes ({normalize_completed} of {n_normalize})…",
             )
 
-    # v1.20.11 (Iter 69) — Provider registry bridge. Gated by
-    # USE_PROVIDER_REGISTRY (default off). When on AND registry has a
-    # KIE model enabled that supports the request, this returns a video
-    # URL that the caller trims/normalizes locally. Returns None to
-    # signal the caller to fall back to the legacy fal.ai path.
-    async def _try_provider_registry_for_ai_scene(
-        *,
-        idx: int,
-        aspect: str,
-        duration_ms: int,
-        prompt: str,
-        still_image_url: Optional[str],
-        scene_meta: dict,
-        job_id: str,
-    ) -> Optional[str]:
-        try:
-            from providers.pipeline import (
-                run_provider_motion,
-                use_registry_enabled,
-                result_to_scene_telemetry,
-            )
-            from providers.types import MotionInputMode, SceneMotionRequest
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("[registry] import failed: %s", type(exc).__name__)
-            return None
-
-        if not use_registry_enabled():
-            return None
-
-        # Translate this scene into a provider request. Aspect ratio
-        # normalizes 9_16/16_9 → KIE-schema strings. Uploaded-image AI
-        # motion uses FIRST_FRAME mode with the still URL; text-only
-        # AI uses TEXT with just the prompt.
-        aspect_ratio = "9:16" if aspect == "9_16" else "16:9" if aspect == "16_9" else aspect
-        resolution = "720p"  # customer-facing "premium" tier default
-        input_kind_str = "image" if scene_meta.get("kind") == "image" else "ai_generated"
-        if input_kind_str == "image" and still_image_url:
-            mode = MotionInputMode.FIRST_FRAME
-            req = SceneMotionRequest(
-                mode=mode,
-                duration_ms=duration_ms,
-                aspect_ratio=aspect_ratio,
-                resolution=resolution,
-                prompt=(prompt or None),
-                first_frame_url=still_image_url,
-                generate_audio=False,
-                scene_idx=idx,
-                input_kind="image",
-            )
-        else:
-            if not prompt:
-                return None
-            mode = MotionInputMode.TEXT
-            req = SceneMotionRequest(
-                mode=mode,
-                duration_ms=duration_ms,
-                aspect_ratio=aspect_ratio,
-                resolution=resolution,
-                prompt=prompt,
-                generate_audio=False,
-                scene_idx=idx,
-                input_kind="ai_generated",
-            )
-
-        result = await run_provider_motion(req, provider_hint="auto")
-        if result is None:
-            return None
-
-        # Persist per-scene provider telemetry (admin-only, scrubbed for
-        # customers by _scrub_render_for_response).
-        try:
-            await db.renders.update_one(
-                {"id": job_id},
-                {"$set": {f"scenes.{idx}._provider_telemetry": result_to_scene_telemetry(result)}},
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("[registry] telemetry write failed: %s", type(exc).__name__)
-
-        if result.ok and result.output_url:
-            return result.output_url
-        logger.warning(
-            "[registry] scene %s provider result not usable (ok=%s code=%s) — falling back to fal",
-            idx, result.ok, result.error_code,
-        )
-        return None
-
-
     async def normalize_scene(slot: int, idx: int, url: str):
         # v1.20.4: hold the semaphore for the entire scene lifecycle
         # (download → ffmpeg → upload). Only NORMALIZE_CONCURRENCY scenes
@@ -4475,23 +4388,6 @@ async def _run_render_faceless(job: dict):
             # compose function accepts both URLs and paths via `_ensure_local_clip`).
             wd = workdir if USE_LOCAL_COMPOSE else None
             if kind == "ai":
-                # v1.20.11 (Iter 69): provider-registry hand-off. When
-                # USE_PROVIDER_REGISTRY=1 AND the registry has a KIE model
-                # enabled that supports the request, route AI motion
-                # through it. Fall back to the legacy fal.ai path when
-                # the registry declines or the flag is off. Uploaded
-                # images with paid AI motion also flow through here.
-                registry_url = await _try_provider_registry_for_ai_scene(
-                    idx=idx,
-                    aspect=job["aspect"],
-                    duration_ms=this_dur,
-                    prompt=scene_prompts[idx],
-                    still_image_url=url,
-                    scene_meta=(scenes[idx] if idx < len(scenes) else {}),
-                    job_id=job["id"],
-                )
-                if registry_url:
-                    return await _trim_t2v_clip(registry_url, this_dur, idx)
                 # `flux_static` is the explicit opt-out: stills + cheap ken-burns
                 # (no Kling i2v cost). Default `flux` upgrades to real AI motion
                 # via Kling 2.1 standard. Falls back to ken-burns if Kling fails.
@@ -5024,27 +4920,15 @@ async def studio_render_preview_patch(
 
 @api.post("/studio/render/estimate")
 async def studio_render_estimate(payload: RenderRequest, user: AuthUser = Depends(current_user)):
-    """Pre-render capacity check.
-
-    CUSTOMER-FACING PRIVACY RULE (2026-08-15): dollar / cent estimates
-    are ADMIN-ONLY. Non-admin callers receive an opaque within_capacity
-    boolean derived from the internal circuit breaker; admin callers
-    additionally see the cost breakdown for margin monitoring.
-
-    The silent circuit-breaker in /studio/render still uses
-    RENDER_COST_CIRCUIT_BREAKER_CENTS regardless of who called this
-    endpoint.
-    """
+    """Internal telemetry: conservative cost estimate (cents) for a candidate
+    render. No customer-facing cap enforcement — the silent circuit-breaker
+    lives in /studio/render and uses RENDER_COST_CIRCUIT_BREAKER_CENTS."""
     require_studio(user)
     cents = estimate_render_cost_cents(payload)
-    body: dict[str, Any] = {
-        "within_capacity": cents <= RENDER_COST_CIRCUIT_BREAKER_CENTS,
+    return {
+        "estimated_cost_cents": cents,
+        "estimated_cost_dollars": round(cents / 100.0, 2),
     }
-    if user.is_admin:
-        body["estimated_cost_cents"] = cents
-        body["estimated_cost_dollars"] = round(cents / 100.0, 2)
-        body["cap_cents"] = RENDER_COST_CIRCUIT_BREAKER_CENTS
-    return body
 
 
 @api.post("/studio/render")
@@ -5115,35 +4999,6 @@ async def studio_render(payload: RenderRequest, user: AuthUser = Depends(current
             status_code=400,
             detail="Render configuration is too large. Please contact support.",
         )
-
-    # v1.20.11 (Iter 69): AI-scene ceiling. Counted PRE-render on scenes
-    # explicitly tagged source="ai" OR (source="uploaded" AND kind="image"
-    # AND motion_quality != "standard"). This is customer-safe policy —
-    # the error surface uses plain language, no dollar amounts or provider
-    # names. Silent circuit-breaker above still catches raw payload
-    # over-runs; this catches the "50 premium scenes" case.
-    if payload.mode in ("faceless", "composite"):
-        try:
-            from providers.cost_estimator import MAX_AI_SCENES_PER_RENDER_DEFAULT
-
-            max_ai = int(os.environ.get("MAX_AI_SCENES_PER_RENDER", str(MAX_AI_SCENES_PER_RENDER_DEFAULT)))
-            ai_scene_count = sum(
-                1 for s in (payload.scenes or [])
-                if (s.get("source") == "ai")
-                or (s.get("source") == "uploaded" and s.get("kind") == "image" and s.get("motion_quality") == "premium")
-            )
-            if ai_scene_count > max_ai:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f"This render includes more premium-motion scenes than your current plan "
-                        f"allows ({max_ai} max). Reduce premium scenes or switch some to Standard motion."
-                    ),
-                )
-        except HTTPException:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("[ai-scene-limit] failed to enforce: %s", type(exc).__name__)
 
     # Group B quota gate — atomically check + decrement the buyer's monthly
     # render allowance before we kick off the background pipeline. Founders
@@ -5541,57 +5396,6 @@ async def studio_render_both_aspects(payload: RenderRequest, user: AuthUser = De
     return {"jobs": jobs}
 
 
-# CUSTOMER-FACING PRIVACY (2026-08-15): render rows carry internal cost +
-# provider telemetry (estimated_cost_cents, actual_cost_cents, ai_engine,
-# per-scene provider/model, etc). Non-admin callers must never see any of
-# these fields. This helper is the single choke point applied to every
-# per-render response — the render pipeline itself keeps writing the raw
-# fields into the DB for the admin panel + margin monitoring.
-_CUSTOMER_FORBIDDEN_RENDER_FIELDS = frozenset({
-    "estimated_cost_cents",
-    "actual_cost_cents",
-    "ai_engine",
-    "provider",
-    "model",
-    "kie_task_id",
-    "fal_request_id",
-    "local_compose_debug",
-    "reaped_by_watchdog",
-})
-_CUSTOMER_FORBIDDEN_SCENE_FIELDS = frozenset({
-    "provider",
-    "model",
-    "estimated_cost_cents",
-    "actual_cost_cents",
-    "actual_cost_credits",
-    "external_task_id",
-})
-
-
-def _scrub_render_for_response(doc: dict, *, is_admin: bool) -> dict:
-    """Return a copy of the render row safe for the caller.
-
-    Admins see everything. Non-admins never see cost or provider fields
-    at the top level OR nested inside scenes / scene_overrides.
-    """
-    if is_admin:
-        return doc
-    clean = {k: v for k, v in doc.items() if k not in _CUSTOMER_FORBIDDEN_RENDER_FIELDS}
-    for arr_key in ("scenes", "scene_overrides"):
-        arr = clean.get(arr_key)
-        if isinstance(arr, list):
-            clean[arr_key] = [
-                (
-                    {k: v for k, v in s.items() if k not in _CUSTOMER_FORBIDDEN_SCENE_FIELDS}
-                    if isinstance(s, dict)
-                    else s
-                )
-                for s in arr
-            ]
-    return clean
-
-
-
 @api.get("/studio/render/{job_id}")
 async def studio_render_status(job_id: str, user: AuthUser = Depends(current_user)):
     require_studio(user)
@@ -5599,7 +5403,7 @@ async def studio_render_status(job_id: str, user: AuthUser = Depends(current_use
     if not doc:
         raise HTTPException(status_code=404, detail="Not found")
     doc.pop("_id", None)
-    return _scrub_render_for_response(doc, is_admin=user.is_admin)
+    return doc
 
 
 # ---------------------------------------------------------------------------
@@ -5635,7 +5439,7 @@ async def studio_history(user: AuthUser = Depends(current_user)):
     items = []
     async for doc in cursor:
         doc.pop("_id", None)
-        items.append(_scrub_render_for_response(doc, is_admin=user.is_admin))
+        items.append(doc)
     return {"items": items}
 
 
@@ -6891,21 +6695,6 @@ register_roadmap_routes(
     current_user=current_user,
     ADMIN_EMAILS=ADMIN_EMAILS,
 )
-
-# KIE.ai webhook callback — HMAC-verified (KIE_WEBHOOK_HMAC_KEY).
-# Mounted on the /api sub-app so the public URL is
-# ``<host>/api/kie/webhook``. If KIE_WEBHOOK_HMAC_KEY is unset the route
-# still exists but returns 503 so KIE will retry after key rotation.
-from routes.kie_callback import build_router as _build_kie_router  # noqa: E402
-
-api.include_router(_build_kie_router(db))
-
-# Provider abstraction — public config + auth-gated cost estimate.
-# Frontend calls /api/config/render-providers on mount to hide unavailable
-# provider options; the pre-render preview calls /api/render/estimate.
-from routes.render_config import build_router as _build_render_config_router  # noqa: E402
-
-api.include_router(_build_render_config_router(current_user_dep=current_user))
 
 
 # ---------------------------------------------------------------------------
