@@ -4920,15 +4920,27 @@ async def studio_render_preview_patch(
 
 @api.post("/studio/render/estimate")
 async def studio_render_estimate(payload: RenderRequest, user: AuthUser = Depends(current_user)):
-    """Internal telemetry: conservative cost estimate (cents) for a candidate
-    render. No customer-facing cap enforcement — the silent circuit-breaker
-    lives in /studio/render and uses RENDER_COST_CIRCUIT_BREAKER_CENTS."""
+    """Pre-render capacity check.
+
+    CUSTOMER-FACING PRIVACY RULE (2026-08-15): dollar / cent estimates
+    are ADMIN-ONLY. Non-admin callers receive an opaque within_capacity
+    boolean derived from the internal circuit breaker; admin callers
+    additionally see the cost breakdown for margin monitoring.
+
+    The silent circuit-breaker in /studio/render still uses
+    RENDER_COST_CIRCUIT_BREAKER_CENTS regardless of who called this
+    endpoint.
+    """
     require_studio(user)
     cents = estimate_render_cost_cents(payload)
-    return {
-        "estimated_cost_cents": cents,
-        "estimated_cost_dollars": round(cents / 100.0, 2),
+    body: dict[str, Any] = {
+        "within_capacity": cents <= RENDER_COST_CIRCUIT_BREAKER_CENTS,
     }
+    if user.is_admin:
+        body["estimated_cost_cents"] = cents
+        body["estimated_cost_dollars"] = round(cents / 100.0, 2)
+        body["cap_cents"] = RENDER_COST_CIRCUIT_BREAKER_CENTS
+    return body
 
 
 @api.post("/studio/render")
@@ -5396,6 +5408,57 @@ async def studio_render_both_aspects(payload: RenderRequest, user: AuthUser = De
     return {"jobs": jobs}
 
 
+# CUSTOMER-FACING PRIVACY (2026-08-15): render rows carry internal cost +
+# provider telemetry (estimated_cost_cents, actual_cost_cents, ai_engine,
+# per-scene provider/model, etc). Non-admin callers must never see any of
+# these fields. This helper is the single choke point applied to every
+# per-render response — the render pipeline itself keeps writing the raw
+# fields into the DB for the admin panel + margin monitoring.
+_CUSTOMER_FORBIDDEN_RENDER_FIELDS = frozenset({
+    "estimated_cost_cents",
+    "actual_cost_cents",
+    "ai_engine",
+    "provider",
+    "model",
+    "kie_task_id",
+    "fal_request_id",
+    "local_compose_debug",
+    "reaped_by_watchdog",
+})
+_CUSTOMER_FORBIDDEN_SCENE_FIELDS = frozenset({
+    "provider",
+    "model",
+    "estimated_cost_cents",
+    "actual_cost_cents",
+    "actual_cost_credits",
+    "external_task_id",
+})
+
+
+def _scrub_render_for_response(doc: dict, *, is_admin: bool) -> dict:
+    """Return a copy of the render row safe for the caller.
+
+    Admins see everything. Non-admins never see cost or provider fields
+    at the top level OR nested inside scenes / scene_overrides.
+    """
+    if is_admin:
+        return doc
+    clean = {k: v for k, v in doc.items() if k not in _CUSTOMER_FORBIDDEN_RENDER_FIELDS}
+    for arr_key in ("scenes", "scene_overrides"):
+        arr = clean.get(arr_key)
+        if isinstance(arr, list):
+            clean[arr_key] = [
+                (
+                    {k: v for k, v in s.items() if k not in _CUSTOMER_FORBIDDEN_SCENE_FIELDS}
+                    if isinstance(s, dict)
+                    else s
+                )
+                for s in arr
+            ]
+    return clean
+
+
+
 @api.get("/studio/render/{job_id}")
 async def studio_render_status(job_id: str, user: AuthUser = Depends(current_user)):
     require_studio(user)
@@ -5403,7 +5466,7 @@ async def studio_render_status(job_id: str, user: AuthUser = Depends(current_use
     if not doc:
         raise HTTPException(status_code=404, detail="Not found")
     doc.pop("_id", None)
-    return doc
+    return _scrub_render_for_response(doc, is_admin=user.is_admin)
 
 
 # ---------------------------------------------------------------------------
@@ -5439,7 +5502,7 @@ async def studio_history(user: AuthUser = Depends(current_user)):
     items = []
     async for doc in cursor:
         doc.pop("_id", None)
-        items.append(doc)
+        items.append(_scrub_render_for_response(doc, is_admin=user.is_admin))
     return {"items": items}
 
 
