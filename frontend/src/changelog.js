@@ -14,9 +14,18 @@
 //    See PRD.md → "Workflow rule: changelog must move with every deploy."
 // 4. Most recent on top. Each entry has version + date + bullet list.
 
-export const APP_VERSION = "1.20.10";
+export const APP_VERSION = "1.20.11";
 
 export const CHANGELOG = [
+  {
+    version: "1.20.11",
+    date: "2026-08-15",
+    changes: [
+      "🛡️ Multiple renders now wait safely instead of competing for memory, so one customer’s active render cannot cause another queued render to disappear.",
+      "🎞️ Stock-video processing now uses a production-safe memory limit and a hard search deadline, preventing the remaining 55% stall on smaller servers.",
+      "💓 Waiting renders stay alive with their own heartbeat and begin automatically when processing capacity becomes available.",
+    ],
+  },
   {
     version: "1.20.10",
     date: "2026-08-14",
