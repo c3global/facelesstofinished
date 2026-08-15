@@ -4493,7 +4493,16 @@ async def _run_render_faceless(job: dict):
         per_scene_timeout = {
             "uploaded_image": 120.0,
             "uploaded_video": 180.0,
-            "stock": 180.0,
+            # A long stock scene can contain 2-4 sequential cutaways.  The
+            # old flat 180s budget was only enough for one clip on the
+            # 1-CPU production tier, so it cancelled a healthy multi-clip
+            # scene mid-ffmpeg.  Each child operation already has its own
+            # hard timeout; this outer budget covers the complete group.
+            "stock": float(
+                120 * _cutaway_count_for_duration(this_dur)
+                + STOCK_SEARCH_TIMEOUT_S
+                + 120
+            ),
         }.get(kind, 480.0)
 
         async def _run_one():

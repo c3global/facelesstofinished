@@ -37,3 +37,18 @@ async def communicate_process_with_timeout(
             pass  # Child exited between the timeout and kill attempt.
         await process.communicate()
         raise
+    except asyncio.CancelledError:
+        # An outer scene timeout cancels this coroutine.  Previously that
+        # cancellation skipped the timeout handler above and left ffmpeg
+        # running in the background.  On the 512 MB production container,
+        # subsequent scenes could accumulate orphaned ffmpeg children until
+        # the backend was OOM-killed at 55%.
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
+        try:
+            await asyncio.shield(process.communicate())
+        except Exception:
+            pass
+        raise
