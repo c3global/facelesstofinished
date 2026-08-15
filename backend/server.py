@@ -2214,6 +2214,16 @@ def _extract_stock_query(prompt: str) -> str:
     """
     if not prompt:
         return ""
+    lowered = prompt.lower()
+    # Deterministic fallbacks for interface-heavy cues that stock libraries
+    # cannot match literally. Paired LLM search queries remain preferred;
+    # these cover legacy Script-to-Studio handoffs and manual detailed cues.
+    if re.search(r"\b(comment section|comments?|replies|messages like)\b", lowered):
+        return "person using smartphone"
+    if re.search(r"\b(cursor|screen capture|screen recording|recording software|dashboard)\b", lowered):
+        return "person using computer"
+    if "split screen" in lowered and re.search(r"\b(influencer|creator|software|computer)\b", lowered):
+        return "content creator laptop"
     tokens = re.findall(r"[A-Za-z][A-Za-z'-]+", prompt.lower())
     kept = [t for t in tokens if t not in _STOCK_STOPWORDS and len(t) > 2]
     return " ".join(kept[:6])
@@ -3331,6 +3341,14 @@ async def studio_stock_search(
     if source not in ("pexels", "pixabay"):
         raise HTTPException(status_code=400, detail="Bad source")
 
+    # Manual/pre-pick searches obey the same contract as automatic renders:
+    # stock providers receive concise visual keywords, never the raw detailed
+    # scene direction. This also keeps Pixabay queries below its practical
+    # query-length limits.
+    search_query = _extract_stock_query(q)
+    if not search_query:
+        return {"query": "", "results": []}
+
     results: list[dict] = []
     async with httpx.AsyncClient(timeout=15) as client:
         if source == "pexels":
@@ -3344,7 +3362,7 @@ async def studio_stock_search(
                 # to 80 per page; 40 keeps payload size sane while tripling
                 # variety. No explicit sort param — Pexels orders by relevance
                 # which already prioritises popular high-engagement clips.
-                params={"query": q, "orientation": orientation, "per_page": 40},
+                params={"query": search_query, "orientation": orientation, "per_page": 40},
             )
             if r.status_code != 200:
                 raise HTTPException(status_code=502, detail="Pexels error")
@@ -3375,7 +3393,7 @@ async def studio_stock_search(
                 # spammed last 7 days). 50 results = 4x what we had before.
                 params={
                     "key": PIXABAY_API_KEY,
-                    "q": q,
+                    "q": search_query,
                     "per_page": 50,
                     "order": "popular",
                     "safesearch": "true",
@@ -3412,7 +3430,7 @@ async def studio_stock_search(
                     "source": "pixabay",
                 })
 
-    return {"results": results}
+    return {"query": search_query, "results": results}
 
 
 # ---------------------------------------------------------------------------

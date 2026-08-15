@@ -1836,7 +1836,11 @@ export default function Studio() {
         defaultSource={
           stockModal.idx >= 0 && scenes[stockModal.idx]?.source === "pixabay" ? "pixabay" : "pexels"
         }
-        query={stockModal.idx >= 0 ? scenes[stockModal.idx]?.prompt : ""}
+        query={
+          stockModal.idx >= 0
+            ? (scenes[stockModal.idx]?.search_query || scenes[stockModal.idx]?.prompt || "")
+            : ""
+        }
         aspect={aspect}
         onClose={() => setStockModal({ open: false, idx: -1 })}
         onPick={(r) => {

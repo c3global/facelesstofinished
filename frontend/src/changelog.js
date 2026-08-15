@@ -22,6 +22,7 @@ export const CHANGELOG = [
     date: "2026-08-15",
     changes: [
       "🔒 Removed internal pricing details from the Studio experience.",
+      "🔎 Stock clip searches now use concise visual keywords and load results automatically.",
     ],
   },
   {

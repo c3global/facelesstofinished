@@ -690,35 +690,47 @@ export function StockPicker({ open, onClose, sceneIdx, defaultSource, query: def
   const [loading, setLoading] = useState(false);
   const [picked, setPicked] = useState(null);
 
-  useEffect(() => {
-    if (open) {
-      setSource(defaultSource === "pixabay" ? "pixabay" : "pexels");
-      setQuery(defaultQuery || "");
-      setResults([]);
-      setPicked(null);
-    }
-  }, [open, defaultSource, defaultQuery]);
-
-  const search = async () => {
-    if (!query.trim()) return;
+  async function search(queryOverride = query, sourceOverride = source) {
+    const cleanQuery = (queryOverride || "").trim();
+    if (!cleanQuery) return;
     setLoading(true);
     try {
       const orientation = aspect === "16_9" ? "landscape" : "portrait";
       const r = await apiClient.get("/studio/stock-search", {
-        params: { source, q: query.trim(), orientation },
+        params: { source: sourceOverride, q: cleanQuery, orientation },
       });
+      // The backend returns the concise query actually sent to the stock
+      // library. Show it in the field so users can refine useful keywords
+      // instead of seeing an unsearchable cinematic sentence.
+      if (r.data.query) setQuery(r.data.query);
       setResults(r.data.results || []);
     } catch {
       setResults([]);
     } finally {
       setLoading(false);
     }
-  };
+  }
 
   useEffect(() => {
-    if (open && query) search();
+    if (!open) return;
+    const nextSource = defaultSource === "pixabay" ? "pixabay" : "pexels";
+    const nextQuery = defaultQuery || "";
+    setSource(nextSource);
+    setQuery(nextQuery);
+    setResults([]);
+    setPicked(null);
+    // Search immediately when the picker opens. Previously the query state
+    // was populated after the search effect had already run, leaving a blank
+    // result grid until the customer clicked Search a second time.
+    if (nextQuery.trim()) search(nextQuery, nextSource);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, source]);
+  }, [open, defaultSource, defaultQuery]);
+
+  const selectSource = (nextSource) => {
+    setSource(nextSource);
+    setResults([]);
+    if (query.trim()) search(query, nextSource);
+  };
 
   return (
     <Modal
@@ -732,12 +744,12 @@ export function StockPicker({ open, onClose, sceneIdx, defaultSource, query: def
             <button
               className={`modal-tab ${source === "pexels" ? "is-active" : ""}`}
               data-testid="stock-source-pexels"
-              onClick={() => setSource("pexels")}
+              onClick={() => selectSource("pexels")}
             >Pexels</button>
             <button
               className={`modal-tab ${source === "pixabay" ? "is-active" : ""}`}
               data-testid="stock-source-pixabay"
-              onClick={() => setSource("pixabay")}
+              onClick={() => selectSource("pixabay")}
             >Pixabay</button>
           </div>
           <input
