@@ -151,6 +151,13 @@ export default function Studio() {
   // Pick up a script handed off from /scripts via localStorage (one-shot).
   // Payload is JSON { script, brollPrompts, sourceMode, topic, ts } as of iteration 5,
   // with backward-compat for a plain-string payload from older versions.
+  //
+  // v1.20.12: the handoff preserves the script author's `brollPrompts`
+  // EXACTLY — same order, same wording, same count. Nothing is regenerated
+  // on the client. Backend derives a safe `search_query` per prompt (via
+  // the same `_extract_stock_query` sanitizer the renderer uses) at
+  // Preview Clips + Render time, so a detailed AI cue never reaches a
+  // stock provider.
   useEffect(() => {
     try {
       const raw = localStorage.getItem("f48_handoff_script");
@@ -363,25 +370,40 @@ export default function Studio() {
   // natural pauses. Reset to all-1s if the user manually edits scene count.
   const autoWeightsRef = useRef([]);
   const autoPromptsRef = useRef([]);
+  // v1.20.12 — Parallel stock search-query buffer, populated whenever the
+  // paired /studio/broll-prompts flow runs (either via "Generate from
+  // script" or the Script→Studio handoff). The renderer routes Pexels /
+  // Pixabay scenes strictly by `search_query`, so preserving it end-to-end
+  // is what stops the "detailed AI cue → stock provider" leak.
+  const autoSearchQueriesRef = useRef([]);
 
-  // The fully-resolved scenes (line + effective source + pick + weight)
+  // The fully-resolved scenes (line + effective source + pick + weight + query)
   const scenes = useMemo(() => {
-    // Only use stored weights when the current prompt list matches what the
-    // auto-generator produced (same length AND same contents — if the user
-    // edited any line the mapping is no longer safe).
+    // Only use stored weights / search-queries when the current prompt list
+    // matches what the auto-generator produced (same length AND same
+    // contents — if the user edited any line the mapping is no longer safe).
     const stored = autoPromptsRef.current;
-    const weightsAlign =
+    const promptsAlign =
       stored.length === sceneLines.length &&
       stored.every((p, i) => p === sceneLines[i]);
     return sceneLines.map((prompt, i) => {
       const ov = sceneOverrides[i] || {};
       const effective = ov.source ?? (brollSource === "mix" ? null : brollSource);
-      const weight = weightsAlign ? autoWeightsRef.current[i] : null;
+      const weight = promptsAlign ? autoWeightsRef.current[i] : null;
+      // search_query comes from the paired LLM output; it may be empty
+      // for legacy handoffs — the backend then sanitizes `prompt` via
+      // `_extract_stock_query` before ever hitting Pexels/Pixabay.
+      const rawSearchQuery = promptsAlign ? autoSearchQueriesRef.current[i] : null;
+      const searchQuery =
+        typeof rawSearchQuery === "string" && rawSearchQuery.trim()
+          ? rawSearchQuery.trim()
+          : null;
       return {
         prompt,
         source: effective,
         pick: ov.pick || null,
         ...(weight ? { weight } : {}),
+        ...(searchQuery ? { search_query: searchQuery } : {}),
       };
     });
   }, [sceneLines, sceneOverrides, brollSource]);
@@ -462,6 +484,11 @@ export default function Studio() {
     scenes: mode === MODES.FACELESS ? scenes.map((s) => ({
       source: s.source,
       prompt: s.prompt,
+      // v1.20.12 — Preserve the paired stock search query so the backend
+      // routes Pexels/Pixabay lookups by concrete visual nouns instead of
+      // falling back to the detailed cinematic prompt. Only included when
+      // present; the backend sanitizes `prompt` when missing.
+      ...(s.search_query ? { search_query: s.search_query } : {}),
       video_url: s.pick?.video_url || null,
       thumb: s.pick?.thumb || null,
       // Preserve the media library's image/video type. Uploaded media is
@@ -740,10 +767,16 @@ export default function Studio() {
       const sceneObjs = (r.data.scenes || []).slice(0, MAX_SCENES);
       const lines = sceneObjs.map((s) => s.prompt);
       const weights = sceneObjs.map((s) => s.weight || 1);
+      // v1.20.12 — preserve the paired search_query per scene so Pexels/
+      // Pixabay renders use concrete visual nouns, not the detailed prompt.
+      const searches = sceneObjs.map((s) =>
+        typeof s.search_query === "string" ? s.search_query : ""
+      );
       setBulkPrompts(lines.join("\n"));
       setSceneOverrides(lines.map(() => ({})));
       autoPromptsRef.current = lines;
       autoWeightsRef.current = weights;
+      autoSearchQueriesRef.current = searches;
       // Stale candidates from the previous script are no longer relevant —
       // the prompt → thumbnail mapping is positional.
       setSceneCandidates({});
@@ -797,7 +830,14 @@ export default function Studio() {
         if (stockGroups[src].length === 0) continue;
         reqs.push(
           apiClient.post("/studio/stock-candidates", {
+            // v1.20.12 fix — Preview Clips honours the same routing
+            // contract as Render: paired `search_query` per scene when
+            // present, sanitized prompt fallback only when missing. The
+            // detailed AI prompt is never sent verbatim to Pexels/Pixabay.
             prompts: stockGroups[src].map(({ s }) => s.prompt),
+            search_queries: stockGroups[src].map(({ s }) =>
+              typeof s.search_query === "string" ? s.search_query : ""
+            ),
             source: src,
             orientation,
           }).then((r) => ({ kind: "stock", payload: r.data.candidates || [], group: stockGroups[src] }))

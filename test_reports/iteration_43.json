@@ -1,0 +1,46 @@
+{
+  "summary": "Backend-only verification of v1.20.12 stock-search-query-routing fixes on feature/stock-search-query-routing. Ran the 5 required pytest files (35 tests) + the Node handoff shape test (6 assertions) — ALL PASS. Additionally authored a new respx+TestClient integration suite (5 tests) that intercepts the actual outgoing Pexels/Pixabay HTTP GETs from POST /api/studio/stock-candidates and asserts the exact `query`/`q` param on the wire. NO paid provider calls; NO render initiated; NO merge/deploy.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_scene_routing.py",
+    "/app/backend/tests/test_uploaded_broll_routing.py",
+    "/app/backend/tests/test_render_privacy.py",
+    "/app/backend/tests/test_render_runtime.py",
+    "/app/backend/tests/test_upload_paths.py",
+    "/app/backend/tests/test_stock_candidates_http_routing.py",
+    "/app/frontend/src/utils/handoff.test.cjs",
+    "/app/test_reports/pytest/iteration_43.xml"
+  ],
+  "test_results": {
+    "pytest_required_suite": "40/40 PASSED (test_scene_routing 20, test_uploaded_broll_routing 9, test_render_privacy 2, test_render_runtime 2, test_upload_paths 2, test_stock_candidates_http_routing 5)",
+    "node_handoff_shape_test": "6/6 PASSED (cd /app/frontend && node src/utils/handoff.test.cjs)",
+    "verified_behaviours": [
+      "Bug#1 verified: POST /api/studio/stock-candidates with search_queries=['coffee pouring cup'] + detailed prompt → outgoing Pexels ?query= is EXACTLY 'coffee pouring cup' (respx intercept, request URL inspected).",
+      "Bug#1 verified: search_queries=['runners trail sunrise'] + source=pixabay → outgoing Pixabay ?q= is EXACTLY 'runners trail sunrise'.",
+      "Bug#1 verified: missing/empty/whitespace search_query falls back to _extract_stock_query — outgoing Pexels query never contains 'wide','overhead','shot','soft','slow','camera','drift'; concrete nouns survive.",
+      "Bug#1 verified: prompts=['the and of in'] with no search_query returns candidates=[] and issues ZERO Pexels HTTP calls (respx call count == 0). Raw prompt never leaks.",
+      "Bug#1 verified: server._resolve_stock_query_for_scene returns search_query verbatim when present, sanitized fallback when missing, '' when both unusable.",
+      "Bug#1 verified: media_routing.classify_scene_kind routes uploaded→uploaded_image/uploaded_video, stock→stock, ai→ai/ai_t2v (disjoint execution paths).",
+      "Bug#2 verified: Studio.jsx handoff useEffect contains NO apiClient.(get|post|put|delete|patch) call, NO /studio/broll-prompts call, NO r.data.scenes read; it calls setBulkPrompts(payload.brollPrompts.join(...)) and setSceneOverrides(payload.brollPrompts.map(() => ({}))) directly — preserves order/count/wording exactly.",
+      "Bug#2 verified: Studio.jsx fetchCandidates sends search_queries: stockGroups[src].map(...) alongside prompts to /studio/stock-candidates."
+    ]
+  },
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is >6900 lines — well past the 700-line healthy-module threshold. Recommend extracting the /studio/* routes into a dedicated studio_routes.py module. Not blocking for this fix.",
+    "admin_routes.py uses deprecated `regex=` on Query params (lines 727, 732) — should be `pattern=`. Cosmetic; emits DeprecationWarning.",
+    "server.py uses deprecated `@app.on_event('startup')` in 4 places — Pydantic v2 recommends lifespan handlers. Cosmetic.",
+    "The inline `resolve_query` closure at server.py:6185 is a code-duplicate of `_resolve_stock_query_for_scene` (server.py:2222). Consider having the endpoint call `_resolve_stock_query_for_scene({'prompt': p, 'search_query': sq})` directly to eliminate drift risk. Currently kept in sync only by tests."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_stock_candidates_http_routing.py (NEW — 5 respx+TestClient integration tests intercepting Pexels/Pixabay HTTP)"
+  ],
+  "success_rate": {"backend": "100% (40/40)", "frontend": "not tested (per constraint)"},
+  "test_credentials": "drcharitycampbell@gmail.com (admin DEV_BYPASS via POST /api/auth/check — no password, magic-link bypass; in ADMIN_EMAILS env)",
+  "seed_data_creation": "None — all tests are hermetic (respx HTTP mock + FastAPI dependency_overrides, no Mongo writes, no real providers).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Both v1.20.12 bugs are verified fixed and covered by regression tests. Two independent test surfaces guard them: (1) /app/backend/tests/test_scene_routing.py — 20 pure-Python unit tests of the routing helpers + inline resolver closure; (2) /app/backend/tests/test_stock_candidates_http_routing.py — 5 respx integration tests that intercept the OUTGOING Pexels/Pixabay HTTP GETs and assert the wire-level query param; (3) /app/frontend/src/utils/handoff.test.cjs — 6 static-source assertions on Studio.jsx that catch any future attempt to call an API inside the handoff useEffect or to transform payload.brollPrompts. If you add new stock-provider paths, mirror the respx pattern used in test_stock_candidates_http_routing.py. Note: the /api sub-FastAPI (server.api) is mounted at /api on the main app — dependency_overrides must be set on BOTH `app` and `api` for TestClient auth bypass to work (already handled in the fixture).",
+  "rca of the issue": "Bug#1 RCA: /api/studio/stock-candidates previously always called _extract_stock_query(prompt) to derive the stock query, discarding the paired search_query the LLM emitted. Detailed cinematic prompts (with camera-motion + shot-type + lighting adjectives) were being sanitized instead of using the pre-computed clean query, degrading Pexels/Pixabay relevance and occasionally leaking cinematic tokens. Fix: v1.20.12 introduced StockCandidatesRequest.search_queries + an inline `resolve_query` closure that prefers the paired value verbatim and falls back to _extract_stock_query ONLY when the paired value is empty/whitespace. Verified end-to-end via respx wire-level intercepts. Bug#2 RCA: Studio.jsx handoff useEffect previously POSTed to /studio/broll-prompts to regenerate paired prompts on mount, silently replacing the script author's brollPrompts with LLM output (different wording, sometimes different count). Fix: the useEffect now directly setBulkPrompts(payload.brollPrompts.join('\\n')) and setSceneOverrides(payload.brollPrompts.map(() => ({}))) — pure state-set, no server round-trip. Verified by static-source assertions in handoff.test.cjs."
+}

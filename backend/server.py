@@ -149,7 +149,7 @@ RENDER_JOB_CONCURRENCY = max(1, int(os.environ.get("RENDER_JOB_CONCURRENCY", "1"
 STOCK_SEARCH_TIMEOUT_S = max(5, int(os.environ.get("STOCK_SEARCH_TIMEOUT_S", "20")))
 STUCK_RENDER_TIMEOUT_S = max(60, int(os.environ.get("STUCK_RENDER_TIMEOUT_S", "300")))
 RENDER_HEARTBEAT_INTERVAL_S = max(5, int(os.environ.get("RENDER_HEARTBEAT_INTERVAL_S", "15")))
-BUILD_VERSION = os.environ.get("APP_VERSION", "1.20.11")
+BUILD_VERSION = os.environ.get("APP_VERSION", "1.20.12")
 BUILD_COMMIT = (
     os.environ.get("GIT_COMMIT_SHA")
     or os.environ.get("COMMIT_SHA")
@@ -2219,6 +2219,25 @@ def _extract_stock_query(prompt: str) -> str:
     return " ".join(kept[:6])
 
 
+def _resolve_stock_query_for_scene(scene: dict) -> str:
+    """Choose the stock-library search string for a Pexels/Pixabay scene.
+
+    Contract enforced here (v1.20.12): only `scene.search_query` may reach
+    a stock provider. If it is missing, derive a sanitized fallback from
+    `scene.prompt` via `_extract_stock_query`. The raw detailed AI prompt
+    is NEVER passed straight to Pexels/Pixabay — stock libraries index
+    concrete visual nouns, not cinematic shot descriptions.
+
+    Never makes an LLM call — this is a pure string transform intended to
+    run inside the render pipeline. Callers that want a *paired* prompt +
+    stock query for a fresh script should go through /studio/broll-prompts.
+    """
+    sq = (scene.get("search_query") or "").strip()
+    if sq:
+        return sq
+    return _extract_stock_query(scene.get("prompt") or "")
+
+
 def _score_pexels_hit(video: dict, keyword_set: set) -> int:
     """Score a Pexels video by tag/title overlap with extracted keywords."""
     haystack = " ".join([
@@ -4202,13 +4221,22 @@ async def _run_render_faceless(job: dict):
                 if pre_picked:
                     image_urls[i] = pre_picked
                 else:
-                    # No pre-picked clip — auto-search. v1.19.7: prefer the
-                    # LLM-generated `search_query` (plain visual nouns) over
-                    # the cinematic `prompt` because Pexels/Pixabay index
-                    # tags, not shot descriptions. Falls back to the prompt
-                    # if the LLM didn't emit a search line.
-                    stock_q = s.get("search_query") or s.get("prompt") or ""
-                    stock_search_tasks.append((i, effective_src, stock_q, orientation))
+                    # No pre-picked clip — auto-search. v1.20.12: strict
+                    # routing contract — Pexels/Pixabay only ever see the
+                    # LLM-generated `search_query` (2-5 concrete visual
+                    # nouns). If the scene has no search_query (legacy
+                    # payload), we derive one from the prompt via
+                    # `_extract_stock_query` — never the raw AI prompt
+                    # itself. See `_resolve_stock_query_for_scene`.
+                    stock_q = _resolve_stock_query_for_scene(s)
+                    if stock_q:
+                        stock_search_tasks.append((i, effective_src, stock_q, orientation))
+                    else:
+                        logger.warning(
+                            "[stock-routing] scene %s has neither search_query "
+                            "nor a sanitizable prompt — skipping auto-search",
+                            i,
+                        )
 
         completed = 0
         total_ai = len(ai_tasks)
@@ -4498,7 +4526,7 @@ async def _run_render_faceless(job: dict):
             prepicked = scene_meta.get("cutaway_urls") or None
             return await _trim_stock_video_with_cutaways(
                 primary_url=url,
-                search_query=(scene_meta.get("search_query") or scene_meta.get("prompt") or ""),
+                search_query=_resolve_stock_query_for_scene(scene_meta),
                 source=(scene_meta.get("source") or global_source or "pexels"),
                 aspect=job["aspect"],
                 duration_ms=this_dur,
@@ -6125,6 +6153,13 @@ async def studio_broll_prompts(payload: BrollPromptsRequest, user: AuthUser = De
 # for 5 prompts).
 class StockCandidatesRequest(BaseModel):
     prompts: list[str]
+    # v1.20.12 fix — per-scene LLM search query, aligned by index with
+    # `prompts`. When present + non-empty, it is used verbatim for the
+    # Pexels/Pixabay call. The detailed AI prompt is only sanitized as a
+    # fallback when the paired search query is missing — mirroring the
+    # renderer's `_resolve_stock_query_for_scene` contract so Preview
+    # Clips and Render always hit the same query.
+    search_queries: list[str] | None = None
     source: str = "pexels"  # pexels | pixabay | mix
     orientation: str = "portrait"  # portrait | landscape
 
@@ -6142,8 +6177,31 @@ async def studio_stock_candidates(
 
     sources_for_prompt = ["pexels", "pixabay"] if payload.source == "mix" else [payload.source]
 
+    # v1.20.12 — strict routing contract. Each scene's query for Pexels/
+    # Pixabay is chosen exactly the same way the renderer chooses it:
+    #   1. Prefer the paired `search_query` when it is non-empty.
+    #   2. Otherwise sanitize the prompt via `_extract_stock_query`.
+    #   3. Never fall back to the raw detailed AI prompt.
+    def resolve_query(prompt: str, search_query: str | None) -> str:
+        sq = (search_query or "").strip()
+        if sq:
+            return sq
+        return _extract_stock_query(prompt or "")
+
+    search_queries = payload.search_queries or []
+
     async def fetch_one(idx: int, prompt: str) -> dict:
-        query = _extract_stock_query(prompt) or prompt
+        sq = search_queries[idx] if idx < len(search_queries) else None
+        query = resolve_query(prompt, sq)
+        if not query:
+            # Nothing safe to send — surface an empty candidate list so the
+            # UI shows "no matches" instead of leaking the AI prompt.
+            logger.info(
+                "[stock-candidates] scene %s has neither search_query "
+                "nor a sanitizable prompt — returning empty",
+                idx,
+            )
+            return {"idx": idx, "prompt": prompt, "candidates": []}
         keyword_set = {w for w in query.split() if w}
         hits: list[dict] = []
         async with httpx.AsyncClient(timeout=15) as client:
