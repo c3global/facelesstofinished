@@ -149,7 +149,7 @@ RENDER_JOB_CONCURRENCY = max(1, int(os.environ.get("RENDER_JOB_CONCURRENCY", "1"
 STOCK_SEARCH_TIMEOUT_S = max(5, int(os.environ.get("STOCK_SEARCH_TIMEOUT_S", "20")))
 STUCK_RENDER_TIMEOUT_S = max(60, int(os.environ.get("STUCK_RENDER_TIMEOUT_S", "300")))
 RENDER_HEARTBEAT_INTERVAL_S = max(5, int(os.environ.get("RENDER_HEARTBEAT_INTERVAL_S", "15")))
-BUILD_VERSION = os.environ.get("APP_VERSION", "1.20.11")
+BUILD_VERSION = os.environ.get("APP_VERSION", "1.20.12")
 BUILD_COMMIT = (
     os.environ.get("GIT_COMMIT_SHA")
     or os.environ.get("COMMIT_SHA")
