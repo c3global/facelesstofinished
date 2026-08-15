@@ -205,6 +205,20 @@ def test_stock_query_result_is_length_bounded_when_used_as_fallback():
     assert 0 < len(resolved.split()) <= 6
 
 
+def test_comment_section_prompt_becomes_filmable_stock_query():
+    resolved = server._extract_stock_query(
+        'Comment section with messages like "Finally someone who knows what they are doing"'
+    )
+    assert resolved == "person using smartphone"
+
+
+def test_software_interface_prompt_becomes_filmable_stock_query():
+    resolved = server._extract_stock_query(
+        "Cursor clicking start recording in screen capture software"
+    )
+    assert resolved == "person using computer"
+
+
 # --------------------------------------------------------------------------- #
 # Preview Clips (`/studio/stock-candidates`) routing — the client-triggered
 # per-scene candidate fetch must honour the same paired contract as Render.

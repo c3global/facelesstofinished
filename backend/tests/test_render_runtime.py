@@ -40,3 +40,20 @@ async def test_process_timeout_kills_and_reaps_child():
 
     assert process.killed is True
     assert process.communicate_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_outer_cancellation_kills_and_reaps_child():
+    """A scene-level wait_for must not leave its ffmpeg child behind."""
+    process = _HungProcess()
+    task = asyncio.create_task(
+        communicate_process_with_timeout(process, timeout_s=60),
+    )
+    await asyncio.sleep(0)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert process.killed is True
+    assert process.communicate_calls == 2

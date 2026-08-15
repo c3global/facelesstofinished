@@ -30,6 +30,9 @@ const MODES = { AVATAR: "avatar", FACELESS: "faceless" };
 // the full script.
 const AVATAR_SCRIPT_MAX_CHARS = 5000;
 const MAX_SCENES = 200;
+// Timeline tools are temporarily hidden because the preview path performs
+// paid generation before it can fail. Backend routes are also fail-closed.
+const TIMELINE_FEATURES_ENABLED = false;
 const SOURCE_HINT = {
   ai:       "Faceless48 will generate a professional AI visual for this scene.",
   pexels:   "We'll search the Pexels stock library.",
@@ -1442,7 +1445,7 @@ export default function Studio() {
         >
           Render your video
         </button>
-        {mode === MODES.FACELESS && (
+        {TIMELINE_FEATURES_ENABLED && mode === MODES.FACELESS && (
           <button
             type="button"
             className="cta-btn-secondary"
@@ -1742,7 +1745,7 @@ export default function Studio() {
                       <Play size={14} />
                     </button>
                   )}
-                  {r.status === "complete" && r.result_url && r.mode === "faceless" && (
+                  {TIMELINE_FEATURES_ENABLED && r.status === "complete" && r.result_url && r.mode === "faceless" && (
                     <button
                       className="icon-btn is-timeline"
                       data-testid={`history-timeline-${r.id}`}
@@ -1836,7 +1839,11 @@ export default function Studio() {
         defaultSource={
           stockModal.idx >= 0 && scenes[stockModal.idx]?.source === "pixabay" ? "pixabay" : "pexels"
         }
-        query={stockModal.idx >= 0 ? scenes[stockModal.idx]?.prompt : ""}
+        query={
+          stockModal.idx >= 0
+            ? (scenes[stockModal.idx]?.search_query || scenes[stockModal.idx]?.prompt || "")
+            : ""
+        }
         aspect={aspect}
         onClose={() => setStockModal({ open: false, idx: -1 })}
         onPick={(r) => {
@@ -1860,7 +1867,6 @@ export default function Studio() {
         enabled={captions}
         style={captionStyle}
         position={captionPosition}
-        isAdmin={isAdmin}
         onPick={(on, styleId) => {
           setCaptions(!!on);
           if (styleId) setCaptionStyle(styleId);
@@ -1903,41 +1909,45 @@ export default function Studio() {
 
       {/* Iter 60 — Timeline editor modal for fixing looping B-roll on
           completed Faceless renders. Opens from the ⏱ button on history rows. */}
-      <TimelineModal
-        open={!!timelineJobId}
-        jobId={timelineJobId}
-        onClose={() => setTimelineJobId(null)}
-        onRerenderQueued={(newJobId) => {
-          setTimelineJobId(null);
-          setToast("Timeline re-render queued — watch history for the new job.");
-          // Refresh history so the new render row appears immediately.
-          if (typeof loadHistory === "function") loadHistory();
-        }}
-      />
+      {TIMELINE_FEATURES_ENABLED && (
+        <TimelineModal
+          open={!!timelineJobId}
+          jobId={timelineJobId}
+          onClose={() => setTimelineJobId(null)}
+          onRerenderQueued={(newJobId) => {
+            setTimelineJobId(null);
+            setToast("Timeline re-render queued — watch history for the new job.");
+            // Refresh history so the new render row appears immediately.
+            if (typeof loadHistory === "function") loadHistory();
+          }}
+        />
+      )}
 
       {/* v1.20.10 — Pre-render Timeline Editor. Shows the full manifest
           (per-scene voiceover + primary + cutaway B-roll thumbnails)
           BEFORE the user commits to a render. */}
-      <PrerenderTimelineModal
-        isOpen={showPrerenderTimeline}
-        onClose={() => setShowPrerenderTimeline(false)}
-        script={script}
-        aspect={aspect}
-        brollSource={brollSource}
-        ttsVoiceId={ttsVoice?.id}
-        renderPayloadExtras={{
-          captions,
-          caption_style: captionStyle,
-          caption_position: captionPosition,
-          auto_freeze_broll: autoFreezeBroll,
-          ai_engine: aiEngine,
-        }}
-        onRenderStarted={(newJobId) => {
-          setShowPrerenderTimeline(false);
-          setToast("Render started — watch history for progress.");
-          if (typeof loadHistory === "function") loadHistory();
-        }}
-      />
+      {TIMELINE_FEATURES_ENABLED && (
+        <PrerenderTimelineModal
+          isOpen={showPrerenderTimeline}
+          onClose={() => setShowPrerenderTimeline(false)}
+          script={script}
+          aspect={aspect}
+          brollSource={brollSource}
+          ttsVoiceId={ttsVoice?.id}
+          renderPayloadExtras={{
+            captions,
+            caption_style: captionStyle,
+            caption_position: captionPosition,
+            auto_freeze_broll: autoFreezeBroll,
+            ai_engine: aiEngine,
+          }}
+          onRenderStarted={(newJobId) => {
+            setShowPrerenderTimeline(false);
+            setToast("Render started — watch history for progress.");
+            if (typeof loadHistory === "function") loadHistory();
+          }}
+        />
+      )}
     </main>
   );
 }
