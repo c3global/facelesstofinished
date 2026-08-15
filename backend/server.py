@@ -134,16 +134,22 @@ RENDER_COST_CIRCUIT_BREAKER_CENTS = int(os.environ.get("RENDER_COST_CAP_CENTS", 
 # supervisor restarts it, leaving the render row in a "rendering" status
 # with no live task to advance it. Both are patched by:
 #   1. NORMALIZE_CONCURRENCY: hard cap on parallel scene ffmpeg passes.
-#      Default 3 fits comfortably in 512MB. Set to 5-6 on generous hosts.
-#   2. STUCK_RENDER_TIMEOUT_S: any render row whose `updated_at` is older
+#      Default 1 is intentionally conservative for the 512MB production tier.
+#      Preview/larger hosts can opt into more with an environment override.
+#   2. RENDER_JOB_CONCURRENCY: process-wide cap on whole render pipelines.
+#      Without it, each render owns its own scene semaphore, so three customer
+#      submissions can still launch three independent ffmpeg groups and OOM.
+#   3. STUCK_RENDER_TIMEOUT_S: any render row whose `updated_at` is older
 #      than this without reaching a terminal status gets reaped by the
 #      startup watchdog (see `_reap_stuck_renders`). Default 300s (5 min)
 #      — a real render should never sit idle that long between per-scene
 #      progress updates.
-NORMALIZE_CONCURRENCY = max(1, int(os.environ.get("NORMALIZE_CONCURRENCY", "3")))
+NORMALIZE_CONCURRENCY = max(1, int(os.environ.get("NORMALIZE_CONCURRENCY", "1")))
+RENDER_JOB_CONCURRENCY = max(1, int(os.environ.get("RENDER_JOB_CONCURRENCY", "1")))
+STOCK_SEARCH_TIMEOUT_S = max(5, int(os.environ.get("STOCK_SEARCH_TIMEOUT_S", "20")))
 STUCK_RENDER_TIMEOUT_S = max(60, int(os.environ.get("STUCK_RENDER_TIMEOUT_S", "300")))
 RENDER_HEARTBEAT_INTERVAL_S = max(5, int(os.environ.get("RENDER_HEARTBEAT_INTERVAL_S", "15")))
-BUILD_VERSION = os.environ.get("APP_VERSION", "1.20.10")
+BUILD_VERSION = os.environ.get("APP_VERSION", "1.20.11")
 BUILD_COMMIT = (
     os.environ.get("GIT_COMMIT_SHA")
     or os.environ.get("COMMIT_SHA")
@@ -157,6 +163,11 @@ JWT_TTL_HOURS = 24
 
 mongo = AsyncIOMotorClient(MONGO_URL)
 db = mongo[DB_NAME]
+
+# This semaphore is intentionally process-wide. Per-render normalize
+# semaphores only control scenes within one job and do not protect a small
+# production container when multiple customers submit simultaneously.
+_RENDER_JOB_SEMAPHORE = asyncio.Semaphore(RENDER_JOB_CONCURRENCY)
 
 app = FastAPI(title="F2F48 Studio API", version="0.1.0")
 # CORS — v1.15.0 — switched from `allow_origins=["*"] + allow_credentials=True`
@@ -560,6 +571,8 @@ async def health():
             "stuck_timeout_s": STUCK_RENDER_TIMEOUT_S,
             "heartbeat_interval_s": RENDER_HEARTBEAT_INTERVAL_S,
             "normalize_concurrency": NORMALIZE_CONCURRENCY,
+            "render_job_concurrency": RENDER_JOB_CONCURRENCY,
+            "stock_search_timeout_s": STOCK_SEARCH_TIMEOUT_S,
         },
     }
 
@@ -1901,9 +1914,20 @@ async def _trim_stock_video_with_cutaways(
         orientation = "portrait" if aspect == "9_16" else "landscape"
         exclude: set = set(used_urls) if used_urls is not None else set()
         exclude.add(primary_url)
-        additional = await _fetch_multiple_stock_urls(
-            source, search_query, orientation, n_cuts - 1, exclude,
-        )
+        try:
+            additional = await asyncio.wait_for(
+                _fetch_multiple_stock_urls(
+                    source, search_query, orientation, n_cuts - 1, exclude,
+                ),
+                timeout=STOCK_SEARCH_TIMEOUT_S,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "[cutaway-fetch] scene=%s exceeded %ss; using primary clip only",
+                scene_idx,
+                STOCK_SEARCH_TIMEOUT_S,
+            )
+            additional = []
         all_urls = [primary_url] + additional
     # If Pexels/Pixabay didn't yield enough unique clips, drop to fewer
     # cutaways (or 1) rather than repeating the primary clip.
@@ -3390,8 +3414,6 @@ async def _run_render(job_id: str):
     job = await db.renders.find_one({"id": job_id})
     if not job:
         return
-    mode = job.get("mode")
-
     # Heartbeat independently of visible progress. AI motion generation is
     # intentionally allowed to take up to 8 minutes per scene, longer than
     # the 5-minute orphan timeout. Tying liveness only to scene completion
@@ -3420,17 +3442,33 @@ async def _run_render(job_id: str):
 
     heartbeat_task = asyncio.create_task(_heartbeat())
     try:
-        if mode == "avatar":
-            await _run_render_avatar(job)
-        elif mode == "faceless":
-            await _run_render_faceless(job)
-        elif mode == "composite":
-            await _run_render_composite(job)
-        else:
-            await db.renders.update_one(
-                {"id": job_id},
-                {"$set": {"status": "failed", "error": f"Unknown mode: {mode}"}},
-            )
+        logger.info(
+            "[render-capacity] job=%s waiting for slot (limit=%s)",
+            job_id,
+            RENDER_JOB_CONCURRENCY,
+        )
+        async with _RENDER_JOB_SEMAPHORE:
+            # The heartbeat starts before this wait, so queued jobs remain
+            # live and cannot be reaped while another customer's render uses
+            # the production container. Re-read after acquiring in case the
+            # customer cancelled while waiting.
+            fresh_job = await db.renders.find_one({"id": job_id})
+            if not fresh_job or fresh_job.get("status") in ("complete", "failed"):
+                return
+            job = fresh_job
+            mode = job.get("mode")
+            logger.info("[render-capacity] job=%s acquired slot", job_id)
+            if mode == "avatar":
+                await _run_render_avatar(job)
+            elif mode == "faceless":
+                await _run_render_faceless(job)
+            elif mode == "composite":
+                await _run_render_composite(job)
+            else:
+                await db.renders.update_one(
+                    {"id": job_id},
+                    {"$set": {"status": "failed", "error": f"Unknown mode: {mode}"}},
+                )
     except _RenderCancelled:
         # v1.20.4: cooperative cancellation. `_set_progress` raises this when
         # the row's `cancel_requested` flag flips (or status is externally
@@ -4187,7 +4225,18 @@ async def _run_render_faceless(job: dict):
 
         # Fire Flux + auto-stock-search in parallel — independent network calls.
         async def auto_stock(idx: int, src: str, q: str, orient: str):
-            url = await _auto_search_stock_url(src, q, orient)
+            try:
+                url = await asyncio.wait_for(
+                    _auto_search_stock_url(src, q, orient),
+                    timeout=STOCK_SEARCH_TIMEOUT_S,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "[auto-stock] scene=%s exceeded %ss",
+                    idx,
+                    STOCK_SEARCH_TIMEOUT_S,
+                )
+                url = None
             image_urls[idx] = url
             return url
 
@@ -5731,7 +5780,9 @@ async def studio_timeline_rerender(
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.renders.insert_one(doc)
-    asyncio.create_task(_run_render_faceless(new_job_id))
+    # Use the shared dispatcher so timeline re-renders receive the same
+    # heartbeat and process-wide capacity protection as normal renders.
+    asyncio.create_task(_run_render(new_job_id))
     await _log_activity("studio_timeline_rerender", user.email, {
         "parent_job_id": job_id,
         "new_job_id": new_job_id,
