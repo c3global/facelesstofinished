@@ -1,13 +1,17 @@
 """Cross-provider cost estimator + hard ceiling enforcement.
 
-Used from two places:
-  1. Pre-submission preview endpoint (frontend calls this to display
-     the estimated cost before the user clicks "Render").
-  2. Server-side render entrypoint (rejects payloads that would
-     exceed RENDER_COST_CAP_CENTS OR the per-user MAX_AI_SCENES_PER_RENDER).
+CUSTOMER-FACING PRIVACY RULE (2026-08-15): dollar values, cap
+thresholds, and provider names are internal-only. Endpoints that expose
+these fields MUST gate them behind ``is_admin=True``. See
+``backend/routes/render_config.py`` for the customer-facing sanitizer.
 
-The estimator is deliberately conservative — over-estimates are better
-than under-charging a customer past their cost cap.
+Used from two places:
+  1. Pre-submission preview endpoint (frontend calls
+     ``/api/render/estimate`` — customer view).
+  2. Server-side render entrypoint — enforces
+     ``RENDER_COST_CIRCUIT_BREAKER_CENTS`` and the per-render
+     ``MAX_AI_SCENES_PER_RENDER`` before any paid provider request
+     leaves the box.
 """
 
 from __future__ import annotations
@@ -20,14 +24,8 @@ from .registry import get_provider
 from .types import MotionInputMode, SceneMotionRequest
 
 
-# Global hard ceiling for a single render, in USD cents. Pulled from env
-# so ops can adjust without a redeploy. Existing constant lives in
-# server.py at 500¢; keep the two in sync.
 RENDER_COST_CAP_CENTS = int(os.environ.get("RENDER_COST_CAP_CENTS", "500"))
 
-# Per-render AI scene ceiling. Existing setting in system_config.
-# Enforced HERE so the estimator can reject before we submit any paid
-# provider request.
 MAX_AI_SCENES_PER_RENDER_DEFAULT = int(
     os.environ.get("MAX_AI_SCENES_PER_RENDER", "2")
 )
@@ -40,7 +38,7 @@ LOCAL_VIDEO_NORMALIZE_CENTS = 0
 @dataclass
 class SceneCostBreakdown:
     scene_idx: int
-    provider: str  # "kie" | "fal" | "local_ken_burns" | "local_video"
+    provider: str  # "kie" | "fal" | "local_ken_burns" | "local_video" | "unavailable"
     mode: str
     estimated_cents: int
     notes: Optional[str] = None
@@ -58,21 +56,25 @@ class RenderCostEstimate:
     provider_selected: Optional[str] = None
 
 
+def _pick_hint_for_scene(request: SceneMotionRequest, requested_hint: str) -> str:
+    """Downgrade the hint when the input kind requires it.
+
+    Uploaded videos always take the free local normalize path — the
+    customer's motion quality choice is ignored for video assets.
+    Uploaded images honour the customer's chosen motion level.
+    """
+    if request.input_kind == "video":
+        return "local_video"
+    return requested_hint
+
+
 def estimate_scene_cost(
     request: SceneMotionRequest,
     *,
     provider_hint: str = "auto",
 ) -> SceneCostBreakdown:
-    """Estimate cost for a single scene.
-
-    ``provider_hint``:
-      * "auto" — let the registry pick (KIE preferred).
-      * "kie" or "fal" — force the specific provider.
-      * "local_ken_burns" — free path for uploaded images that the user
-        chose to animate locally instead of via Seedance.
-      * "local_video" — free path for uploaded videos (normalize only).
-    """
-    if provider_hint == "local_ken_burns":
+    hint = _pick_hint_for_scene(request, provider_hint)
+    if hint == "local_ken_burns":
         return SceneCostBreakdown(
             scene_idx=request.scene_idx,
             provider="local_ken_burns",
@@ -80,7 +82,7 @@ def estimate_scene_cost(
             estimated_cents=LOCAL_KEN_BURNS_CENTS,
             notes="Free — local ffmpeg Ken Burns motion",
         )
-    if provider_hint == "local_video":
+    if hint == "local_video":
         return SceneCostBreakdown(
             scene_idx=request.scene_idx,
             provider="local_video",
@@ -89,10 +91,8 @@ def estimate_scene_cost(
             notes="Free — local ffmpeg trim/normalize on uploaded video",
         )
 
-    provider = get_provider(provider_hint, request=request)
+    provider = get_provider(hint, request=request)
     if provider is None:
-        # No provider available/supports this request; treat as free but
-        # flagged so the caller can surface the issue.
         return SceneCostBreakdown(
             scene_idx=request.scene_idx,
             provider="unavailable",
@@ -116,17 +116,6 @@ def estimate_render_cost(
     max_ai_scenes: Optional[int] = None,
     cap_cents: Optional[int] = None,
 ) -> RenderCostEstimate:
-    """Estimate cost + policy compliance for an entire render.
-
-    Args:
-        scene_requests: iterable of ``(SceneMotionRequest, provider_hint)``
-            tuples — one per scene.
-        max_ai_scenes: overrides the env default. Pulled from the
-            live system_config in the caller so the current admin
-            settings win.
-        cap_cents: overrides RENDER_COST_CAP_CENTS. Same intent — let
-            the caller inject a per-tier ceiling.
-    """
     max_ai = max_ai_scenes if max_ai_scenes is not None else MAX_AI_SCENES_PER_RENDER_DEFAULT
     cap = cap_cents if cap_cents is not None else RENDER_COST_CAP_CENTS
 
@@ -160,11 +149,7 @@ def estimate_render_cost(
 
 
 def enforce_render_cost_ceiling(estimate: RenderCostEstimate) -> Optional[str]:
-    """Return an error message if the estimate violates policy, else None.
-
-    Called from the render entrypoint AFTER estimate_render_cost and
-    BEFORE any paid provider call fires.
-    """
+    """Return an error message if the estimate violates policy, else None."""
     if estimate.over_cap:
         return (
             f"Estimated cost {estimate.total_cents}¢ exceeds cap {estimate.cap_cents}¢. "
@@ -179,7 +164,7 @@ def enforce_render_cost_ceiling(estimate: RenderCostEstimate) -> Optional[str]:
 
 
 __all__ = [
-    "MotionInputMode",  # re-export for convenience
+    "MotionInputMode",
     "RenderCostEstimate",
     "SceneCostBreakdown",
     "estimate_scene_cost",

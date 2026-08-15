@@ -26,8 +26,16 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+from providers.kie_models import reload_specs  # noqa: E402
 from providers.registry import reset_registry  # noqa: E402
 from routes.render_config import build_router  # noqa: E402
+
+
+def _prime_kie(monkeypatch):
+    monkeypatch.setenv("KIE_API_KEY", "kie-fake")
+    monkeypatch.setenv("KIE_MODELS_ENABLED", "seedance-2-5")
+    reset_registry()
+    reload_specs()
 
 
 # ---- Test scaffolding ----------------------------------------------------
@@ -94,8 +102,7 @@ def test_public_providers_reports_no_premium_when_none_available(monkeypatch):
 
 
 def test_admin_providers_gated(monkeypatch):
-    monkeypatch.setenv("KIE_API_KEY", "kie-fake")
-    reset_registry()
+    _prime_kie(monkeypatch)
     non_admin = _make_app(is_admin=False)
     admin = _make_app(is_admin=True)
     assert non_admin.get("/api/admin/render/providers").status_code == 403
@@ -109,8 +116,7 @@ def test_admin_providers_gated(monkeypatch):
 
 
 def test_customer_estimate_hides_all_cost_and_provider_fields(monkeypatch):
-    monkeypatch.setenv("KIE_API_KEY", "kie-fake")
-    reset_registry()
+    _prime_kie(monkeypatch)
     c = _make_app(is_admin=False)
     r = c.post("/api/render/estimate", json={"scenes": [_sample_scene(0), _sample_scene(1, "standard")]})
     assert r.status_code == 200, r.text
@@ -146,8 +152,7 @@ def test_customer_estimate_hides_all_cost_and_provider_fields(monkeypatch):
 
 def test_customer_over_capacity_reason_is_generic(monkeypatch):
     """Over-capacity messages must not reveal specific cost caps."""
-    monkeypatch.setenv("KIE_API_KEY", "kie-fake")
-    reset_registry()
+    _prime_kie(monkeypatch)
     c = _make_app(is_admin=False)
     # 5 AI scenes to force over_ai_limit (default max is 2).
     scenes = [_sample_scene(i, "premium") for i in range(5)]
@@ -161,8 +166,7 @@ def test_customer_over_capacity_reason_is_generic(monkeypatch):
 
 def test_customer_cannot_override_admin_caps(monkeypatch):
     """Non-admin sending cap_cents / max_ai_scenes must not affect the estimate."""
-    monkeypatch.setenv("KIE_API_KEY", "kie-fake")
-    reset_registry()
+    _prime_kie(monkeypatch)
     c = _make_app(is_admin=False)
     # Try to raise max_ai_scenes so 3 premium scenes wouldn't trip the limit.
     body = c.post(
@@ -177,8 +181,7 @@ def test_customer_cannot_override_admin_caps(monkeypatch):
 
 
 def test_admin_estimate_returns_cents_and_provider(monkeypatch):
-    monkeypatch.setenv("KIE_API_KEY", "kie-fake")
-    reset_registry()
+    _prime_kie(monkeypatch)
     admin = _make_app(is_admin=True)
     body = admin.post(
         "/api/admin/render/estimate",
@@ -193,8 +196,7 @@ def test_admin_estimate_returns_cents_and_provider(monkeypatch):
 
 
 def test_admin_estimate_forbidden_for_non_admin(monkeypatch):
-    monkeypatch.setenv("KIE_API_KEY", "kie-fake")
-    reset_registry()
+    _prime_kie(monkeypatch)
     c = _make_app(is_admin=False)
     r = c.post("/api/admin/render/estimate", json={"scenes": [_sample_scene(0)]})
     assert r.status_code == 403

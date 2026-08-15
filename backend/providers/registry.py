@@ -1,13 +1,14 @@
-"""Provider registry — selects concrete adapters by name.
+"""Provider registry — selects concrete adapters by name / slug.
 
-Usage:
-    from providers.registry import get_provider, available_providers
-    provider = get_provider("kie")            # explicit
-    provider = get_provider("auto", request)  # capability-based selection
+Two axes of selection:
+  * ``provider name`` — "kie" or "fal" (or "auto" to pick either)
+  * ``kie model slug`` — for KIE, which model in kie_models.py to build
 
-Providers are constructed lazily on first access so tests can mutate
-environment variables (KIE_API_KEY etc.) before the registry snapshots
-credentials.
+The registry is deliberately conservative:
+  * KIE is only "available" when KIE_API_KEY is set AND at least one
+    model is enabled via KIE_MODELS_ENABLED.
+  * fal is a fallback only — never picked by ``auto`` when a KIE model
+    supports the request (unless KIE is unavailable).
 """
 
 from __future__ import annotations
@@ -17,19 +18,42 @@ from typing import Optional
 
 from .base import VideoMotionProvider
 from .fal_provider import FalProvider
+from .kie_models import default_slug, enabled_slugs
 from .kie_provider import KieProvider
 from .types import SceneMotionRequest
 
 
-# ---- Registry state --------------------------------------------------------
-
-_PROVIDER_ORDER = ("kie", "fal")  # preference order for "auto"
+_PROVIDER_ORDER = ("kie", "fal")
 _INSTANCES: dict[str, VideoMotionProvider] = {}
+
+
+def _build_kie_provider() -> Optional[KieProvider]:
+    """Construct a KieProvider using the deployment's default slug.
+
+    Returns None when:
+      * KIE_API_KEY is missing
+      * KIE_MODELS_ENABLED is empty
+      * KIE_DEFAULT_MODEL is unset OR points at a disabled slug
+    """
+    slug = default_slug()
+    slugs = enabled_slugs()
+    if not slugs:
+        return None
+    if slug is None:
+        # No explicit default — pick the first enabled slug so admin can
+        # still exercise the pipeline without a KIE_DEFAULT_MODEL env
+        # var. But we do NOT let the code silently prefer a specific
+        # model — the enabled list is the source of truth.
+        slug = slugs[0]
+    provider = KieProvider.for_slug(slug)
+    if provider is None or not provider.is_available():
+        return None
+    return provider
 
 
 def _build(name: str) -> Optional[VideoMotionProvider]:
     if name == "kie":
-        return KieProvider()
+        return _build_kie_provider()
     if name == "fal":
         return FalProvider()
     return None
@@ -50,25 +74,11 @@ def reset_registry() -> None:
     _INSTANCES.clear()
 
 
-# ---- Public API ------------------------------------------------------------
-
-
 def default_provider_name() -> str:
-    """Return the caller's preferred provider name from env, else 'auto'.
-
-    Set ``RENDER_PROVIDER=kie|fal|auto`` in the environment to override
-    per-deployment. Default is ``auto`` (capability-based selection).
-    """
     return os.environ.get("RENDER_PROVIDER", "auto").strip().lower() or "auto"
 
 
 def available_providers() -> list[str]:
-    """Return the names of providers that are currently available.
-
-    Availability = credential present + instance can be constructed.
-    Used by the frontend to hide provider choices that aren't
-    configured in this environment.
-    """
     names: list[str] = []
     for name in _PROVIDER_ORDER:
         instance = _get_or_build(name)
@@ -81,15 +91,6 @@ def get_provider(
     name: str,
     request: Optional[SceneMotionRequest] = None,
 ) -> Optional[VideoMotionProvider]:
-    """Return the provider matching ``name`` (or the best fit for auto).
-
-    Returns None when no provider satisfies the constraints.
-
-    Args:
-        name: 'kie', 'fal', or 'auto'. Case-insensitive.
-        request: When ``name == 'auto'`` the registry picks the first
-            available provider that ``supports(request)``.
-    """
     name = (name or "").strip().lower() or "auto"
 
     if name == "auto":

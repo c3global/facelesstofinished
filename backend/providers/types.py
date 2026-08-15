@@ -59,6 +59,10 @@ class SceneMotionRequest:
     generate_audio: bool = False  # Studio supplies its own voiceover
     scene_idx: int = 0
     idempotency_key: Optional[str] = None  # optional client-supplied dedupe key
+    #: Uploaded asset kind — preserved end-to-end so the render pipeline
+    #: can steer video scenes to the free local-normalize path and image
+    #: scenes to the customer's chosen motion level.
+    input_kind: str = "none"  # "none" | "image" | "video" | "stock" | "ai_generated"
 
 
 @dataclass

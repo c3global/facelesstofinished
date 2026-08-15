@@ -1,0 +1,35 @@
+{
+  "summary": "Iteration 69 (v1.20.11) backend-only verification of KIE dual-provider integration. Ran the full 7-file pytest suite (test_kie_provider.py, test_provider_registry.py, test_cost_estimator.py, test_kie_callback.py, test_render_privacy.py, test_render_runtime.py, test_pipeline_integration.py) — 73 passed / 0 failed in 4.73s. Verified requirements.txt is exactly 13 lines with the intended minimal runtime deps; test-only deps (pytest, pytest-asyncio, respx) live separately in requirements-dev.txt. Confirmed no KIE_API_KEY, no KIE_WEBHOOK_HMAC_KEY, no KIE_MODELS_ENABLED, and no USE_PROVIDER_REGISTRY set in /app/backend/.env or process env — user's 'stop before secrets/paid calls' directive respected. Verified /api/health returns build 1.20.10 with render_runtime {stuck_timeout_s:300, normalize_concurrency:3, heartbeat_interval_s:15} and /api/config/render-providers returns only {has_premium_motion: true} — no provider names leaked. /api/admin/render/estimate correctly refuses unauthenticated requests (401). Seedance 2.5 rate-card math verified in test_seedance_720p_no_video_input_matches_rate_card, test_seedance_480p_no_video_input_matches_rate_card, and test_three_call_paid_test_math — the previous incorrect $0.38 estimator is gone, replaced by the KIE spec-driven math (~$3.85 for the three-call scenario). All four pipeline routing branches + fallback + no-leakage assertions pass. respx did not raise (no real network calls to api.kie.ai fired).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/test_reports/pytest/iter69_results.xml",
+    "/app/backend/tests/test_kie_provider.py",
+    "/app/backend/tests/test_provider_registry.py",
+    "/app/backend/tests/test_cost_estimator.py",
+    "/app/backend/tests/test_kie_callback.py",
+    "/app/backend/tests/test_render_privacy.py",
+    "/app/backend/tests/test_render_runtime.py",
+    "/app/backend/tests/test_pipeline_integration.py"
+  ],
+  "action_items": [
+    "OPTIONAL (non-blocking): server.py still uses deprecated @app.on_event('startup') hooks — FastAPI recommends lifespan handlers. Emits DeprecationWarning during tests.",
+    "OPTIONAL (non-blocking): admin_routes.py lines 727 & 732 use Pydantic `regex=` kwarg which is deprecated — switch to `pattern=`."
+  ],
+  "critical_code_review_comments": [
+    "requirements.txt correctly restored to 13 minimal lines; test-only deps properly isolated in requirements-dev.txt.",
+    "Provider registry correctly hides 'kie' from available_providers() when either KIE_API_KEY missing or KIE_MODELS_ENABLED empty — verified by test_available_providers_hides_kie_when_no_key and test_available_providers_hides_kie_when_no_models_enabled.",
+    "use_registry_enabled() defaults False; test_registry_disabled_by_default and test_registry_falls_back_when_no_kie_key confirm legacy fal.ai path is preserved when flag off or KIE unavailable.",
+    "Customer-facing privacy scrub (_scrub_render_for_response) correctly removes cost/provider/model/task_id for non-admin, preserves for admin — see test_scrub_render_removes_cost_and_provider_for_customer and test_scrub_render_leaves_admin_untouched.",
+    "HMAC webhook returns 503 when KIE_WEBHOOK_HMAC_KEY missing (fail-closed), 401 on bad sig / stale ts / missing headers, idempotent on duplicate — all 10 kie_callback tests pass.",
+    "test_scene_telemetry_stays_in_customer_forbidden_set confirms no provider/model/cost leakage in scene telemetry."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (73/73)", "frontend": "N/A - backend-only requested"},
+  "test_credentials": "Not used — no auth-gated tests exercised the live URL; suite is fully mocked (respx) + local pytest.",
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "All 73 backend tests green under the mocked path. KIE_API_KEY is intentionally unset per user directive. If the user later provides KIE_API_KEY + KIE_MODELS_ENABLED, re-run the same suite plus a smoke test that hits /api/config/render-providers to confirm has_premium_motion=true and that no provider names leak. The provider registry wire-in in _run_render_faceless is behind USE_PROVIDER_REGISTRY flag (default off); flipping it on requires KIE credentials.",
+  "rca of the issue": "N/A — no issues found. Prior iteration's $0.38 pricing bug is fully resolved: rate-card math now driven by KieModelSpec per-resolution cents-per-second values (env-overridable) instead of a hardcoded Seedance-specific constant. Three-call scenario totals 386¢ ($3.86) matching KIE rate card."
+}

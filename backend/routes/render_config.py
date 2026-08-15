@@ -209,6 +209,7 @@ def _scene_pairs_from_payload(payload: RenderEstimateIn) -> list[tuple[SceneMoti
             last_frame_url=s.last_frame_url,
             reference_image_urls=tuple(s.reference_image_urls),
             scene_idx=s.scene_idx,
+            input_kind="video" if s.input_is_video else "image",
         )
         pairs.append((req, _resolve_hint(s)))
     return pairs
