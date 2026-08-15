@@ -31,7 +31,7 @@ const MODES = { AVATAR: "avatar", FACELESS: "faceless" };
 const AVATAR_SCRIPT_MAX_CHARS = 5000;
 const MAX_SCENES = 200;
 const SOURCE_HINT = {
-  ai:       "AI still image generated via Gemini Nano Banana — professional photorealistic quality.",
+  ai:       "Faceless48 will generate a professional AI visual for this scene.",
   pexels:   "We'll search the Pexels stock library.",
   pixabay:  "We'll search the Pixabay stock library.",
   uploaded: "We'll use the media file you uploaded for this scene.",
@@ -239,9 +239,9 @@ export default function Studio() {
   const [bulkPrompts, setBulkPrompts] = useState("");
   const [sceneOverrides, setSceneOverrides] = useState([]); // [{source?, pick?}]
 
-  // v1.19.1: Provider kill switch. Hydrate on mount from the public config
+  // Hydrate the provider-opaque public capability on mount
   // endpoint so the AI engine picker + B-roll source picker can gray out
-  // the AI options when admin has disabled fal.ai or AI visuals entirely.
+  // so AI options can be hidden when generation is unavailable.
   // Public endpoint = no auth needed, safe to fetch on every Studio load.
   const [providerConfig, setProviderConfig] = useState(null);
   useEffect(() => {
@@ -464,9 +464,8 @@ export default function Studio() {
       prompt: s.prompt,
       video_url: s.pick?.video_url || null,
       thumb: s.pick?.thumb || null,
-      // Preserve uploaded media type end-to-end (MediaLibrary → Studio → backend →
-      // job doc → render pipeline). Uploaded videos take the free local-normalize
-      // path; uploaded images honour the customer's motion quality choice.
+      // Preserve the media library's image/video type. Uploaded media is
+      // customer-owned B-roll and must stay on the backend's local-only path.
       ...(s.pick?.kind ? { kind: s.pick.kind } : {}),
       // Weight = word count of the script sentence this scene covers.
       // Backend uses it for proportional per-scene duration so cuts land on
@@ -923,17 +922,17 @@ export default function Studio() {
   // The picker explains that the choice only applies to AI scenes; pure stock
   // renders will simply ignore the setting.
   const aiEngineLabel = {
-    flux: "Engine · Flux + Kling i2v",
-    flux_static: "Engine · Flux Static",
-    kling: "Engine · Kling 2.1",
-    veo3: "Engine · Veo 3.1",
-    pika: "Engine · Pika 2.1",
+    flux: "AI Motion · Balanced",
+    flux_static: "AI Visual · Economy",
+    kling: "AI Motion · Cinematic",
+    veo3: "AI Motion · Premium",
+    pika: "AI Motion · Stylized",
   }[aiEngine] || "AI Engine";
   // v1.19.2: hide the "AI Engine" chip entirely for non-admin non-BYOK users.
   // fal.ai / Kling / Veo / Pika are internal-only until we ship gated BYOK.
   // v1.19.4: also hide the chip when AI visuals are disabled by admin —
   // no point exposing an engine picker for a feature that can't fire.
-  const aiDisabledGlobal = providerConfig && (!providerConfig.ai_visuals_enabled || !providerConfig.fal_ai_enabled);
+  const aiDisabledGlobal = providerConfig?.ai_visuals_available === false;
   const chipAiEngine = (canUseAI && !aiDisabledGlobal) ? (
     <button className="chip is-set" data-testid="chip-ai-engine" onClick={() => setModal("ai-engine")}>
       <span className="chip-icon"><Cpu size={14} /></span>
@@ -950,7 +949,7 @@ export default function Studio() {
       className={`chip ${captions ? "is-set" : ""}`}
       data-testid="chip-captions"
       onClick={() => setModal("captions")}
-      title="Burn word-level captions onto the video (second pass on fal.ai)"
+      title="Burn word-level captions onto the finished video"
     >
       <span className="chip-icon">{captions ? <Captions size={14} /> : <CaptionsOff size={14} />}</span>
       <span className="chip-label">{captionsChipLabel}</span>

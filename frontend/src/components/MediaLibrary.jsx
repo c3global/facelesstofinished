@@ -141,7 +141,8 @@ export default function MediaLibrary({ open, onClose, sceneIdx, aspect, onPick }
     }
   };
 
-  // Absolute URL is required for fal.ai to fetch the media at compose time.
+  // The backend needs an absolute URL to download and locally normalize the
+  // customer's B-roll media.
   const absoluteUrl = (relativeOrAbs) => {
     if (!relativeOrAbs) return relativeOrAbs;
     if (relativeOrAbs.startsWith("http")) return relativeOrAbs;

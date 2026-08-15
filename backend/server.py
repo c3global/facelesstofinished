@@ -63,6 +63,13 @@ from render_runtime import (  # noqa: E402
     communicate_process_with_timeout,
     stale_render_query,
 )
+from media_routing import (  # noqa: E402
+    classify_scene_kind,
+    count_visual_scene_sources,
+    cutaway_subclip_slot,
+    is_local_media_reference,
+)
+from render_privacy import scrub_render_for_customer  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("f48")
@@ -665,17 +672,13 @@ class MagicLinkRequest(BaseModel):
 
 @api.get("/config/faceless")
 async def get_faceless_config():
-    """Public read of the current Faceless provider config. No auth — the
-    Studio UI hits this on mount to hide the AI engine picker + show a
-    stock-first banner when fal.ai is disabled by admin."""
+    """Public, provider-opaque Faceless capability response."""
     cfg = await faceless_config.resolve_config(db)
-    # Strip admin-only telemetry (updated_by, exact caps) from the public
-    # response — just tell the UI what's enabled and what the default is.
     return {
-        "fal_ai_enabled": cfg["fal_ai_enabled"],
-        "ai_visuals_enabled": cfg["ai_visuals_enabled"],
+        "ai_visuals_available": bool(
+            cfg["fal_ai_enabled"] and cfg["ai_visuals_enabled"]
+        ),
         "default_broll_source": cfg["default_broll_source"],
-        "max_ai_scenes_per_render": cfg["max_ai_scenes_per_render"],
     }
 
 
@@ -1922,7 +1925,7 @@ async def _trim_stock_video_with_cutaways(
     for j, (cut_url, cut_dur) in enumerate(zip(all_urls, cut_durations)):
         this_freeze = freeze_end if j == n_cuts - 1 else False
         # Use a unique sub-slot so _trim_stock_video's temp names don't collide.
-        sub_slot = scene_idx * 100 + j
+        sub_slot = cutaway_subclip_slot(scene_idx, j)
         # Route sub-clips into a per-cut workdir file so we can concat later.
         sub_path = await _trim_stock_video(
             cut_url, aspect, cut_dur, sub_slot, this_freeze, workdir,
@@ -3500,6 +3503,9 @@ def estimate_render_cost_cents(payload: RenderRequest) -> int:
     elif payload.mode == "faceless":
         # Kokoro TTS + per-scene visuals + compose
         scene_count = max(1, len(payload.scenes) or int(duration_s / 8))
+        ai_scenes, stock_scenes, _uploaded_scenes = count_visual_scene_sources(
+            payload.scenes, payload.broll_source or "pexels", scene_count,
+        )
         # ~$0.005 / 1k chars for Kokoro-class TTS — coefficient deliberately
         # conservative (real renders may cost less but we'd rather reject
         # a borderline payload than surprise-charge the user above the cap).
@@ -3508,12 +3514,9 @@ def estimate_render_cost_cents(payload: RenderRequest) -> int:
         # image + ken-burns) or one of the premium text-to-video engines.
         engine = (payload.ai_engine or "flux").lower()
         if engine in T2V_ENGINES:
-            # Worst case: every scene is an AI t2v clip. Real renders may mix
-            # in cheaper stock — but we estimate the ceiling for the circuit
-            # breaker so a 12-scene Veo render doesn't sneak past us.
-            ai_scenes = sum(1 for s in payload.scenes if (s.get("source") or payload.broll_source) == "ai") or scene_count
+            # Only explicitly AI-sourced scenes call a paid visual model.
+            # Uploaded B-roll contributes zero visual-provider cost.
             cents += ai_scenes * T2V_ENGINES[engine]["cost_cents"]
-            stock_scenes = max(0, scene_count - ai_scenes)
             cents += stock_scenes * 1.0  # stock search is essentially free
         else:
             # Default Flux (id="flux") upgrades to Kling i2v real motion at
@@ -3521,9 +3524,10 @@ def estimate_render_cost_cents(payload: RenderRequest) -> int:
             # ken-burns-only path at ~$0.04/scene. Charity approved both
             # paths in the 2026-02-22 bundle so cost-conscious renders can
             # still ship with stills.
-            cents += scene_count * 4.0   # Flux images (both modes)
+            cents += ai_scenes * 4.0   # Flux images for AI scenes only
             if engine != "flux_static":
-                cents += scene_count * KLING_I2V_COST_CENTS_5S   # Kling i2v motion
+                cents += ai_scenes * KLING_I2V_COST_CENTS_5S   # Kling i2v motion
+            cents += stock_scenes * 1.0  # free APIs + conservative overhead
         cents += 2.0                                   # compose overhead
     elif payload.mode == "composite":
         # Avatar talking-head + B-roll cutaway every N seconds
@@ -4129,25 +4133,33 @@ async def _run_render_faceless(job: dict):
         is_t2v = ai_engine in T2V_ENGINES
         ai_tasks: list = []          # (idx, prompt) — Flux text-to-image jobs (engine="flux" only)
         stock_search_tasks: list = []  # (idx, source, query, orientation) — auto-search jobs
-        scene_kind: list = ["" for _ in scenes]  # "ai" | "ai_t2v" | "stock"
+        scene_kind: list = ["" for _ in scenes]  # AI, stock, or local customer upload
         scene_prompts: list = ["" for _ in scenes]  # prompt text, used by ai_t2v + Flux-i2v scenes
 
         orientation = "portrait" if job["aspect"] == "9_16" else "landscape"
         for i, s in enumerate(scenes):
             effective_src = s.get("source") or global_source
-            if effective_src == "ai":
-                if is_t2v:
-                    scene_kind[i] = "ai_t2v"
-                    scene_prompts[i] = s.get("prompt") or ""
-                    # Sentinel — we have a "resolved" scene (prompt is ready);
-                    # the actual video is generated in normalize_scene.
-                    image_urls[i] = "__t2v_pending__"
+            kind = classify_scene_kind(s, global_source, is_t2v)
+            scene_kind[i] = kind
+            if kind == "uploaded_image" or kind == "uploaded_video":
+                # A customer upload is finished B-roll source material. It is
+                # never sent to FAL, KIE, stock search, or another visual AI
+                # provider. Images get local Ken Burns motion below; videos
+                # are locally trimmed/normalized below.
+                pre_picked = s.get("video_url") or s.get("url")
+                if pre_picked:
+                    image_urls[i] = pre_picked
                 else:
-                    scene_kind[i] = "ai"
-                    scene_prompts[i] = s.get("prompt") or ""  # needed by Kling i2v in normalize step
-                    ai_tasks.append((i, s.get("prompt", "")))
+                    logger.warning("[uploaded-broll] scene %s has no media URL", i)
+            elif kind == "ai_t2v":
+                scene_prompts[i] = s.get("prompt") or ""
+                # Sentinel — we have a "resolved" scene (prompt is ready);
+                # the actual video is generated in normalize_scene.
+                image_urls[i] = "__t2v_pending__"
+            elif kind == "ai":
+                scene_prompts[i] = s.get("prompt") or ""  # needed by Kling i2v in normalize step
+                ai_tasks.append((i, s.get("prompt", "")))
             else:
-                scene_kind[i] = "stock"
                 pre_picked = s.get("video_url") or s.get("url")
                 if pre_picked:
                     image_urls[i] = pre_picked
@@ -4355,93 +4367,6 @@ async def _run_render_faceless(job: dict):
                 f"Adding motion to scenes ({normalize_completed} of {n_normalize})…",
             )
 
-    # v1.20.11 (Iter 69) — Provider registry bridge. Gated by
-    # USE_PROVIDER_REGISTRY (default off). When on AND registry has a
-    # KIE model enabled that supports the request, this returns a video
-    # URL that the caller trims/normalizes locally. Returns None to
-    # signal the caller to fall back to the legacy fal.ai path.
-    async def _try_provider_registry_for_ai_scene(
-        *,
-        idx: int,
-        aspect: str,
-        duration_ms: int,
-        prompt: str,
-        still_image_url: Optional[str],
-        scene_meta: dict,
-        job_id: str,
-    ) -> Optional[str]:
-        try:
-            from providers.pipeline import (
-                run_provider_motion,
-                use_registry_enabled,
-                result_to_scene_telemetry,
-            )
-            from providers.types import MotionInputMode, SceneMotionRequest
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("[registry] import failed: %s", type(exc).__name__)
-            return None
-
-        if not use_registry_enabled():
-            return None
-
-        # Translate this scene into a provider request. Aspect ratio
-        # normalizes 9_16/16_9 → KIE-schema strings. Uploaded-image AI
-        # motion uses FIRST_FRAME mode with the still URL; text-only
-        # AI uses TEXT with just the prompt.
-        aspect_ratio = "9:16" if aspect == "9_16" else "16:9" if aspect == "16_9" else aspect
-        resolution = "720p"  # customer-facing "premium" tier default
-        input_kind_str = "image" if scene_meta.get("kind") == "image" else "ai_generated"
-        if input_kind_str == "image" and still_image_url:
-            mode = MotionInputMode.FIRST_FRAME
-            req = SceneMotionRequest(
-                mode=mode,
-                duration_ms=duration_ms,
-                aspect_ratio=aspect_ratio,
-                resolution=resolution,
-                prompt=(prompt or None),
-                first_frame_url=still_image_url,
-                generate_audio=False,
-                scene_idx=idx,
-                input_kind="image",
-            )
-        else:
-            if not prompt:
-                return None
-            mode = MotionInputMode.TEXT
-            req = SceneMotionRequest(
-                mode=mode,
-                duration_ms=duration_ms,
-                aspect_ratio=aspect_ratio,
-                resolution=resolution,
-                prompt=prompt,
-                generate_audio=False,
-                scene_idx=idx,
-                input_kind="ai_generated",
-            )
-
-        result = await run_provider_motion(req, provider_hint="auto")
-        if result is None:
-            return None
-
-        # Persist per-scene provider telemetry (admin-only, scrubbed for
-        # customers by _scrub_render_for_response).
-        try:
-            await db.renders.update_one(
-                {"id": job_id},
-                {"$set": {f"scenes.{idx}._provider_telemetry": result_to_scene_telemetry(result)}},
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("[registry] telemetry write failed: %s", type(exc).__name__)
-
-        if result.ok and result.output_url:
-            return result.output_url
-        logger.warning(
-            "[registry] scene %s provider result not usable (ok=%s code=%s) — falling back to fal",
-            idx, result.ok, result.error_code,
-        )
-        return None
-
-
     async def normalize_scene(slot: int, idx: int, url: str):
         # v1.20.4: hold the semaphore for the entire scene lifecycle
         # (download → ffmpeg → upload). Only NORMALIZE_CONCURRENCY scenes
@@ -4465,7 +4390,11 @@ async def _run_render_faceless(job: dict):
         # - kburns: 2 min (image download + ffmpeg + upload, no external API)
         # - kling/i2v: 8 min (real Kling gen can take 5-6 min, plus trim + upload)
         # - t2v: 8 min (same as i2v)
-        per_scene_timeout = 180.0 if kind == "stock" else 480.0
+        per_scene_timeout = {
+            "uploaded_image": 120.0,
+            "uploaded_video": 180.0,
+            "stock": 180.0,
+        }.get(kind, 480.0)
 
         async def _run_one():
             override = scene_overrides.get(idx) or {}
@@ -4474,24 +4403,23 @@ async def _run_render_faceless(job: dict):
             # Local paths flow through the compose step unchanged (the local
             # compose function accepts both URLs and paths via `_ensure_local_clip`).
             wd = workdir if USE_LOCAL_COMPOSE else None
-            if kind == "ai":
-                # v1.20.11 (Iter 69): provider-registry hand-off. When
-                # USE_PROVIDER_REGISTRY=1 AND the registry has a KIE model
-                # enabled that supports the request, route AI motion
-                # through it. Fall back to the legacy fal.ai path when
-                # the registry declines or the flag is off. Uploaded
-                # images with paid AI motion also flow through here.
-                registry_url = await _try_provider_registry_for_ai_scene(
-                    idx=idx,
-                    aspect=job["aspect"],
-                    duration_ms=this_dur,
-                    prompt=scene_prompts[idx],
-                    still_image_url=url,
-                    scene_meta=(scenes[idx] if idx < len(scenes) else {}),
-                    job_id=job["id"],
+            if kind == "uploaded_image":
+                # Customer-owned still B-roll: local ffmpeg motion only.
+                return await _make_kenburns_mp4(
+                    url, job["aspect"], this_dur, idx, workdir=wd,
                 )
-                if registry_url:
-                    return await _trim_t2v_clip(registry_url, this_dur, idx)
+            if kind == "uploaded_video":
+                # Customer-owned video/screen recording: local trim and
+                # normalize only. Do not add stock cutaways or call visual AI.
+                return await _trim_stock_video(
+                    url,
+                    job["aspect"],
+                    this_dur,
+                    idx,
+                    freeze_end=override.get("freeze_end", False),
+                    workdir=wd,
+                )
+            if kind == "ai":
                 # `flux_static` is the explicit opt-out: stills + cheap ken-burns
                 # (no Kling i2v cost). Default `flux` upgrades to real AI motion
                 # via Kling 2.1 standard. Falls back to ken-burns if Kling fails.
@@ -4590,9 +4518,9 @@ async def _run_render_faceless(job: dict):
     # Background ticker so progress feels alive during compose.
     stop_ticking = asyncio.Event()
 
-    async def tick_compose_progress():
+    async def tick_compose_progress(start_pct: int = 70):
         scene_idx = 1
-        progress_pct = 70
+        progress_pct = start_pct
         while not stop_ticking.is_set():
             try:
                 await asyncio.wait_for(stop_ticking.wait(), timeout=4.0)
@@ -4691,13 +4619,29 @@ async def _run_render_faceless(job: dict):
     # at least the customer gets their video" path.
     if not composed_url:
         await _set_progress(75, "Local compose failed — uploading to remote…")
+        # The local attempt stopped its ticker. Recovery can spend several
+        # minutes uploading a long render's scenes, so restart the heartbeat
+        # before the first upload to prevent the 300s reaper from falsely
+        # killing healthy work at 75%.
+        stop_ticking.clear()
+        ticker_task = asyncio.create_task(tick_compose_progress(start_pct=75))
         # Promote any local path in kburns_results to a fal URL. Upload
         # sequentially (not in parallel) since we're already in a
         # recovery path and don't want to spike memory during recovery.
         promoted: list = []
         upload_failures = 0
         for (i, u, k, d) in kburns_results:
-            if isinstance(u, str) and u.startswith("/") and os.path.exists(u):
+            if is_local_media_reference(u):
+                # A missing local path is a recovery failure, never a remote
+                # URL. Passing it through produces FAL compose HTTP 422.
+                if not os.path.exists(u):
+                    logger.warning(
+                        "[compose-recovery] scene=%s local clip is missing: %s",
+                        i,
+                        u,
+                    )
+                    upload_failures += 1
+                    continue
                 fal_url = await _fal_upload_with_timeout(u, i, "recovery")
                 if fal_url:
                     promoted.append((i, fal_url, k, d))
@@ -4726,6 +4670,33 @@ async def _run_render_faceless(job: dict):
                     "updated_at": datetime.now(timezone.utc).isoformat(),
                 }},
             )
+            stop_ticking.set()
+            try:
+                await asyncio.wait_for(ticker_task, timeout=1.0)
+            except Exception:
+                pass
+            _cleanup_job_workdir(job_id)
+            return
+
+        # Defense in depth: remote compose must never receive a local path,
+        # even if a future normalization branch returns one unexpectedly.
+        invalid_promoted = [u for (_i, u, _k, _d) in promoted if is_local_media_reference(u)]
+        if invalid_promoted:
+            await db.renders.update_one(
+                {"id": job_id},
+                {"$set": {
+                    "status": "failed",
+                    "error": "Remote compose recovery rejected unresolved local scene paths.",
+                    "actual_cost_cents": actual_cost_cents,
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }},
+            )
+            stop_ticking.set()
+            try:
+                await asyncio.wait_for(ticker_task, timeout=1.0)
+            except Exception:
+                pass
             _cleanup_job_workdir(job_id)
             return
 
@@ -4746,7 +4717,6 @@ async def _run_render_faceless(job: dict):
                 "keyframes": [{"url": audio_url, "timestamp": 0, "duration": total_video_ms}],
             })
 
-        ticker_task = asyncio.create_task(tick_compose_progress())
         try:
             compose_res = await _fal_queue_run(
                 "fal-ai/ffmpeg-api/compose",
@@ -5022,29 +4992,25 @@ async def studio_render_preview_patch(
 
 
 
+def _render_response_for_user(doc: dict, user: AuthUser) -> dict:
+    return doc if user.is_admin else scrub_render_for_customer(doc)
+
+
 @api.post("/studio/render/estimate")
 async def studio_render_estimate(payload: RenderRequest, user: AuthUser = Depends(current_user)):
-    """Pre-render capacity check.
-
-    CUSTOMER-FACING PRIVACY RULE (2026-08-15): dollar / cent estimates
-    are ADMIN-ONLY. Non-admin callers receive an opaque within_capacity
-    boolean derived from the internal circuit breaker; admin callers
-    additionally see the cost breakdown for margin monitoring.
-
-    The silent circuit-breaker in /studio/render still uses
-    RENDER_COST_CIRCUIT_BREAKER_CENTS regardless of who called this
-    endpoint.
-    """
+    """Internal telemetry: conservative cost estimate (cents) for a candidate
+    render. No customer-facing cap enforcement — the silent circuit-breaker
+    lives in /studio/render and uses RENDER_COST_CIRCUIT_BREAKER_CENTS."""
     require_studio(user)
     cents = estimate_render_cost_cents(payload)
-    body: dict[str, Any] = {
+    if not user.is_admin:
+        return {"within_capacity": cents <= RENDER_COST_CIRCUIT_BREAKER_CENTS}
+    return {
         "within_capacity": cents <= RENDER_COST_CIRCUIT_BREAKER_CENTS,
+        "estimated_cost_cents": cents,
+        "estimated_cost_dollars": round(cents / 100.0, 2),
+        "cap_cents": RENDER_COST_CIRCUIT_BREAKER_CENTS,
     }
-    if user.is_admin:
-        body["estimated_cost_cents"] = cents
-        body["estimated_cost_dollars"] = round(cents / 100.0, 2)
-        body["cap_cents"] = RENDER_COST_CIRCUIT_BREAKER_CENTS
-    return body
 
 
 @api.post("/studio/render")
@@ -5115,35 +5081,6 @@ async def studio_render(payload: RenderRequest, user: AuthUser = Depends(current
             status_code=400,
             detail="Render configuration is too large. Please contact support.",
         )
-
-    # v1.20.11 (Iter 69): AI-scene ceiling. Counted PRE-render on scenes
-    # explicitly tagged source="ai" OR (source="uploaded" AND kind="image"
-    # AND motion_quality != "standard"). This is customer-safe policy —
-    # the error surface uses plain language, no dollar amounts or provider
-    # names. Silent circuit-breaker above still catches raw payload
-    # over-runs; this catches the "50 premium scenes" case.
-    if payload.mode in ("faceless", "composite"):
-        try:
-            from providers.cost_estimator import MAX_AI_SCENES_PER_RENDER_DEFAULT
-
-            max_ai = int(os.environ.get("MAX_AI_SCENES_PER_RENDER", str(MAX_AI_SCENES_PER_RENDER_DEFAULT)))
-            ai_scene_count = sum(
-                1 for s in (payload.scenes or [])
-                if (s.get("source") == "ai")
-                or (s.get("source") == "uploaded" and s.get("kind") == "image" and s.get("motion_quality") == "premium")
-            )
-            if ai_scene_count > max_ai:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f"This render includes more premium-motion scenes than your current plan "
-                        f"allows ({max_ai} max). Reduce premium scenes or switch some to Standard motion."
-                    ),
-                )
-        except HTTPException:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("[ai-scene-limit] failed to enforce: %s", type(exc).__name__)
 
     # Group B quota gate — atomically check + decrement the buyer's monthly
     # render allowance before we kick off the background pipeline. Founders
@@ -5220,7 +5157,7 @@ async def studio_render(payload: RenderRequest, user: AuthUser = Depends(current
     asyncio.create_task(_run_render(job_id))
 
     doc.pop("_id", None)
-    return doc
+    return _render_response_for_user(doc, user)
 
 
 # ---------------------------------------------------------------------------
@@ -5537,59 +5474,8 @@ async def studio_render_both_aspects(payload: RenderRequest, user: AuthUser = De
         })
         asyncio.create_task(_run_render(job_id))
         doc.pop("_id", None)
-        jobs.append(doc)
+        jobs.append(_render_response_for_user(doc, user))
     return {"jobs": jobs}
-
-
-# CUSTOMER-FACING PRIVACY (2026-08-15): render rows carry internal cost +
-# provider telemetry (estimated_cost_cents, actual_cost_cents, ai_engine,
-# per-scene provider/model, etc). Non-admin callers must never see any of
-# these fields. This helper is the single choke point applied to every
-# per-render response — the render pipeline itself keeps writing the raw
-# fields into the DB for the admin panel + margin monitoring.
-_CUSTOMER_FORBIDDEN_RENDER_FIELDS = frozenset({
-    "estimated_cost_cents",
-    "actual_cost_cents",
-    "ai_engine",
-    "provider",
-    "model",
-    "kie_task_id",
-    "fal_request_id",
-    "local_compose_debug",
-    "reaped_by_watchdog",
-})
-_CUSTOMER_FORBIDDEN_SCENE_FIELDS = frozenset({
-    "provider",
-    "model",
-    "estimated_cost_cents",
-    "actual_cost_cents",
-    "actual_cost_credits",
-    "external_task_id",
-})
-
-
-def _scrub_render_for_response(doc: dict, *, is_admin: bool) -> dict:
-    """Return a copy of the render row safe for the caller.
-
-    Admins see everything. Non-admins never see cost or provider fields
-    at the top level OR nested inside scenes / scene_overrides.
-    """
-    if is_admin:
-        return doc
-    clean = {k: v for k, v in doc.items() if k not in _CUSTOMER_FORBIDDEN_RENDER_FIELDS}
-    for arr_key in ("scenes", "scene_overrides"):
-        arr = clean.get(arr_key)
-        if isinstance(arr, list):
-            clean[arr_key] = [
-                (
-                    {k: v for k, v in s.items() if k not in _CUSTOMER_FORBIDDEN_SCENE_FIELDS}
-                    if isinstance(s, dict)
-                    else s
-                )
-                for s in arr
-            ]
-    return clean
-
 
 
 @api.get("/studio/render/{job_id}")
@@ -5599,7 +5485,7 @@ async def studio_render_status(job_id: str, user: AuthUser = Depends(current_use
     if not doc:
         raise HTTPException(status_code=404, detail="Not found")
     doc.pop("_id", None)
-    return _scrub_render_for_response(doc, is_admin=user.is_admin)
+    return _render_response_for_user(doc, user)
 
 
 # ---------------------------------------------------------------------------
@@ -5635,7 +5521,7 @@ async def studio_history(user: AuthUser = Depends(current_user)):
     items = []
     async for doc in cursor:
         doc.pop("_id", None)
-        items.append(_scrub_render_for_response(doc, is_admin=user.is_admin))
+        items.append(_render_response_for_user(doc, user))
     return {"items": items}
 
 
@@ -6891,21 +6777,6 @@ register_roadmap_routes(
     current_user=current_user,
     ADMIN_EMAILS=ADMIN_EMAILS,
 )
-
-# KIE.ai webhook callback — HMAC-verified (KIE_WEBHOOK_HMAC_KEY).
-# Mounted on the /api sub-app so the public URL is
-# ``<host>/api/kie/webhook``. If KIE_WEBHOOK_HMAC_KEY is unset the route
-# still exists but returns 503 so KIE will retry after key rotation.
-from routes.kie_callback import build_router as _build_kie_router  # noqa: E402
-
-api.include_router(_build_kie_router(db))
-
-# Provider abstraction — public config + auth-gated cost estimate.
-# Frontend calls /api/config/render-providers on mount to hide unavailable
-# provider options; the pre-render preview calls /api/render/estimate.
-from routes.render_config import build_router as _build_render_config_router  # noqa: E402
-
-api.include_router(_build_render_config_router(current_user_dep=current_user))
 
 
 # ---------------------------------------------------------------------------
