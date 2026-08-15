@@ -1860,7 +1860,6 @@ export default function Studio() {
         enabled={captions}
         style={captionStyle}
         position={captionPosition}
-        isAdmin={isAdmin}
         onPick={(on, styleId) => {
           setCaptions(!!on);
           if (styleId) setCaptionStyle(styleId);

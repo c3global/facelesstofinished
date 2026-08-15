@@ -619,43 +619,37 @@ export function AIEnginePicker({ open, onClose, value, onPick, isAdmin = false, 
     ? "AI-generated visuals are currently unavailable. Pick stock or your uploaded media for now."
     : null;
 
-  // Engine catalogue. Cost field is only shown to admins per Charity's
-  // instruction — customers see a quality/speed hint instead so the UI
-  // doesn't expose vendor pricing.
+  // Engine catalogue. Provider costs belong in admin reporting, never in
+  // the customer-facing Studio — including when an admin is using Studio.
   const options = [
     {
       id: "flux",
       name: isAdmin ? "Flux 1.1 Pro + Kling i2v · Image + Real Motion" : "Balanced · Image + Real Motion",
       hint: isAdmin ? "Flux generates each still, then Kling adds motion." : "Recommended balance of quality, motion, and generation time.",
-      adminCost: "~$0.29/scene",
       Icon: Sparkles,
     },
     {
       id: "flux_static",
       name: isAdmin ? "Flux 1.1 Pro · Static" : "Economy · AI Still",
       hint: "Budget option. Still images with simple ken-burns zoom — no AI motion.",
-      adminCost: "~$0.04/scene",
       Icon: Sparkles,
     },
     {
       id: "kling",
       name: isAdmin ? "Kling 2.1 Master · Cinematic AI Video" : "Cinematic · AI Motion",
       hint: "Premium cinematic motion. Best for action, characters, and complex scenes.",
-      adminCost: "~$0.50/scene",
       Icon: Film,
     },
     {
       id: "veo3",
       name: isAdmin ? "Google Veo 3.1 Fast · AI Video" : "Premium · AI Motion",
       hint: "Highest fidelity. Best for realistic people, dialogue, and product shots.",
-      adminCost: "~$1.00/scene",
       Icon: Film,
     },
     {
       id: "pika",
       name: isAdmin ? "Pika 2.1 · AI Video" : "Stylized · AI Motion",
       hint: "Stylized AI video. Great for whimsical, dreamy, fashion-style content.",
-      adminCost: "~$0.40/scene",
       Icon: Film,
     },
   ];
@@ -678,11 +672,6 @@ export function AIEnginePicker({ open, onClose, value, onPick, isAdmin = false, 
             <div className="source-icon"><o.Icon size={22} /></div>
             <div className="source-name">{o.name}</div>
             <div className="source-desc">{o.hint}</div>
-            {isAdmin && (
-              <div className="source-desc" style={{ marginTop: 6, fontSize: 11, opacity: 0.6 }}>
-                {o.adminCost}
-              </div>
-            )}
           </button>
         ))}
       </div>
@@ -806,7 +795,7 @@ export function StockPicker({ open, onClose, sceneIdx, defaultSource, query: def
  * entirely. When enabled=false the picked style is preserved in state so
  * toggling back on remembers the last choice (no surprise resets).
  */
-export function CaptionsPicker({ open, onClose, enabled, style, position = "bottom", onPick, onPositionChange, isAdmin = false }) {
+export function CaptionsPicker({ open, onClose, enabled, style, position = "bottom", onPick, onPositionChange }) {
   const options = [
     {
       id: "boxed",
@@ -858,11 +847,6 @@ export function CaptionsPicker({ open, onClose, enabled, style, position = "bott
               <div className="source-icon"><opt.Icon size={22} /></div>
               <div className="source-name">{opt.name}</div>
               <div className="source-desc">{opt.hint}</div>
-              {isAdmin && (
-                <div className="source-desc" style={{ marginTop: 6, fontSize: 11, opacity: 0.7 }}>
-                  +$0.10 / render
-                </div>
-              )}
             </button>
           );
         })}
