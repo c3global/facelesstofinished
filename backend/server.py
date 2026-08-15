@@ -2219,6 +2219,25 @@ def _extract_stock_query(prompt: str) -> str:
     return " ".join(kept[:6])
 
 
+def _resolve_stock_query_for_scene(scene: dict) -> str:
+    """Choose the stock-library search string for a Pexels/Pixabay scene.
+
+    Contract enforced here (v1.20.12): only `scene.search_query` may reach
+    a stock provider. If it is missing, derive a sanitized fallback from
+    `scene.prompt` via `_extract_stock_query`. The raw detailed AI prompt
+    is NEVER passed straight to Pexels/Pixabay — stock libraries index
+    concrete visual nouns, not cinematic shot descriptions.
+
+    Never makes an LLM call — this is a pure string transform intended to
+    run inside the render pipeline. Callers that want a *paired* prompt +
+    stock query for a fresh script should go through /studio/broll-prompts.
+    """
+    sq = (scene.get("search_query") or "").strip()
+    if sq:
+        return sq
+    return _extract_stock_query(scene.get("prompt") or "")
+
+
 def _score_pexels_hit(video: dict, keyword_set: set) -> int:
     """Score a Pexels video by tag/title overlap with extracted keywords."""
     haystack = " ".join([
@@ -4202,13 +4221,22 @@ async def _run_render_faceless(job: dict):
                 if pre_picked:
                     image_urls[i] = pre_picked
                 else:
-                    # No pre-picked clip — auto-search. v1.19.7: prefer the
-                    # LLM-generated `search_query` (plain visual nouns) over
-                    # the cinematic `prompt` because Pexels/Pixabay index
-                    # tags, not shot descriptions. Falls back to the prompt
-                    # if the LLM didn't emit a search line.
-                    stock_q = s.get("search_query") or s.get("prompt") or ""
-                    stock_search_tasks.append((i, effective_src, stock_q, orientation))
+                    # No pre-picked clip — auto-search. v1.20.12: strict
+                    # routing contract — Pexels/Pixabay only ever see the
+                    # LLM-generated `search_query` (2-5 concrete visual
+                    # nouns). If the scene has no search_query (legacy
+                    # payload), we derive one from the prompt via
+                    # `_extract_stock_query` — never the raw AI prompt
+                    # itself. See `_resolve_stock_query_for_scene`.
+                    stock_q = _resolve_stock_query_for_scene(s)
+                    if stock_q:
+                        stock_search_tasks.append((i, effective_src, stock_q, orientation))
+                    else:
+                        logger.warning(
+                            "[stock-routing] scene %s has neither search_query "
+                            "nor a sanitizable prompt — skipping auto-search",
+                            i,
+                        )
 
         completed = 0
         total_ai = len(ai_tasks)
@@ -4498,7 +4526,7 @@ async def _run_render_faceless(job: dict):
             prepicked = scene_meta.get("cutaway_urls") or None
             return await _trim_stock_video_with_cutaways(
                 primary_url=url,
-                search_query=(scene_meta.get("search_query") or scene_meta.get("prompt") or ""),
+                search_query=_resolve_stock_query_for_scene(scene_meta),
                 source=(scene_meta.get("source") or global_source or "pexels"),
                 aspect=job["aspect"],
                 duration_ms=this_dur,

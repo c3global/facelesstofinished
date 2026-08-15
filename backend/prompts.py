@@ -323,13 +323,26 @@ RULES for the Search line:
 - STRIP the abstract theme of the script (e.g. "success", "confidence", "strategy", "AI", "content") — Pexels/Pixabay have zero footage tagged with those; instead, pick the SPECIFIC visible thing that REPRESENTS the theme.
 - Prefer everyday, filmable subjects: `person typing laptop`, `city skyline morning`, `hands drawing whiteboard`, `runner sunrise trail`, `coffee pouring cup`, `team meeting office`.
 - If the beat's meaning is abstract, translate it to a concrete metaphor scene. Never pass an abstract noun as a search term.
+- Every stock query must describe ONE ordinary, continuous, real-world clip a human videographer could plausibly have filmed in a single take.
+- NEVER request split screens, cursor clicks, interface states, dashboards, on-screen menus, text overlays, comparison layouts, or exact software behavior. Stock libraries do not index software UI states.
+- Translate software / interface actions into contextual footage of a person using a computer — e.g. `content creator using laptop`, `hands typing keyboard`, `home office workspace`, `person recording computer screen`, `creator editing video desk` — pick the physical scene that the software action would look like on camera.
+- Keep queries to 2-5 concrete words. No sentences, no commas, no dashes, no "vs", no adjectives beyond one contextual color/setting word.
 
 Good pair example (beat: "That's when I realized the algorithm rewards consistency, not perfection."):
 Prompt: Wide overhead shot of hands typing on laptop keyboard, soft window daylight, slow camera drift right
 Search: person typing laptop keyboard
 
+Software / interface translation examples (required — always translate, never pass through):
+AI prompt: Split screen, influencer setup versus simple screen recording software open
+Stock query: content creator using laptop
+
+AI prompt: Cursor clicking start recording in screen capture software
+Stock query: person recording computer screen
+
 Bad Search examples (do not do this):
 - "algorithm consistency perfection" (abstract — stock libraries have no footage of these)
 - "wide overhead soft daylight" (shot-type + lighting words — filtered out by stock search)
+- "split screen influencer versus software" (compound + UI state — no stock clip matches)
+- "cursor clicking record button" (interface behavior — no stock clip matches)
 
 Output ONLY the paired lines, one Prompt: and one Search: per beat, in order. No numbering, no bullets, no commentary."""
