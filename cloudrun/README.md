@@ -28,6 +28,9 @@ providers, progress fields, quota refund logic, and R2 output.
 - One execution processes one render ID.
 - A global Mongo lease serializes executions, and the per-job claim prevents a
   second execution from claiming the same queued job.
+- Run `--probe` before enabling the scheduler. It checks MongoDB, ffmpeg,
+  object storage, and required provider configuration without claiming a job
+  or making a paid call.
 - Secrets belong in Google Secret Manager, never GitHub or YAML.
 - Timeline features remain disabled.
 

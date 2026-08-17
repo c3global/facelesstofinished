@@ -10,6 +10,7 @@ import asyncio
 import logging
 import os
 import signal
+import shutil
 import uuid
 from datetime import datetime, timezone
 
@@ -35,10 +36,48 @@ def _arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run one Faceless48 render job")
     parser.add_argument("--job-id", default=os.environ.get("RENDER_JOB_ID"))
     parser.add_argument("--execution-id", default=os.environ.get("RENDER_EXECUTION_ID"))
+    parser.add_argument(
+        "--probe",
+        action="store_true",
+        help="verify worker dependencies without claiming or rendering a job",
+    )
     args = parser.parse_args()
     if not args.execution_id:
         args.execution_id = os.environ.get("CLOUD_RUN_EXECUTION") or uuid.uuid4().hex
     return args
+
+
+async def _probe() -> int:
+    """Validate production dependencies without mutating customer data."""
+    from server import (  # noqa: PLC0415
+        FAL_API_KEY,
+        PEXELS_API_KEY,
+        PIXABAY_API_KEY,
+        _R2_ENABLED,
+        db,
+        mongo,
+    )
+
+    try:
+        await db.command("ping")
+        missing = []
+        if shutil.which("ffmpeg") is None:
+            missing.append("ffmpeg")
+        if not _R2_ENABLED:
+            missing.append("object_storage")
+        if not FAL_API_KEY:
+            missing.append("voice_provider")
+        if not PEXELS_API_KEY:
+            missing.append("stock_provider_primary")
+        if not PIXABAY_API_KEY:
+            missing.append("stock_provider_secondary")
+        if missing:
+            logger.error("render worker probe missing required configuration: %s", ",".join(missing))
+            return 2
+        logger.info("render worker readiness probe passed")
+        return 0
+    finally:
+        mongo.close()
 
 
 async def _acquire_queue_lock(db, execution_id: str, lease_s: int) -> bool:
@@ -236,6 +275,8 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
     args = _arguments()
+    if args.probe:
+        return asyncio.run(_probe())
     return asyncio.run(_run(args.job_id, args.execution_id))
 
 
