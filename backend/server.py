@@ -51,7 +51,7 @@ from prompts import (
 # ---------------------------------------------------------------------------
 # IMPORTANT: load_dotenv() MUST run before importing admin_routes, because
 # admin_routes reads PINBALL_WEBHOOK_TOKEN at module-import time.
-load_dotenv()
+load_dotenv(os.environ.get("RENDER_ENV_FILE") or None)
 
 from admin_routes import register_admin_routes, register_faceless_config_admin_routes  # noqa: E402
 from uploads_routes import register_uploads_routes  # noqa: E402

@@ -23,6 +23,8 @@ spec:
                   cpu: "2"
                   memory: 4Gi
               env:
+                - name: RENDER_ENV_FILE
+                  value: /secrets/render.env
                 - name: DB_NAME
                   value: faceless48
                 - name: USE_LOCAL_COMPOSE

@@ -32,6 +32,9 @@ providers, progress fields, quota refund logic, and R2 output.
   object storage, and required provider configuration without claiming a job
   or making a paid call.
 - Secrets belong in Google Secret Manager, never GitHub or YAML.
+- Mount the consolidated environment secret at `/secrets/render.env` and set
+  `RENDER_ENV_FILE=/secrets/render.env`. Never mount a secret over
+  `/app/backend`, because that would hide the worker code inside the image.
 - Timeline features remain disabled.
 
 ## Files
