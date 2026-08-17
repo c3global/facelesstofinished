@@ -1,0 +1,25 @@
+# Billing/API activation is required before this configuration can run.
+# It builds and stores an image only; it does not deploy or execute a job.
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --file
+      - cloudrun/render-worker.Dockerfile
+      - --tag
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/render-worker:$COMMIT_SHA
+      - .
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/render-worker:$COMMIT_SHA
+
+images:
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/render-worker:$COMMIT_SHA
+
+substitutions:
+  _REGION: us-east1
+  _REPOSITORY: faceless48
+
+options:
+  logging: CLOUD_LOGGING_ONLY
