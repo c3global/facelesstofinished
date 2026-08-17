@@ -173,6 +173,7 @@ BUILD_COMMIT = (
 )
 DATABASE_MIGRATION_ENABLED = os.environ.get("DATABASE_MIGRATION_ENABLED", "0").strip() == "1"
 DATABASE_MIGRATION_TARGET_URL = os.environ.get("DATABASE_MIGRATION_TARGET_URL", "").strip()
+DATABASE_MIGRATION_TARGET_DB = os.environ.get("DATABASE_MIGRATION_TARGET_DB", "").strip()
 DATABASE_MIGRATION_TOKEN = os.environ.get("DATABASE_MIGRATION_TOKEN", "")
 
 KNOWN_ENTITLEMENTS = ["base", "shorts", "studio", "byok"]
@@ -601,7 +602,11 @@ def _require_database_migration_token(token: Optional[str]) -> None:
     """Fail closed unless the one-time migration gate is fully configured."""
     if not DATABASE_MIGRATION_ENABLED:
         raise HTTPException(status_code=404, detail="Not found")
-    if not DATABASE_MIGRATION_TARGET_URL or not DATABASE_MIGRATION_TOKEN:
+    if (
+        not DATABASE_MIGRATION_TARGET_URL
+        or not DATABASE_MIGRATION_TARGET_DB
+        or not DATABASE_MIGRATION_TOKEN
+    ):
         raise HTTPException(status_code=503, detail="Migration is not configured")
     if not token or not secrets.compare_digest(token, DATABASE_MIGRATION_TOKEN):
         raise HTTPException(status_code=403, detail="Migration authorization failed")
@@ -619,7 +624,7 @@ async def _run_database_migration(migration_id: str) -> None:
             serverSelectionTimeoutMS=15_000,
         )
         await target_client.admin.command("ping")
-        target_db = target_client[DB_NAME]
+        target_db = target_client[DATABASE_MIGRATION_TARGET_DB]
 
         async def record_progress(update: dict[str, Any]) -> None:
             await state.update_one(
@@ -680,7 +685,8 @@ async def start_database_migration(
             "_id": migration_id,
             "status": "queued",
             "phase": "queued",
-            "database": DB_NAME,
+            "source_database": DB_NAME,
+            "target_database": DATABASE_MIGRATION_TARGET_DB,
             "created_at": now,
             "updated_at": now,
         }
