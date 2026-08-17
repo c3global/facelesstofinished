@@ -35,6 +35,10 @@ spec:
                   value: "900"
                 - name: RENDER_HEARTBEAT_INTERVAL_S
                   value: "15"
+                - name: RENDER_WORKER_LOCK_LEASE_S
+                  value: "180"
+                - name: RENDER_WORKER_LOCK_HEARTBEAT_S
+                  value: "30"
                 - name: TIMELINE_FEATURES_ENABLED
                   value: "0"
                 # Secrets are intentionally omitted. RENDER_JOB_ID and

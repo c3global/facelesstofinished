@@ -5,6 +5,10 @@ on:
     paths:
       - "backend/render_worker.py"
       - "backend/render_worker_runtime.py"
+      - "backend/render_execution.py"
+      - "backend/render_runtime.py"
+      - "backend/render_privacy.py"
+      - "backend/server.py"
       - "backend/requirements-worker.txt"
       - "backend/tests/test_render_worker_runtime.py"
       - "cloudrun/**"
@@ -14,6 +18,10 @@ on:
     paths:
       - "backend/render_worker.py"
       - "backend/render_worker_runtime.py"
+      - "backend/render_execution.py"
+      - "backend/render_runtime.py"
+      - "backend/render_privacy.py"
+      - "backend/server.py"
       - "backend/requirements-worker.txt"
       - "backend/tests/test_render_worker_runtime.py"
       - "cloudrun/**"
@@ -33,6 +41,6 @@ jobs:
         with:
           python-version: "3.12"
       - name: Compile worker modules
-        run: python -m py_compile render_worker.py render_worker_runtime.py
+        run: python -m py_compile render_worker.py render_worker_runtime.py render_runtime.py render_execution.py render_privacy.py
       - name: Run dependency-free worker tests
         run: python -m unittest tests/test_render_worker_runtime.py -v

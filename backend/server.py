@@ -70,6 +70,7 @@ from media_routing import (  # noqa: E402
     is_local_media_reference,
 )
 from render_privacy import scrub_render_for_customer  # noqa: E402
+from render_execution import should_use_isolated_queue  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("f48")
@@ -149,6 +150,12 @@ RENDER_JOB_CONCURRENCY = max(1, int(os.environ.get("RENDER_JOB_CONCURRENCY", "1"
 STOCK_SEARCH_TIMEOUT_S = max(5, int(os.environ.get("STOCK_SEARCH_TIMEOUT_S", "20")))
 STUCK_RENDER_TIMEOUT_S = max(60, int(os.environ.get("STUCK_RENDER_TIMEOUT_S", "300")))
 RENDER_HEARTBEAT_INTERVAL_S = max(5, int(os.environ.get("RENDER_HEARTBEAT_INTERVAL_S", "15")))
+RENDER_EXECUTION_BACKEND = os.environ.get("RENDER_EXECUTION_BACKEND", "local").strip().lower()
+ISOLATED_RENDER_MODES = {
+    mode.strip().lower()
+    for mode in os.environ.get("ISOLATED_RENDER_MODES", "faceless").split(",")
+    if mode.strip()
+}
 # Timeline previews currently perform paid per-scene TTS before the preview
 # can be shown. Keep both timeline entry points fail-closed until the workflow
 # is made idempotent and can guarantee that failed previews do not spend.
@@ -578,6 +585,7 @@ async def health():
             "render_job_concurrency": RENDER_JOB_CONCURRENCY,
             "stock_search_timeout_s": STOCK_SEARCH_TIMEOUT_S,
             "timeline_features_enabled": TIMELINE_FEATURES_ENABLED,
+            "isolated_worker": RENDER_EXECUTION_BACKEND == "cloud_run_queue",
         },
     }
 
@@ -5129,6 +5137,18 @@ async def studio_render_estimate(payload: RenderRequest, user: AuthUser = Depend
     }
 
 
+def _start_render_execution(job_id: str, mode: str) -> None:
+    """Start locally, or leave a Faceless job for the isolated queue worker."""
+    if should_use_isolated_queue(
+        backend=RENDER_EXECUTION_BACKEND,
+        isolated_modes=ISOLATED_RENDER_MODES,
+        mode=mode,
+    ):
+        logger.info("[render-queue] job=%s mode=%s queued for isolated worker", job_id, mode)
+        return
+    asyncio.create_task(_run_render(job_id))
+
+
 @api.post("/studio/render")
 async def studio_render(payload: RenderRequest, user: AuthUser = Depends(current_user)):
     require_studio(user)
@@ -5271,8 +5291,8 @@ async def studio_render(payload: RenderRequest, user: AuthUser = Depends(current
         "estimated_cost_cents": estimated_cents,
     })
 
-    # Kick off background work
-    asyncio.create_task(_run_render(job_id))
+    # Start locally or leave Faceless work queued for Cloud Run.
+    _start_render_execution(job_id, payload.mode)
 
     doc.pop("_id", None)
     return _render_response_for_user(doc, user)
@@ -5590,7 +5610,7 @@ async def studio_render_both_aspects(payload: RenderRequest, user: AuthUser = De
             "scene_count": len(per_payload.scenes),
             "estimated_cost_cents": estimated_cents,
         })
-        asyncio.create_task(_run_render(job_id))
+        _start_render_execution(job_id, per_payload.mode)
         doc.pop("_id", None)
         jobs.append(_render_response_for_user(doc, user))
     return {"jobs": jobs}
@@ -5853,9 +5873,7 @@ async def studio_timeline_rerender(
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.renders.insert_one(doc)
-    # Use the shared dispatcher so timeline re-renders receive the same
-    # heartbeat and process-wide capacity protection as normal renders.
-    asyncio.create_task(_run_render(new_job_id))
+    _start_render_execution(new_job_id, "faceless")
     await _log_activity("studio_timeline_rerender", user.email, {
         "parent_job_id": job_id,
         "new_job_id": new_job_id,
