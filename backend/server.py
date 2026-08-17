@@ -51,7 +51,7 @@ from prompts import (
 # ---------------------------------------------------------------------------
 # IMPORTANT: load_dotenv() MUST run before importing admin_routes, because
 # admin_routes reads PINBALL_WEBHOOK_TOKEN at module-import time.
-load_dotenv()
+load_dotenv(os.environ.get("RENDER_ENV_FILE") or None)
 
 from admin_routes import register_admin_routes, register_faceless_config_admin_routes  # noqa: E402
 from uploads_routes import register_uploads_routes  # noqa: E402
@@ -70,6 +70,11 @@ from media_routing import (  # noqa: E402
     is_local_media_reference,
 )
 from render_privacy import scrub_render_for_customer  # noqa: E402
+from render_execution import should_use_isolated_queue  # noqa: E402
+from database_migration import (  # noqa: E402
+    MIGRATION_STATE_COLLECTION,
+    copy_database,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("f48")
@@ -149,6 +154,12 @@ RENDER_JOB_CONCURRENCY = max(1, int(os.environ.get("RENDER_JOB_CONCURRENCY", "1"
 STOCK_SEARCH_TIMEOUT_S = max(5, int(os.environ.get("STOCK_SEARCH_TIMEOUT_S", "20")))
 STUCK_RENDER_TIMEOUT_S = max(60, int(os.environ.get("STUCK_RENDER_TIMEOUT_S", "300")))
 RENDER_HEARTBEAT_INTERVAL_S = max(5, int(os.environ.get("RENDER_HEARTBEAT_INTERVAL_S", "15")))
+RENDER_EXECUTION_BACKEND = os.environ.get("RENDER_EXECUTION_BACKEND", "local").strip().lower()
+ISOLATED_RENDER_MODES = {
+    mode.strip().lower()
+    for mode in os.environ.get("ISOLATED_RENDER_MODES", "faceless").split(",")
+    if mode.strip()
+}
 # Timeline previews currently perform paid per-scene TTS before the preview
 # can be shown. Keep both timeline entry points fail-closed until the workflow
 # is made idempotent and can guarantee that failed previews do not spend.
@@ -160,6 +171,9 @@ BUILD_COMMIT = (
     or os.environ.get("SOURCE_VERSION")
     or "unknown"
 )
+DATABASE_MIGRATION_ENABLED = os.environ.get("DATABASE_MIGRATION_ENABLED", "0").strip() == "1"
+DATABASE_MIGRATION_TARGET_URL = os.environ.get("DATABASE_MIGRATION_TARGET_URL", "").strip()
+DATABASE_MIGRATION_TOKEN = os.environ.get("DATABASE_MIGRATION_TOKEN", "")
 
 KNOWN_ENTITLEMENTS = ["base", "shorts", "studio", "byok"]
 JWT_ALG = "HS256"
@@ -578,8 +592,114 @@ async def health():
             "render_job_concurrency": RENDER_JOB_CONCURRENCY,
             "stock_search_timeout_s": STOCK_SEARCH_TIMEOUT_S,
             "timeline_features_enabled": TIMELINE_FEATURES_ENABLED,
+            "isolated_worker": RENDER_EXECUTION_BACKEND == "cloud_run_queue",
         },
     }
+
+
+def _require_database_migration_token(token: Optional[str]) -> None:
+    """Fail closed unless the one-time migration gate is fully configured."""
+    if not DATABASE_MIGRATION_ENABLED:
+        raise HTTPException(status_code=404, detail="Not found")
+    if not DATABASE_MIGRATION_TARGET_URL or not DATABASE_MIGRATION_TOKEN:
+        raise HTTPException(status_code=503, detail="Migration is not configured")
+    if not token or not secrets.compare_digest(token, DATABASE_MIGRATION_TOKEN):
+        raise HTTPException(status_code=403, detail="Migration authorization failed")
+
+
+async def _run_database_migration(migration_id: str) -> None:
+    """Copy the live Emergent database to the owner-controlled Atlas cluster."""
+    state = db[MIGRATION_STATE_COLLECTION]
+    target_client: AsyncIOMotorClient | None = None
+    try:
+        if DATABASE_MIGRATION_TARGET_URL == MONGO_URL:
+            raise RuntimeError("source and target databases must be different")
+        target_client = AsyncIOMotorClient(
+            DATABASE_MIGRATION_TARGET_URL,
+            serverSelectionTimeoutMS=15_000,
+        )
+        await target_client.admin.command("ping")
+        target_db = target_client[DB_NAME]
+
+        async def record_progress(update: dict[str, Any]) -> None:
+            await state.update_one(
+                {"_id": migration_id},
+                {
+                    "$set": {
+                        **update,
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                },
+            )
+
+        await record_progress({"status": "running", "phase": "copying"})
+        summary = await copy_database(db, target_db, progress=record_progress)
+        if summary["source_total"] != summary["target_total"]:
+            raise RuntimeError("database verification totals do not match")
+        await record_progress(
+            {
+                "status": "complete",
+                "phase": "verified",
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                **summary,
+            }
+        )
+    except Exception as exc:  # noqa: BLE001 - persist a safe operational failure
+        logger.exception("database migration %s failed", migration_id)
+        await state.update_one(
+            {"_id": migration_id},
+            {
+                "$set": {
+                    "status": "failed",
+                    "phase": "failed",
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }
+            },
+        )
+    finally:
+        if target_client is not None:
+            target_client.close()
+
+
+@api.post("/admin/database-migration/start")
+async def start_database_migration(
+    x_migration_token: Optional[str] = Header(default=None),
+):
+    """Start the explicitly enabled, one-time owner database migration."""
+    _require_database_migration_token(x_migration_token)
+    state = db[MIGRATION_STATE_COLLECTION]
+    existing = await state.find_one({"status": {"$in": ["queued", "running"]}})
+    if existing:
+        return {"migration_id": existing["_id"], "status": existing["status"]}
+
+    migration_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+    await state.insert_one(
+        {
+            "_id": migration_id,
+            "status": "queued",
+            "phase": "queued",
+            "database": DB_NAME,
+            "created_at": now,
+            "updated_at": now,
+        }
+    )
+    asyncio.create_task(_run_database_migration(migration_id))
+    return {"migration_id": migration_id, "status": "queued"}
+
+
+@api.get("/admin/database-migration/{migration_id}")
+async def database_migration_status(
+    migration_id: str,
+    x_migration_token: Optional[str] = Header(default=None),
+):
+    """Return progress without exposing either MongoDB connection string."""
+    _require_database_migration_token(x_migration_token)
+    result = await db[MIGRATION_STATE_COLLECTION].find_one({"_id": migration_id})
+    if not result:
+        raise HTTPException(status_code=404, detail="Migration not found")
+    return result
 
 
 async def _resolve_signin(email: str) -> Optional[dict]:
@@ -5129,6 +5249,18 @@ async def studio_render_estimate(payload: RenderRequest, user: AuthUser = Depend
     }
 
 
+def _start_render_execution(job_id: str, mode: str) -> None:
+    """Start locally, or leave a Faceless job for the isolated queue worker."""
+    if should_use_isolated_queue(
+        backend=RENDER_EXECUTION_BACKEND,
+        isolated_modes=ISOLATED_RENDER_MODES,
+        mode=mode,
+    ):
+        logger.info("[render-queue] job=%s mode=%s queued for isolated worker", job_id, mode)
+        return
+    asyncio.create_task(_run_render(job_id))
+
+
 @api.post("/studio/render")
 async def studio_render(payload: RenderRequest, user: AuthUser = Depends(current_user)):
     require_studio(user)
@@ -5271,8 +5403,8 @@ async def studio_render(payload: RenderRequest, user: AuthUser = Depends(current
         "estimated_cost_cents": estimated_cents,
     })
 
-    # Kick off background work
-    asyncio.create_task(_run_render(job_id))
+    # Start locally or leave Faceless work queued for Cloud Run.
+    _start_render_execution(job_id, payload.mode)
 
     doc.pop("_id", None)
     return _render_response_for_user(doc, user)
@@ -5590,7 +5722,7 @@ async def studio_render_both_aspects(payload: RenderRequest, user: AuthUser = De
             "scene_count": len(per_payload.scenes),
             "estimated_cost_cents": estimated_cents,
         })
-        asyncio.create_task(_run_render(job_id))
+        _start_render_execution(job_id, per_payload.mode)
         doc.pop("_id", None)
         jobs.append(_render_response_for_user(doc, user))
     return {"jobs": jobs}
@@ -5853,9 +5985,7 @@ async def studio_timeline_rerender(
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.renders.insert_one(doc)
-    # Use the shared dispatcher so timeline re-renders receive the same
-    # heartbeat and process-wide capacity protection as normal renders.
-    asyncio.create_task(_run_render(new_job_id))
+    _start_render_execution(new_job_id, "faceless")
     await _log_activity("studio_timeline_rerender", user.email, {
         "parent_job_id": job_id,
         "new_job_id": new_job_id,

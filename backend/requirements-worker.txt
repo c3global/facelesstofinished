@@ -1,0 +1,18 @@
+# Runtime dependencies for the isolated Cloud Run render worker.
+#
+# Keep this separate from requirements.txt: the web application uses
+# Emergent's private `emergentintegrations` package for script/thumbnail
+# routes, but the render pipeline does not. That private package is not
+# available to Google Cloud Build and must not be required by this image.
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+motor==3.6.0
+python-dotenv==1.0.1
+httpx==0.28.1
+pydantic==2.10.4
+PyJWT==2.10.1
+fal-client==1.0.0
+imageio-ffmpeg==0.6.0
+cryptography==48.0.0
+python-multipart==0.0.30
+boto3==1.43.21

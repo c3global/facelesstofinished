@@ -1,5 +1,8 @@
 # AI Script Engine
 
+> The current full-stack application is in this repository. Cloud Run render
+> worker preparation is documented in [`cloudrun/README.md`](cloudrun/README.md).
+
 A branded tool for **C3 Global** that generates complete faceless YouTube video scripts from a topic or keyword. Lives at `sprint.c3global.co/faceless`.
 
 Built with React + Vite. Calls the Anthropic API directly from the browser.

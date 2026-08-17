@@ -1,0 +1,47 @@
+# Template only. This file creates nothing by itself.
+# Replace PROJECT_ID, REGION, and VERSION after billing is enabled.
+apiVersion: run.googleapis.com/v1
+kind: Job
+metadata:
+  name: faceless48-render-worker
+  labels:
+    app: faceless48
+    component: render-worker
+spec:
+  template:
+    spec:
+      taskCount: 1
+      template:
+        spec:
+          serviceAccountName: faceless48-render-runtime@PROJECT_ID.iam.gserviceaccount.com
+          maxRetries: 0
+          timeoutSeconds: 3600
+          containers:
+            - image: REGION-docker.pkg.dev/PROJECT_ID/faceless48/render-worker:VERSION
+              resources:
+                limits:
+                  cpu: "2"
+                  memory: 4Gi
+              env:
+                - name: RENDER_ENV_FILE
+                  value: /secrets/render.env
+                - name: DB_NAME
+                  value: faceless48
+                - name: USE_LOCAL_COMPOSE
+                  value: "1"
+                - name: NORMALIZE_CONCURRENCY
+                  value: "1"
+                - name: RENDER_JOB_CONCURRENCY
+                  value: "1"
+                - name: STUCK_RENDER_TIMEOUT_S
+                  value: "900"
+                - name: RENDER_HEARTBEAT_INTERVAL_S
+                  value: "15"
+                - name: RENDER_WORKER_LOCK_LEASE_S
+                  value: "180"
+                - name: RENDER_WORKER_LOCK_HEARTBEAT_S
+                  value: "30"
+                - name: TIMELINE_FEATURES_ENABLED
+                  value: "0"
+                # Secrets are intentionally omitted. RENDER_JOB_ID and
+                # RENDER_EXECUTION_ID are per-execution overrides.

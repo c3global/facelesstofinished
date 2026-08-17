@@ -1,0 +1,15 @@
+.git
+.github
+**/.env
+**/.env.*
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+frontend
+legacy_netlify
+test_reports
+*.mp4
+*.mov
+*.webm
+*.wav
+*.mp3

@@ -1,0 +1,46 @@
+name: Render worker foundation
+
+on:
+  pull_request:
+    paths:
+      - "backend/render_worker.py"
+      - "backend/render_worker_runtime.py"
+      - "backend/render_execution.py"
+      - "backend/render_runtime.py"
+      - "backend/render_privacy.py"
+      - "backend/server.py"
+      - "backend/requirements-worker.txt"
+      - "backend/tests/test_render_worker_runtime.py"
+      - "cloudrun/**"
+      - ".github/workflows/render-worker-foundation.yml"
+  push:
+    branches: [main]
+    paths:
+      - "backend/render_worker.py"
+      - "backend/render_worker_runtime.py"
+      - "backend/render_execution.py"
+      - "backend/render_runtime.py"
+      - "backend/render_privacy.py"
+      - "backend/server.py"
+      - "backend/requirements-worker.txt"
+      - "backend/tests/test_render_worker_runtime.py"
+      - "cloudrun/**"
+
+permissions:
+  contents: read
+
+jobs:
+  python-foundation:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile worker modules
+        run: python -m py_compile render_worker.py render_worker_runtime.py render_runtime.py render_execution.py render_privacy.py
+      - name: Run dependency-free worker tests
+        run: python -m unittest tests/test_render_worker_runtime.py -v
