@@ -31,6 +31,8 @@ providers, progress fields, quota refund logic, and R2 output.
 
 - `render-worker.Dockerfile` — Python 3.12 + ffmpeg image.
 - `render-worker.Dockerfile.dockerignore` — excludes secrets and unrelated apps.
+- `../backend/requirements-worker.txt` — public render-only dependencies; it
+  intentionally excludes Emergent's private script/thumbnail integration.
 - `render-worker.env.example` — variable names and safe defaults only.
 - `job.template.yaml` — non-deploying 2 CPU / 4 GiB / 60-minute template.
 - `cloudbuild.render-worker.yaml` — build-and-push only; never deploys a job.

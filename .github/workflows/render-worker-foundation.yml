@@ -5,6 +5,7 @@ on:
     paths:
       - "backend/render_worker.py"
       - "backend/render_worker_runtime.py"
+      - "backend/requirements-worker.txt"
       - "backend/tests/test_render_worker_runtime.py"
       - "cloudrun/**"
       - ".github/workflows/render-worker-foundation.yml"
@@ -13,6 +14,7 @@ on:
     paths:
       - "backend/render_worker.py"
       - "backend/render_worker_runtime.py"
+      - "backend/requirements-worker.txt"
       - "backend/tests/test_render_worker_runtime.py"
       - "cloudrun/**"
 

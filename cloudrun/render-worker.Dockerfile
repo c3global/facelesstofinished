@@ -9,7 +9,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app/backend
-COPY backend/requirements.txt /tmp/requirements.txt
+COPY backend/requirements-worker.txt /tmp/requirements.txt
 RUN pip install --upgrade pip && pip install -r /tmp/requirements.txt
 COPY backend/ /app/backend/
 
