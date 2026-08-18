@@ -71,6 +71,10 @@ from media_routing import (  # noqa: E402
 )
 from render_privacy import scrub_render_for_customer  # noqa: E402
 from render_execution import resolve_execution_backend, should_use_isolated_queue  # noqa: E402
+from render_dispatch import (  # noqa: E402
+    dispatch_render_job,
+    recovery_query,
+)
 from database_migration import (  # noqa: E402
     MIGRATION_STATE_COLLECTION,
     copy_database,
@@ -163,6 +167,17 @@ RENDER_HEARTBEAT_INTERVAL_S = max(5, int(os.environ.get("RENDER_HEARTBEAT_INTERV
 RENDER_EXECUTION_BACKEND = resolve_execution_backend(
     os.environ.get("RENDER_EXECUTION_BACKEND", "local"),
     owner_cutover=DATABASE_OWNER_CUTOVER,
+)
+RENDER_DISPATCH_URL = os.environ.get("RENDER_DISPATCH_URL", "").strip()
+RENDER_DISPATCH_HMAC_KEY = os.environ.get("RENDER_DISPATCH_HMAC_KEY", "")
+RENDER_DISPATCH_RECOVERY_INTERVAL_S = max(
+    30,
+    int(os.environ.get("RENDER_DISPATCH_RECOVERY_INTERVAL_S", "60")),
+)
+RENDER_DISPATCH_ENABLED = bool(
+    RENDER_EXECUTION_BACKEND == "cloud_run_queue"
+    and RENDER_DISPATCH_URL
+    and RENDER_DISPATCH_HMAC_KEY
 )
 ISOLATED_RENDER_MODES = {
     mode.strip().lower()
@@ -600,6 +615,7 @@ async def health():
             "stock_search_timeout_s": STOCK_SEARCH_TIMEOUT_S,
             "timeline_features_enabled": TIMELINE_FEATURES_ENABLED,
             "isolated_worker": RENDER_EXECUTION_BACKEND == "cloud_run_queue",
+            "event_dispatcher": RENDER_DISPATCH_ENABLED,
         },
     }
 
@@ -5261,6 +5277,100 @@ async def studio_render_estimate(payload: RenderRequest, user: AuthUser = Depend
     }
 
 
+async def _dispatch_queued_render(job_id: str, *, attempts: int = 3) -> bool:
+    """Dispatch one queued job; failures remain queued for recovery."""
+    if not RENDER_DISPATCH_ENABLED:
+        return False
+
+    last_error = ""
+    for attempt in range(1, attempts + 1):
+        attempted_at = datetime.now(timezone.utc).isoformat()
+        await db.renders.update_one(
+            {"id": job_id, "status": "queued"},
+            {
+                "$set": {
+                    "dispatch_status": "dispatching",
+                    "dispatch_attempted_at": attempted_at,
+                },
+                "$inc": {"dispatch_attempts": 1},
+            },
+        )
+        try:
+            result = await dispatch_render_job(
+                job_id,
+                url=RENDER_DISPATCH_URL,
+                secret=RENDER_DISPATCH_HMAC_KEY,
+            )
+            if not result.get("accepted"):
+                raise RuntimeError("dispatcher did not accept the job")
+            accepted_at = datetime.now(timezone.utc).isoformat()
+            await db.renders.update_one(
+                {"id": job_id, "status": "queued"},
+                {
+                    "$set": {
+                        "dispatch_status": "accepted",
+                        "dispatch_last_accepted_at": accepted_at,
+                        "dispatch_operation": str(result.get("operation") or "")[:300],
+                    },
+                    "$unset": {"dispatch_error": ""},
+                },
+            )
+            logger.info("[render-dispatch] accepted job=%s", job_id)
+            return True
+        except Exception as exc:  # noqa: BLE001 - leave queued for recovery
+            last_error = f"{type(exc).__name__}: {exc}"[:300]
+            logger.warning(
+                "[render-dispatch] attempt=%s job=%s failed: %s",
+                attempt,
+                job_id,
+                last_error,
+            )
+            if attempt < attempts:
+                await asyncio.sleep(attempt)
+
+    await db.renders.update_one(
+        {"id": job_id, "status": "queued"},
+        {
+            "$set": {
+                "dispatch_status": "retry_pending",
+                "dispatch_error": last_error,
+            }
+        },
+    )
+    return False
+
+
+@app.on_event("startup")
+async def _start_render_dispatch_recovery_loop() -> None:
+    """Re-dispatch only real queued jobs; never wake Cloud Run for an empty queue."""
+    if not RENDER_DISPATCH_ENABLED:
+        logger.info("[render-dispatch] event dispatcher not configured")
+        return
+
+    async def _loop() -> None:
+        await asyncio.sleep(5)
+        while True:
+            try:
+                jobs = await (
+                    db.renders.find(recovery_query(), {"id": 1})
+                    .sort("created_at", 1)
+                    .limit(5)
+                    .to_list(length=5)
+                )
+                for job in jobs:
+                    if job.get("id"):
+                        await _dispatch_queued_render(job["id"], attempts=1)
+            except Exception as exc:  # noqa: BLE001 - recovery must stay alive
+                logger.warning(
+                    "[render-dispatch] recovery tick failed: %s: %s",
+                    type(exc).__name__,
+                    exc,
+                )
+            await asyncio.sleep(RENDER_DISPATCH_RECOVERY_INTERVAL_S)
+
+    asyncio.create_task(_loop())
+
+
 def _start_render_execution(job_id: str, mode: str) -> None:
     """Start locally, or leave a Faceless job for the isolated queue worker."""
     if should_use_isolated_queue(
@@ -5269,6 +5379,8 @@ def _start_render_execution(job_id: str, mode: str) -> None:
         mode=mode,
     ):
         logger.info("[render-queue] job=%s mode=%s queued for isolated worker", job_id, mode)
+        if RENDER_DISPATCH_ENABLED:
+            asyncio.create_task(_dispatch_queued_render(job_id))
         return
     asyncio.create_task(_run_render(job_id))
 
