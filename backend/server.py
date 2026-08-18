@@ -70,18 +70,22 @@ from media_routing import (  # noqa: E402
     is_local_media_reference,
 )
 from render_privacy import scrub_render_for_customer  # noqa: E402
-from render_execution import should_use_isolated_queue  # noqa: E402
+from render_execution import resolve_execution_backend, should_use_isolated_queue  # noqa: E402
 from database_migration import (  # noqa: E402
     MIGRATION_STATE_COLLECTION,
     copy_database,
+    resolve_database_settings,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("f48")
 logger.setLevel(logging.INFO)
 
-MONGO_URL = os.environ["MONGO_URL"]
-DB_NAME = os.environ["DB_NAME"]
+DATABASE_MIGRATION_MODE = os.environ.get("DATABASE_MIGRATION_ENABLED", "0").strip().lower()
+DATABASE_MIGRATION_TARGET_URL = os.environ.get("DATABASE_MIGRATION_TARGET_URL", "").strip()
+DATABASE_MIGRATION_TARGET_DB = os.environ.get("DATABASE_MIGRATION_TARGET_DB", "").strip()
+DATABASE_MIGRATION_TOKEN = os.environ.get("DATABASE_MIGRATION_TOKEN", "")
+MONGO_URL, DB_NAME, DATABASE_OWNER_CUTOVER = resolve_database_settings(os.environ)
 EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
 HEYGEN_API_KEY = os.environ.get("HEYGEN_API_KEY", "")
 FAL_API_KEY = os.environ.get("FAL_API_KEY", "")
@@ -154,7 +158,12 @@ RENDER_JOB_CONCURRENCY = max(1, int(os.environ.get("RENDER_JOB_CONCURRENCY", "1"
 STOCK_SEARCH_TIMEOUT_S = max(5, int(os.environ.get("STOCK_SEARCH_TIMEOUT_S", "20")))
 STUCK_RENDER_TIMEOUT_S = max(60, int(os.environ.get("STUCK_RENDER_TIMEOUT_S", "300")))
 RENDER_HEARTBEAT_INTERVAL_S = max(5, int(os.environ.get("RENDER_HEARTBEAT_INTERVAL_S", "15")))
-RENDER_EXECUTION_BACKEND = os.environ.get("RENDER_EXECUTION_BACKEND", "local").strip().lower()
+# Cutover is atomic: once the API uses owner-controlled Atlas, Faceless work
+# must not fall back into Emergent's constrained in-process FFmpeg runtime.
+RENDER_EXECUTION_BACKEND = resolve_execution_backend(
+    os.environ.get("RENDER_EXECUTION_BACKEND", "local"),
+    owner_cutover=DATABASE_OWNER_CUTOVER,
+)
 ISOLATED_RENDER_MODES = {
     mode.strip().lower()
     for mode in os.environ.get("ISOLATED_RENDER_MODES", "faceless").split(",")
@@ -171,10 +180,7 @@ BUILD_COMMIT = (
     or os.environ.get("SOURCE_VERSION")
     or "unknown"
 )
-DATABASE_MIGRATION_ENABLED = os.environ.get("DATABASE_MIGRATION_ENABLED", "0").strip() == "1"
-DATABASE_MIGRATION_TARGET_URL = os.environ.get("DATABASE_MIGRATION_TARGET_URL", "").strip()
-DATABASE_MIGRATION_TARGET_DB = os.environ.get("DATABASE_MIGRATION_TARGET_DB", "").strip()
-DATABASE_MIGRATION_TOKEN = os.environ.get("DATABASE_MIGRATION_TOKEN", "")
+DATABASE_MIGRATION_ENABLED = DATABASE_MIGRATION_MODE == "1"
 
 KNOWN_ENTITLEMENTS = ["base", "shorts", "studio", "byok"]
 JWT_ALG = "HS256"

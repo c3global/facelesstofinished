@@ -6,7 +6,7 @@ from one already-authorized database handle to another.
 """
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from typing import Any
 
 from pymongo import ReplaceOne
@@ -16,6 +16,18 @@ MIGRATION_STATE_COLLECTION = "database_migrations"
 _SKIPPED_COLLECTIONS = {MIGRATION_STATE_COLLECTION}
 
 ProgressCallback = Callable[[dict[str, Any]], Awaitable[None]]
+
+
+def resolve_database_settings(environment: Mapping[str, str]) -> tuple[str, str, bool]:
+    """Resolve the active database, including the explicit owner cutover mode."""
+    migration_mode = environment.get("DATABASE_MIGRATION_ENABLED", "0").strip().lower()
+    if migration_mode == "cutover":
+        target_url = environment.get("DATABASE_MIGRATION_TARGET_URL", "").strip()
+        target_db = environment.get("DATABASE_MIGRATION_TARGET_DB", "").strip()
+        if not target_url or not target_db:
+            raise RuntimeError("owner database cutover is missing its target settings")
+        return target_url, target_db, True
+    return environment["MONGO_URL"], environment["DB_NAME"], False
 
 
 def migration_collection_names(names: Iterable[str]) -> list[str]:
