@@ -105,6 +105,10 @@ class RenderWorkerRuntimeTests(unittest.TestCase):
             "worker_backend": "cloud_run_job",
             "worker_execution_id": "exec-1",
             "worker_claimed_at": "now",
+            "dispatch_status": "accepted",
+            "dispatch_attempts": 1,
+            "dispatch_operation": "operation-1",
+            "dispatch_error": "private diagnostic",
         }), {"id": "job-1"})
 
 
