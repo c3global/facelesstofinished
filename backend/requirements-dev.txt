@@ -1,0 +1,14 @@
+# Test-only dependencies.
+# Not shipped with the runtime image. Install with:
+#   pip install -r requirements-dev.txt
+# Runtime deps live in requirements.txt.
+
+# pytest core is pre-installed on the container image; pin it here so a
+# clean venv reproduces the exact CI environment.
+pytest==9.0.3
+pytest-asyncio==1.4.0
+
+# HTTPX request interceptor used by KIE provider tests to avoid any
+# real network calls to api.kie.ai. If the tests ever try to reach the
+# real endpoint respx raises loudly instead of billing the account.
+respx==0.23.1
