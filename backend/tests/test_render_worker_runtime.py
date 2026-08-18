@@ -1,7 +1,7 @@
 import unittest
 from datetime import datetime, timezone
 
-from render_execution import should_use_isolated_queue
+from render_execution import resolve_execution_backend, should_use_isolated_queue
 from render_privacy import scrub_render_for_customer
 from render_runtime import (
     lease_expiry_iso,
@@ -19,6 +19,18 @@ from render_worker_runtime import (
 
 
 class RenderWorkerRuntimeTests(unittest.TestCase):
+    def test_owner_cutover_forces_cloud_run_queue(self):
+        self.assertEqual(
+            resolve_execution_backend("local", owner_cutover=True),
+            "cloud_run_queue",
+        )
+
+    def test_platform_database_keeps_configured_backend(self):
+        self.assertEqual(
+            resolve_execution_backend("local", owner_cutover=False),
+            "local",
+        )
+
     def test_claim_only_accepts_unclaimed_queued_job(self):
         query = worker_claim_query("job-123")
         self.assertEqual(query["id"], "job-123")
