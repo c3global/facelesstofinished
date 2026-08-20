@@ -188,7 +188,7 @@ ISOLATED_RENDER_MODES = {
 # can be shown. Keep both timeline entry points fail-closed until the workflow
 # is made idempotent and can guarantee that failed previews do not spend.
 TIMELINE_FEATURES_ENABLED = os.environ.get("TIMELINE_FEATURES_ENABLED", "0").strip() == "1"
-BUILD_VERSION = os.environ.get("APP_VERSION", "1.20.14")
+BUILD_VERSION = os.environ.get("APP_VERSION", "1.20.15")
 BUILD_COMMIT = (
     os.environ.get("GIT_COMMIT_SHA")
     or os.environ.get("COMMIT_SHA")
@@ -5450,6 +5450,45 @@ def _render_response_for_user(doc: dict, user: AuthUser) -> dict:
     return doc if user.is_admin else scrub_render_for_customer(doc)
 
 
+def _enforce_premium_motion_scene_limit(payload: RenderRequest, user: AuthUser) -> None:
+    """Reject oversized customer AI-motion requests before paid work starts.
+
+    Owners/admins intentionally bypass the plan-level scene ceiling. The
+    separate runaway-cost circuit breaker remains in force for every caller.
+    Uploaded images count only when the customer explicitly requests premium
+    motion; uploaded videos and standard-motion images stay local-only.
+    """
+    if user.is_admin or payload.mode not in ("faceless", "composite"):
+        return
+
+    from providers.cost_estimator import MAX_AI_SCENES_PER_RENDER_DEFAULT
+
+    max_ai = int(
+        os.environ.get(
+            "MAX_AI_SCENES_PER_RENDER",
+            str(MAX_AI_SCENES_PER_RENDER_DEFAULT),
+        )
+    )
+    ai_scene_count = sum(
+        1
+        for scene in (payload.scenes or [])
+        if (scene.get("source") == "ai")
+        or (
+            scene.get("source") == "uploaded"
+            and scene.get("kind") == "image"
+            and scene.get("motion_quality") == "premium"
+        )
+    )
+    if ai_scene_count > max_ai:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"This render includes more premium-motion scenes than your current plan "
+                f"allows ({max_ai} max). Reduce premium scenes or switch some to Standard motion."
+            ),
+        )
+
+
 @api.post("/studio/render/estimate")
 async def studio_render_estimate(payload: RenderRequest, user: AuthUser = Depends(current_user)):
     """Pre-render capacity check.
@@ -5660,28 +5699,12 @@ async def studio_render(payload: RenderRequest, user: AuthUser = Depends(current
     # the error surface uses plain language, no dollar amounts or provider
     # names. Silent circuit-breaker above still catches raw payload
     # over-runs; this catches the "50 premium scenes" case.
-    if payload.mode in ("faceless", "composite"):
-        try:
-            from providers.cost_estimator import MAX_AI_SCENES_PER_RENDER_DEFAULT
-
-            max_ai = int(os.environ.get("MAX_AI_SCENES_PER_RENDER", str(MAX_AI_SCENES_PER_RENDER_DEFAULT)))
-            ai_scene_count = sum(
-                1 for s in (payload.scenes or [])
-                if (s.get("source") == "ai")
-                or (s.get("source") == "uploaded" and s.get("kind") == "image" and s.get("motion_quality") == "premium")
-            )
-            if ai_scene_count > max_ai:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f"This render includes more premium-motion scenes than your current plan "
-                        f"allows ({max_ai} max). Reduce premium scenes or switch some to Standard motion."
-                    ),
-                )
-        except HTTPException:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("[ai-scene-limit] failed to enforce: %s", type(exc).__name__)
+    try:
+        _enforce_premium_motion_scene_limit(payload, user)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[ai-scene-limit] failed to enforce: %s", type(exc).__name__)
 
     # Group B quota gate — atomically check + decrement the buyer's monthly
     # render allowance before we kick off the background pipeline. Founders
