@@ -15,6 +15,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import secrets
@@ -93,6 +94,16 @@ MONGO_URL, DB_NAME, DATABASE_OWNER_CUTOVER = resolve_database_settings(os.enviro
 EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
 HEYGEN_API_KEY = os.environ.get("HEYGEN_API_KEY", "")
 FAL_API_KEY = os.environ.get("FAL_API_KEY", "")
+# Avatar billing safety. Faceless48 deliberately uses HeyGen's maintained
+# legacy Avatar III endpoint because v3 defaults to Avatar IV at roughly four
+# times the per-minute price. Keep the rate and ceiling overrideable without a
+# code deploy, but fail safe at a roughly three-minute / $3 request by default.
+HEYGEN_AVATAR_RATE_CENTS_PER_MINUTE = max(
+    1, int(os.environ.get("HEYGEN_AVATAR_RATE_CENTS_PER_MINUTE", "100"))
+)
+HEYGEN_AVATAR_MAX_COST_CENTS = max(
+    1, int(os.environ.get("HEYGEN_AVATAR_MAX_COST_CENTS", "300"))
+)
 
 # BYOK runtime overrides — set at the top of each render path when the
 # buyer has saved a customer API key. Helpers read via the
@@ -188,7 +199,7 @@ ISOLATED_RENDER_MODES = {
 # can be shown. Keep both timeline entry points fail-closed until the workflow
 # is made idempotent and can guarantee that failed previews do not spend.
 TIMELINE_FEATURES_ENABLED = os.environ.get("TIMELINE_FEATURES_ENABLED", "0").strip() == "1"
-BUILD_VERSION = os.environ.get("APP_VERSION", "1.20.15")
+BUILD_VERSION = os.environ.get("APP_VERSION", "1.20.16")
 BUILD_COMMIT = (
     os.environ.get("GIT_COMMIT_SHA")
     or os.environ.get("COMMIT_SHA")
@@ -3799,7 +3810,7 @@ async def _run_render(job_id: str):
 
 # ---------------------------------------------------------------------------
 # Cost estimation. Numbers below are conservative ceiling estimates derived
-# from public pricing pages (HeyGen $0.30 / min talking-head, fal.ai Kokoro
+# from public pricing pages (HeyGen Avatar III $1.00 / min, fal.ai Kokoro
 # TTS ~$0.005 / 1k chars, Flux 1.1 pro ~$0.04 / image, ffmpeg compose ~free
 # on fal.ai). Conservative because we'd rather reject a borderline render
 # than surprise-charge the user above the cap.
@@ -3810,6 +3821,43 @@ def _estimate_duration_seconds(script: str) -> float:
     return max(5.0, (words / 150.0) * 60.0)
 
 
+def _estimate_avatar_cost_cents(script: str) -> int:
+    """Estimate the lower-cost Avatar III request using the current rate."""
+    duration_minutes = _estimate_duration_seconds(script) / 60.0
+    return int(math.ceil(duration_minutes * HEYGEN_AVATAR_RATE_CENTS_PER_MINUTE))
+
+
+def _avatar_max_words() -> int:
+    """Customer-safe word ceiling derived from the configured spend cap."""
+    max_minutes = HEYGEN_AVATAR_MAX_COST_CENTS / HEYGEN_AVATAR_RATE_CENTS_PER_MINUTE
+    return max(1, int(math.floor(max_minutes * 150.0)))
+
+
+def _enforce_avatar_cost_limit(payload: RenderRequest) -> None:
+    """Block unexpectedly expensive Avatar submissions for every caller."""
+    if payload.mode != "avatar":
+        return
+    if len(payload.script) > 5000:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Avatar scripts are limited to about "
+                f"{_avatar_max_words()} words per video. Shorten this script or split it "
+                "into smaller parts, then submit each part separately."
+            ),
+        )
+    estimated_cents = _estimate_avatar_cost_cents(payload.script)
+    if estimated_cents > HEYGEN_AVATAR_MAX_COST_CENTS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Avatar scripts are limited to about "
+                f"{_avatar_max_words()} words per video. Shorten this script or split it "
+                "into smaller parts, then submit each part separately."
+            ),
+        )
+
+
 def estimate_render_cost_cents(payload: RenderRequest) -> int:
     """Conservative cost estimate (in cents) for a real render of this payload."""
     duration_s = _estimate_duration_seconds(payload.script)
@@ -3817,8 +3865,8 @@ def estimate_render_cost_cents(payload: RenderRequest) -> int:
     cents = 0.0
 
     if payload.mode == "avatar":
-        # HeyGen $0.30/min + 5c flat overhead
-        cents += duration_min * 30.0 + 5.0
+        # HeyGen Avatar III via the maintained v2 endpoint: $1.00/minute.
+        cents += _estimate_avatar_cost_cents(payload.script)
     elif payload.mode == "faceless":
         # Kokoro TTS + per-scene visuals + compose
         scene_count = max(1, len(payload.scenes) or int(duration_s / 8))
@@ -3850,7 +3898,7 @@ def estimate_render_cost_cents(payload: RenderRequest) -> int:
         cents += 2.0                                   # compose overhead
     elif payload.mode == "composite":
         # Avatar talking-head + B-roll cutaway every N seconds
-        cents += duration_min * 30.0 + 5.0             # HeyGen base
+        cents += _estimate_avatar_cost_cents(payload.script)  # HeyGen base
         cutaway_count = max(1, int(duration_s / max(1, payload.broll_cutaway_interval_s)))
         cents += cutaway_count * 4.0                   # Flux per cutaway
         cents += 3.0                                   # extra compose overhead
@@ -3926,8 +3974,8 @@ def _finalize(job_id: str, *, ok: bool, url: Optional[str], actual_cost_cents: i
 
 # ---------------------------------------------------------------------------
 # HeyGen Avatar pipeline — real renders only.
-# Uses the HeyGen v3 /v3/videos endpoint with the documented `fit: "cover"`
-# field and burn-in captions via `caption.style`.
+# Uses the maintained v2 Avatar III endpoint. Do not silently switch this to
+# v3: v3 defaults to Avatar IV, which is roughly four times the provider cost.
 # ---------------------------------------------------------------------------
 async def _run_render_avatar(job: dict):
     job_id = job["id"]
@@ -3962,12 +4010,10 @@ async def _run_render_avatar(job: dict):
     )
     await asyncio.sleep(1.5)
 
-    # ---- Stage 2/3: submit to HeyGen. Try v3 first (cleaner crop for Avatar
-    # IV/V); on the explicit "does not support Avatar IV" error, transparently
-    # fall back to the legacy v2 endpoint (Avatar III avatars). The customer
-    # never sees the fallback. Captions intentionally OFF in both bodies for
-    # this iteration — HeyGen-side burn-in was inconsistent across avatars
-    # so we'll add captions back in a dedicated future pass. ----
+    # ---- Stage 2/3: submit to HeyGen Avatar III. Captions intentionally stay
+    # off in the provider body; the existing optional second pass below handles
+    # them consistently. The job ID is persisted immediately so a delayed
+    # provider result can be recovered instead of becoming invisible. ----
     await db.renders.update_one(
         {"id": job_id},
         {"$set": {
@@ -3978,87 +4024,76 @@ async def _run_render_avatar(job: dict):
         }},
     )
 
-    video_id = None
-    used_endpoint = "v3"
     async with httpx.AsyncClient(timeout=60) as client:
-        v3_body = {
-            "type": "avatar",
-            "avatar_id": job["avatar_id"],
-            "script": job["script"],
-            "voice_id": job["voice_id"],
-            "aspect_ratio": "9:16" if job["aspect"] == "9_16" else "16:9",
-            "fit": "cover",
-        }
-        r = await client.post(
-            "https://api.heygen.com/v3/videos",
-            headers={"X-Api-Key": heygen_key, "Accept": "application/json"},
-            json=v3_body,
-        )
-        if r.status_code == 200:
-            d = (r.json() or {}).get("data") or {}
-            video_id = d.get("video_id") or d.get("id")
-
-        # Fall back to v2 on Avatar IV incompatibility, or any other v3 error.
-        if not video_id:
-            v3_err_text = r.text if r is not None else ""
-            v2_body = {
-                "video_inputs": [{
-                    "character": {
-                        "type": "avatar",
-                        "avatar_id": job["avatar_id"],
-                        "avatar_style": "normal",
-                    },
-                    "voice": {
-                        "type": "text",
-                        "voice_id": job["voice_id"],
-                        "input_text": job["script"],
-                    },
-                }],
-                "dimension": {
-                    "width": 1080 if job["aspect"] == "9_16" else 1920,
-                    "height": 1920 if job["aspect"] == "9_16" else 1080,
+        v2_body = {
+            "video_inputs": [{
+                "character": {
+                    "type": "avatar",
+                    "avatar_id": job["avatar_id"],
+                    "avatar_style": "normal",
                 },
-                "aspect_ratio": "9:16" if job["aspect"] == "9_16" else "16:9",
-            }
-            r2 = await client.post(
-                "https://api.heygen.com/v2/video/generate",
-                headers={"X-Api-Key": heygen_key, "Accept": "application/json"},
-                json=v2_body,
+                "voice": {
+                    "type": "text",
+                    "voice_id": job["voice_id"],
+                    "input_text": job["script"],
+                },
+            }],
+            "dimension": {
+                "width": 1080 if job["aspect"] == "9_16" else 1920,
+                "height": 1920 if job["aspect"] == "9_16" else 1080,
+            },
+            "aspect_ratio": "9:16" if job["aspect"] == "9_16" else "16:9",
+        }
+        r2 = await client.post(
+            "https://api.heygen.com/v2/video/generate",
+            headers={
+                "X-Api-Key": heygen_key,
+                "Accept": "application/json",
+                "Idempotency-Key": f"f48-avatar-{job_id}",
+            },
+            json=v2_body,
+        )
+        if not 200 <= r2.status_code < 300:
+            await db.renders.update_one(
+                {"id": job_id},
+                {"$set": {
+                    "status": "failed",
+                    "error": "Avatar video could not be started. Please try again or contact support.",
+                    "heygen_submit_error": f"HTTP {r2.status_code}: {r2.text[:500]}",
+                    "actual_cost_cents": actual_cost_cents,
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }},
             )
-            if r2.status_code != 200:
-                await db.renders.update_one(
-                    {"id": job_id},
-                    {"$set": {
-                        "status": "failed",
-                        "error": (
-                            f"HeyGen submit failed. v3: {r.status_code} {v3_err_text[:200]} "
-                            f"| v2: {r2.status_code} {r2.text[:200]}"
-                        ),
-                        "actual_cost_cents": actual_cost_cents,
-                        "completed_at": datetime.now(timezone.utc).isoformat(),
-                    }},
-                )
-                return
-            video_id = ((r2.json() or {}).get("data") or {}).get("video_id")
-            used_endpoint = "v2"
-            if not video_id:
-                await db.renders.update_one(
-                    {"id": job_id},
-                    {"$set": {
-                        "status": "failed",
-                        "error": f"HeyGen v2 returned no video_id: {r2.text[:300]}",
-                        "actual_cost_cents": actual_cost_cents,
-                        "completed_at": datetime.now(timezone.utc).isoformat(),
-                    }},
-                )
-                return
+            return
+        video_id = ((r2.json() or {}).get("data") or {}).get("video_id")
+        if not video_id:
+            await db.renders.update_one(
+                {"id": job_id},
+                {"$set": {
+                    "status": "failed",
+                    "error": "Avatar provider returned no tracking ID.",
+                    "actual_cost_cents": actual_cost_cents,
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }},
+            )
+            return
+        submitted_at = datetime.now(timezone.utc).isoformat()
+        await db.renders.update_one(
+            {"id": job_id},
+            {"$set": {
+                "heygen_video_id": video_id,
+                "heygen_endpoint": "v2-avatar-iii",
+                "heygen_submitted_at": submitted_at,
+                "updated_at": submitted_at,
+            }},
+        )
 
         # ---- Stage 3/3: poll ----
-        # Per Charity's "no limits" rule, the poll window is generous: 300
-        # ticks × 5s = 25 minutes. HeyGen v3 renders for premium avatars +
-        # long scripts can take 10-18min; the old 5min cap was killing real
-        # renders mid-stream. Progress label animates so the UI never feels
-        # stuck during the long wait.
+        # 300 ticks × 5s = 25 minutes. The provider reference is persisted
+        # above so support can recover a result if processing exceeds this
+        # window. Progress and heartbeat timestamps stay current while polling.
         max_ticks = 300
         for tick in range(max_ticks):
             await asyncio.sleep(5)
@@ -4070,76 +4105,56 @@ async def _run_render_avatar(job: dict):
                          else "Finalizing voiceover…")
             await db.renders.update_one(
                 {"id": job_id},
-                {"$set": {"progress": progress_now, "progress_label": label_now}},
+                {"$set": {
+                    "progress": progress_now,
+                    "progress_label": label_now,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }},
             )
-            if used_endpoint == "v3":
-                s = await client.get(
-                    f"https://api.heygen.com/v3/videos/{video_id}",
-                    headers={"X-Api-Key": heygen_key},
-                )
-                d = (s.json() or {}).get("data") or {}
-                if d.get("failure_code"):
-                    await db.renders.update_one(
-                        {"id": job_id},
-                        {"$set": {
-                            "status": "failed",
-                            "error": f"HeyGen {d.get('failure_code')}: {d.get('failure_message') or 'no detail'}",
-                            "actual_cost_cents": actual_cost_cents,
-                            "completed_at": datetime.now(timezone.utc).isoformat(),
-                        }},
-                    )
-                    return
+            s = await client.get(
+                f"https://api.heygen.com/v1/video_status.get?video_id={video_id}",
+                headers={"X-Api-Key": heygen_key},
+            )
+            d = (s.json() or {}).get("data") or {}
+            if d.get("status") == "completed":
+                actual_cost_cents += _estimate_avatar_cost_cents(job["script"])
                 final_url = d.get("video_url")
-                if final_url:
-                    actual_cost_cents += int(round(_estimate_duration_seconds(job["script"]) / 60.0 * 30.0))
-                    await _finalize(job_id, ok=True, url=final_url, actual_cost_cents=actual_cost_cents)
-                    return
-            else:  # v2 polling
-                s = await client.get(
-                    f"https://api.heygen.com/v1/video_status.get?video_id={video_id}",
-                    headers={"X-Api-Key": heygen_key},
-                )
-                d = (s.json() or {}).get("data") or {}
-                if d.get("status") == "completed":
-                    actual_cost_cents += int(round(_estimate_duration_seconds(job["script"]) / 60.0 * 30.0))
-                    final_url = d.get("video_url")
-                    # Caption burn-in second pass — same fal.ai/auto-subtitle
-                    # path the Faceless pipeline uses. We do it here (not in
-                    # the HeyGen v3 payload) because HeyGen-side burn-in was
-                    # inconsistent across avatars. Soft-fails: a caption
-                    # outage never blocks the avatar render from shipping.
-                    if final_url and job.get("captions"):
-                        await db.renders.update_one(
-                            {"id": job_id},
-                            {"$set": {"progress": 92, "progress_label": "Burning in captions…"}},
-                        )
-                        try:
-                            captioned = await _burn_in_captions(
-                                final_url,
-                                job.get("caption_style") or "boxed",
-                                job.get("caption_position") or "bottom",
-                                aspect=job.get("aspect") or "16_9",
-                            )
-                            if captioned:
-                                final_url = captioned
-                                actual_cost_cents += CAPTION_BURN_COST_CENTS
-                            else:
-                                logger.warning(f"[captions] avatar job={job_id} burn-in returned no URL; shipping uncaptioned")
-                        except Exception as exc:
-                            logger.warning(f"[captions] avatar job={job_id} exception: {type(exc).__name__}: {exc}")
-                    await _finalize(job_id, ok=True, url=final_url, actual_cost_cents=actual_cost_cents)
-                    return
-                if d.get("status") == "failed":
+                # Caption burn-in second pass — same fal.ai/auto-subtitle
+                # path the Faceless pipeline uses. Soft-fails: a caption
+                # outage never blocks the Avatar render from shipping.
+                if final_url and job.get("captions"):
                     await db.renders.update_one(
                         {"id": job_id},
-                        {"$set": {
-                            "status": "failed",
-                            "error": f"HeyGen returned status=failed: {d.get('error') or 'no detail'}",
-                            "actual_cost_cents": actual_cost_cents,
-                            "completed_at": datetime.now(timezone.utc).isoformat(),
-                        }},
+                        {"$set": {"progress": 92, "progress_label": "Burning in captions…"}},
                     )
-                    return
+                    try:
+                        captioned = await _burn_in_captions(
+                            final_url,
+                            job.get("caption_style") or "boxed",
+                            job.get("caption_position") or "bottom",
+                            aspect=job.get("aspect") or "16_9",
+                        )
+                        if captioned:
+                            final_url = captioned
+                            actual_cost_cents += CAPTION_BURN_COST_CENTS
+                        else:
+                            logger.warning(f"[captions] avatar job={job_id} burn-in returned no URL; shipping uncaptioned")
+                    except Exception as exc:
+                        logger.warning(f"[captions] avatar job={job_id} exception: {type(exc).__name__}: {exc}")
+                await _finalize(job_id, ok=True, url=final_url, actual_cost_cents=actual_cost_cents)
+                return
+            if d.get("status") == "failed":
+                await db.renders.update_one(
+                    {"id": job_id},
+                    {"$set": {
+                        "status": "failed",
+                        "error": f"Avatar provider returned status=failed: {d.get('error') or 'no detail'}",
+                        "actual_cost_cents": actual_cost_cents,
+                        "completed_at": datetime.now(timezone.utc).isoformat(),
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                    }},
+                )
+                return
     await db.renders.update_one(
         {"id": job_id},
         {"$set": {
@@ -4147,6 +4162,7 @@ async def _run_render_avatar(job: dict):
             "error": "HeyGen polling timed out after 25 minutes",
             "actual_cost_cents": actual_cost_cents,
             "completed_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
         }},
     )
 
@@ -5629,6 +5645,7 @@ async def studio_render(payload: RenderRequest, user: AuthUser = Depends(current
         raise HTTPException(status_code=400, detail="Bad mode")
     if not payload.script.strip():
         raise HTTPException(status_code=400, detail="Script required")
+    _enforce_avatar_cost_limit(payload)
 
     # v1.20.10 (Iter 68 Batch 2): if the caller passed a preview_id, load the
     # pre-generated manifest from db.render_previews and rewrite the payload
@@ -6006,6 +6023,11 @@ async def studio_render_both_aspects(payload: RenderRequest, user: AuthUser = De
         raise HTTPException(status_code=400, detail="Bad mode")
     if not payload.script.strip():
         raise HTTPException(status_code=400, detail="Script required")
+    if payload.mode == "avatar":
+        raise HTTPException(
+            status_code=400,
+            detail="Choose one aspect for Avatar videos. Rendering both aspects is available for Faceless videos only.",
+        )
 
     jobs = []
     # Track which aspects already passed the quota gate so we can refund

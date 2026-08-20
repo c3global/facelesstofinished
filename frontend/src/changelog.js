@@ -14,9 +14,18 @@
 //    See PRD.md → "Workflow rule: changelog must move with every deploy."
 // 4. Most recent on top. Each entry has version + date + bullet list.
 
-export const APP_VERSION = "1.20.15";
+export const APP_VERSION = "1.20.16";
 
 export const CHANGELOG = [
+  {
+    version: "1.20.16",
+    date: "2026-08-20",
+    changes: [
+      "🛡️ Added firm Avatar length safeguards so unexpectedly large requests cannot be submitted.",
+      "🎬 Avatar videos now use the standard generation path, with one aspect ratio per request.",
+      "🔎 Improved in-progress Avatar tracking so submitted videos remain recoverable while they finish.",
+    ],
+  },
   {
     version: "1.20.15",
     date: "2026-08-20",

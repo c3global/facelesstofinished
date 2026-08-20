@@ -18,17 +18,12 @@ import TimelineModal from "../components/TimelineModal";
 import PrerenderTimelineModal from "../components/PrerenderTimelineModal";
 
 const MODES = { AVATAR: "avatar", FACELESS: "faceless" };
-// HeyGen's API caps script text at exactly 5,000 characters on BOTH v3
-// (/v3/videos → `script`) and v2 (/v2/video/generate → video_inputs[0].
-// voice.input_text). Longer scripts get rejected with a 400
-// `invalid_parameter` before the render can start — which then burns
-// the customer's UX (45% progress bar → red error wall). Enforce the
-// cap client-side BEFORE calling /api/studio/render so long-form
-// scripts hit a friendly inline hint and never make the round-trip.
-// Faceless mode has no such limit (voiceover is chunked scene-by-scene
-// via Kokoro TTS), so we tell the user to switch modes if they need
-// the full script.
+// Avatar requests are intentionally limited to about three minutes. The
+// server enforces the same limit for every caller (including admins); this
+// client check gives customers a useful message before a paid request starts.
+// Keep the provider's 5,000-character technical limit as a second guard.
 const AVATAR_SCRIPT_MAX_CHARS = 5000;
+const AVATAR_SCRIPT_MAX_WORDS = 450;
 const MAX_SCENES = 200;
 // Timeline tools are temporarily hidden because the preview path performs
 // paid generation before it can fail. Backend routes are also fail-closed.
@@ -76,7 +71,7 @@ function friendlyRenderError(e) {
     (lower.includes("script") && (lower.includes("too long") || lower.includes("length") || lower.includes("limit")))
   );
   if (scriptTooLong) {
-    return "Your script is too long for Avatar mode (5,000 character limit). Shorten it, split into two shorter parts, or switch to Faceless mode — Faceless has no character limit.";
+    return "Avatar videos are limited to about 450 words (roughly 3 minutes). Shorten this script, split it into smaller parts, or switch to Faceless mode for longer videos.";
   }
   if (lower.includes("configuration is too large")) {
     return "Render configuration is too large. Please contact support.";
@@ -512,18 +507,16 @@ export default function Studio() {
   // pathological payloads; everything else fires the real pipeline.
   const fireRender = async (body) => {
     setRenderErr("");
-    // Client-side pre-flight for HeyGen's 5,000-char cap on Avatar mode.
-    // Rejecting here means the user sees the friendly hint immediately
-    // without the "45% failed" progress-bar experience Charity hit in
-    // the client demo. Faceless mode is exempt — its voiceover is chunked
-    // by Kokoro TTS per scene, so long scripts are fine there.
+    const avatarWordCount = typeof body.script === "string"
+      ? body.script.trim().split(/\s+/).filter(Boolean).length
+      : 0;
     if (
       body.mode === MODES.AVATAR &&
       typeof body.script === "string" &&
-      body.script.length > AVATAR_SCRIPT_MAX_CHARS
+      (body.script.length > AVATAR_SCRIPT_MAX_CHARS || avatarWordCount > AVATAR_SCRIPT_MAX_WORDS)
     ) {
       setRenderErr(
-        `Your script is ${body.script.length.toLocaleString()} characters, but Avatar mode maxes out at ${AVATAR_SCRIPT_MAX_CHARS.toLocaleString()} (about 750 words). Shorten it, split into two shorter parts, or switch to Faceless mode — Faceless has no character limit.`
+        `Avatar videos are limited to ${AVATAR_SCRIPT_MAX_WORDS.toLocaleString()} words (roughly 3 minutes). This script is ${avatarWordCount.toLocaleString()} words. Shorten it, split it into smaller parts, or switch to Faceless mode for longer videos.`
       );
       return;
     }
@@ -551,16 +544,16 @@ export default function Studio() {
   const renderBothAspects = async () => {
     setRenderErr("");
     const bothPayload = buildPayload();
-    // Same 5,000-char pre-flight as fireRender — both-aspects fires TWO
-    // HeyGen jobs, so a too-long script would blow up both progress bars
-    // at 45% instead of one. Guard here saves the double failure.
+    const avatarWordCount = typeof bothPayload.script === "string"
+      ? bothPayload.script.trim().split(/\s+/).filter(Boolean).length
+      : 0;
     if (
       bothPayload.mode === MODES.AVATAR &&
       typeof bothPayload.script === "string" &&
-      bothPayload.script.length > AVATAR_SCRIPT_MAX_CHARS
+      (bothPayload.script.length > AVATAR_SCRIPT_MAX_CHARS || avatarWordCount > AVATAR_SCRIPT_MAX_WORDS)
     ) {
       setRenderErr(
-        `Your script is ${bothPayload.script.length.toLocaleString()} characters, but Avatar mode maxes out at ${AVATAR_SCRIPT_MAX_CHARS.toLocaleString()} (about 750 words). Shorten it, split into two shorter parts, or switch to Faceless mode — Faceless has no character limit.`
+        `Avatar videos are limited to ${AVATAR_SCRIPT_MAX_WORDS.toLocaleString()} words (roughly 3 minutes). This script is ${avatarWordCount.toLocaleString()} words. Shorten it, split it into smaller parts, or switch to Faceless mode for longer videos.`
       );
       return;
     }
@@ -1108,17 +1101,13 @@ export default function Studio() {
       <div className="script-block">
         <div className="script-header-row">
           <span className="script-label">Script</span>
-          {/* Always-visible mode-limit hint so writers see the constraint
-              BEFORE they hit render. Avatar 5,000-char cap comes from
-              HeyGen's API — Faceless has no cap because Kokoro TTS
-              chunks voiceover per scene. Copy is intentionally short
-              and appears next to the label. */}
+          {/* Always-visible limit so writers see it before submitting. */}
           <span
             className="script-limit-hint"
             data-testid="script-limit-hint"
             aria-label="Script length limits by mode"
           >
-            Avatar: <b>5,000 chars</b> (~750 words) · Faceless: <b>any length</b>
+            Avatar: <b>up to 450 words</b> (~3 min) · Faceless: <b>any length</b>
           </span>
         </div>
         <textarea
@@ -1134,31 +1123,29 @@ export default function Studio() {
         <div className="script-meta">
           <span data-testid="script-word-count">{script.trim() ? script.trim().split(/\s+/).length : 0} words</span>
           <span>~{Math.max(15, Math.round(script.split(/\s+/).filter(Boolean).length / 2.5))}s read time</span>
-          {/* Live character counter — only rendered in Avatar mode because
-              that's the mode with the 5,000-char cap. Faceless is unlimited,
-              so a counter would be noise there. Color states:
+          {/* Live word counter — only rendered in Avatar mode. Color states:
                 <80%  → muted (default)
                 80-99% → amber warning (approaching cap)
                 ≥100% → red danger (render will be blocked by pre-flight) */}
           {mode === MODES.AVATAR && (() => {
-            const len = script.length;
-            const pct = len / AVATAR_SCRIPT_MAX_CHARS;
+            const len = script.trim().split(/\s+/).filter(Boolean).length;
+            const pct = len / AVATAR_SCRIPT_MAX_WORDS;
             const cls = pct >= 1 ? "script-chars-danger"
                      : pct >= 0.8 ? "script-chars-warn"
                      : "script-chars-ok";
             return (
               <span
                 className={`script-chars ${cls}`}
-                data-testid="script-char-count"
+                data-testid="script-word-limit-count"
                 title={
                   pct >= 1
-                    ? "Over the Avatar 5,000-char limit. Shorten or switch to Faceless."
+                    ? "Over the Avatar 450-word limit. Shorten or switch to Faceless."
                     : pct >= 0.8
-                    ? "Approaching the Avatar 5,000-char limit."
-                    : "Well within the Avatar 5,000-char limit."
+                    ? "Approaching the Avatar 450-word limit."
+                    : "Well within the Avatar 450-word limit."
                 }
               >
-                {len.toLocaleString()} / {AVATAR_SCRIPT_MAX_CHARS.toLocaleString()} chars
+                {len.toLocaleString()} / {AVATAR_SCRIPT_MAX_WORDS.toLocaleString()} words
               </span>
             );
           })()}
@@ -1462,16 +1449,18 @@ export default function Studio() {
             <Clock size={14} /> Preview timeline before render
           </button>
         )}
-        <button
-          type="button"
-          className="cta-btn-secondary"
-          data-testid="generate-both-aspects-btn"
-          disabled={!canGenerate}
-          onClick={renderBothAspects}
-          title="Queue two parallel renders — one 9:16 and one 16:9 — with the same script and settings."
-        >
-          <Ratio size={14} /> Render both aspects (9:16 + 16:9)
-        </button>
+        {mode === MODES.FACELESS && (
+          <button
+            type="button"
+            className="cta-btn-secondary"
+            data-testid="generate-both-aspects-btn"
+            disabled={!canGenerate}
+            onClick={renderBothAspects}
+            title="Queue two parallel renders — one 9:16 and one 16:9 — with the same script and settings."
+          >
+            <Ratio size={14} /> Render both aspects (9:16 + 16:9)
+          </button>
+        )}
         {!canGenerate && (
           <p className="cta-hint" data-testid="cta-hint">
             {!script.trim()
