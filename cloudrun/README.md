@@ -22,6 +22,18 @@ starts a Cloud Run execution when the queue is empty. The worker uses the same
 MongoDB, GridFS uploads, providers, progress fields, quota refund logic, and R2
 output.
 
+## KIE image generation
+
+AI-generated scene stills can use KIE independently of AI video motion. Set
+`KIE_IMAGE_GENERATION_ENABLED=1`, store `KIE_API_KEY` in Secret Manager, and
+leave `USE_PROVIDER_REGISTRY=0` until a video model is separately approved.
+The default image model is `nano-banana-2` at `1K`. Generated stills are copied
+to R2 before caching so the renderer does not depend on expiring provider URLs.
+
+Uploaded customer images and videos, plus stock-library clips, never enter the
+KIE or FAL motion registry. They remain on the local normalization/Ken Burns
+path and do not create a paid provider task.
+
 ## Safety rules
 
 - Do not disable the temporary scheduler until the dispatcher is deployed and

@@ -117,6 +117,10 @@ async def run_provider_motion(
       * ``None`` when the feature flag is off OR the registry has no
         applicable provider. The caller MUST fall back.
     """
+    # Customer-uploaded B-roll and stock footage are assets, not prompts for
+    # an AI provider. They always stay on the local normalize/Ken Burns path.
+    if request.input_kind in {"image", "video", "stock"}:
+        return None
     if not use_registry_enabled():
         return None
     provider = get_provider(provider_hint, request=request)

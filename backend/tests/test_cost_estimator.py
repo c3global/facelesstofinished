@@ -25,7 +25,7 @@ from providers.registry import reset_registry  # noqa: E402
 from providers.types import MotionInputMode, SceneMotionRequest  # noqa: E402
 
 
-def _req(idx=0, duration_ms=5000, resolution="720p", input_kind="image"):
+def _req(idx=0, duration_ms=5000, resolution="720p", input_kind="ai_generated"):
     return SceneMotionRequest(
         mode=MotionInputMode.TEXT,
         duration_ms=duration_ms,
@@ -67,6 +67,13 @@ def test_video_input_forces_local_regardless_of_hint():
     b = estimate_scene_cost(req, provider_hint="auto")
     assert b.provider == "local_video"
     assert b.estimated_cents == 0
+
+
+def test_uploaded_image_and_stock_force_local_regardless_of_hint():
+    for input_kind in ("image", "stock"):
+        b = estimate_scene_cost(_req(input_kind=input_kind), provider_hint="kie")
+        assert b.provider == "local_ken_burns"
+        assert b.estimated_cents == 0
 
 
 def test_seedance_720p_no_video_input_matches_rate_card():

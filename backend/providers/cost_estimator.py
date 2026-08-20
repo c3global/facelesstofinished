@@ -59,12 +59,14 @@ class RenderCostEstimate:
 def _pick_hint_for_scene(request: SceneMotionRequest, requested_hint: str) -> str:
     """Downgrade the hint when the input kind requires it.
 
-    Uploaded videos always take the free local normalize path — the
-    customer's motion quality choice is ignored for video assets.
-    Uploaded images honour the customer's chosen motion level.
+    Uploaded videos, uploaded images, and stock assets always take a free
+    local path. Only ``ai_generated`` requests may reach a paid motion
+    provider.
     """
     if request.input_kind == "video":
         return "local_video"
+    if request.input_kind in {"image", "stock"}:
+        return "local_ken_burns"
     return requested_hint
 
 

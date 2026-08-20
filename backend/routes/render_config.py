@@ -67,6 +67,9 @@ class SceneEstimateIn(BaseModel):
     #: image). Videos take the free local-normalize path regardless of
     #: motion_quality.
     input_is_video: bool = False
+    #: Opaque asset classification; it never identifies an upstream provider.
+    #: Existing clients default to an AI-generated scene.
+    source_kind: str = "ai_generated"
 
 
 class RenderEstimateIn(BaseModel):
@@ -199,6 +202,15 @@ def _scene_pairs_from_payload(payload: RenderEstimateIn) -> list[tuple[SceneMoti
             mode = MotionInputMode(s.mode)
         except ValueError as exc:
             raise HTTPException(422, f"Unknown mode: {s.mode!r}") from exc
+        source_kind = (s.source_kind or "ai_generated").strip().lower()
+        if s.input_is_video or source_kind == "uploaded_video":
+            input_kind = "video"
+        elif source_kind == "uploaded_image":
+            input_kind = "image"
+        elif source_kind == "stock":
+            input_kind = "stock"
+        else:
+            input_kind = "ai_generated"
         req = SceneMotionRequest(
             mode=mode,
             duration_ms=s.duration_ms,
@@ -209,7 +221,7 @@ def _scene_pairs_from_payload(payload: RenderEstimateIn) -> list[tuple[SceneMoti
             last_frame_url=s.last_frame_url,
             reference_image_urls=tuple(s.reference_image_urls),
             scene_idx=s.scene_idx,
-            input_kind="video" if s.input_is_video else "image",
+            input_kind=input_kind,
         )
         pairs.append((req, _resolve_hint(s)))
     return pairs

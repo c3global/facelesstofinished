@@ -8,8 +8,7 @@ These tests exercise the actual functions server.py calls (via
   2. Stock scenes never touch the provider registry.
   3. Uploaded videos short-circuit to local_video (free) regardless of
      the customer's motion quality choice.
-  4. Uploaded images honour the "standard" (local Ken Burns) vs
-     "premium" (paid KIE) choice.
+  4. Uploaded images always stay local and never trigger a paid provider.
   5. Fal-fallback path fires when the registry declines (flag off /
      no enabled models / provider returns None).
   6. Customer-visible response never carries provider, model, task_id,
@@ -185,36 +184,28 @@ async def test_ai_text_scene_routes_through_kie(monkeypatch):
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_uploaded_image_premium_routes_through_kie_first_frame(monkeypatch):
-    """Customer chose 'premium' motion on an uploaded image → KIE FIRST_FRAME."""
+async def test_uploaded_image_always_bypasses_kie(monkeypatch):
+    """Uploaded B-roll is customer media, so even a premium choice stays local."""
     monkeypatch.setenv("USE_PROVIDER_REGISTRY", "1")
     monkeypatch.setenv("KIE_API_KEY", "k")
     reset_registry()
     reload_specs()
 
-    submitted_body = {}
-
-    def _submit_side_effect(request):
-        submitted_body.update(json.loads(request.content))
-        return httpx.Response(200, json={"code": 200, "data": {"taskId": "task_img_1"}})
-
-    respx.post(KIE_CREATE_URL).mock(side_effect=_submit_side_effect)
-    respx.get(KIE_RECORD_URL).mock(return_value=httpx.Response(200, json={
-        "code": 200,
-        "data": {
-            "taskId": "task_img_1",
-            "state": "success",
-            "resultJson": json.dumps({"resultUrls": ["https://media.kie/still_animated.mp4"]}),
-            "creditsConsumed": 20,
-        },
-    }))
-
     result = await run_provider_motion(_first_frame_scene(idx=1))
-    assert result is not None
-    assert result.ok is True
-    # The wire payload must use first_frame_url (never image_url).
-    assert submitted_body["input"]["first_frame_url"] == "https://cdn.example.com/still.png"
-    assert "image_url" not in submitted_body["input"]
+    assert result is None
+    assert len(respx.calls) == 0
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_uploaded_video_and_stock_always_bypass_registry(monkeypatch):
+    monkeypatch.setenv("USE_PROVIDER_REGISTRY", "1")
+    monkeypatch.setenv("KIE_API_KEY", "k")
+    reset_registry()
+    reload_specs()
+    for input_kind in ("video", "stock"):
+        assert await run_provider_motion(_ai_scene(input_kind=input_kind)) is None
+    assert len(respx.calls) == 0
 
 
 # ---------- Ceiling enforcement in the pipeline --------------------------
@@ -261,11 +252,8 @@ def test_pipeline_ceiling_video_input_is_free(monkeypatch):
 
 
 def test_scene_telemetry_stays_in_customer_forbidden_set():
-    """Every field returned by result_to_scene_telemetry must be in the
-    forbidden-list that _scrub_render_for_response strips. If a new
-    field is added upstream, this test forces us to add it there too.
-    """
-    from server import _CUSTOMER_FORBIDDEN_SCENE_FIELDS  # noqa: WPS433
+    """Provider, model, upstream task ID, and cost never reach customers."""
+    from render_privacy import scrub_render_for_customer  # noqa: WPS433
 
     fake_result = type("R", (), {
         "provider": "kie",
@@ -280,7 +268,9 @@ def test_scene_telemetry_stays_in_customer_forbidden_set():
         "resolution": "720p",
     })
     telemetry = result_to_scene_telemetry(fake_result)  # type: ignore[arg-type]
-    # Fields the scrubber must strip from customer responses:
+    scrubbed = scrub_render_for_customer({"_provider_telemetry": telemetry, "scenes": [telemetry]})
+    assert "_provider_telemetry" not in scrubbed
+    customer_scene = scrubbed["scenes"][0]
     for k in ("provider", "model", "external_task_id", "estimated_cost_cents", "actual_cost_credits"):
         assert k in telemetry
-        assert k in _CUSTOMER_FORBIDDEN_SCENE_FIELDS
+        assert k not in customer_scene
