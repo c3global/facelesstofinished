@@ -7,10 +7,12 @@ from typing import Any
 
 _PRIVATE_FIELDS = {
     "actual_cost_cents",
+    "actual_cost_credits",
     "ai_engine",
     "cap_cents",
     "estimated_cost_cents",
     "estimated_cost_dollars",
+    "external_task_id",
     "fal_request_id",
     "kie_task_id",
     "local_compose_debug",

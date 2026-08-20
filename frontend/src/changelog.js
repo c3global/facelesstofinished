@@ -14,9 +14,17 @@
 //    See PRD.md → "Workflow rule: changelog must move with every deploy."
 // 4. Most recent on top. Each entry has version + date + bullet list.
 
-export const APP_VERSION = "1.20.13";
+export const APP_VERSION = "1.20.14";
 
 export const CHANGELOG = [
+  {
+    version: "1.20.14",
+    date: "2026-08-18",
+    changes: [
+      "✨ Improved AI-generated scene image quality while keeping a reliable fallback if generation is temporarily unavailable.",
+      "🎞️ Customer-uploaded images, videos, and screen recordings remain on the local B-roll path without being sent for additional visual generation.",
+    ],
+  },
   {
     version: "1.20.13",
     date: "2026-08-15",

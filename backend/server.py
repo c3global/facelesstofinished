@@ -188,7 +188,7 @@ ISOLATED_RENDER_MODES = {
 # can be shown. Keep both timeline entry points fail-closed until the workflow
 # is made idempotent and can guarantee that failed previews do not spend.
 TIMELINE_FEATURES_ENABLED = os.environ.get("TIMELINE_FEATURES_ENABLED", "0").strip() == "1"
-BUILD_VERSION = os.environ.get("APP_VERSION", "1.20.13")
+BUILD_VERSION = os.environ.get("APP_VERSION", "1.20.14")
 BUILD_COMMIT = (
     os.environ.get("GIT_COMMIT_SHA")
     or os.environ.get("COMMIT_SHA")
@@ -2170,7 +2170,7 @@ async def _trim_stock_video_with_cutaways(
 
 
 # ---------------------------------------------------------------------------
-# Scene still-image generation — Flux primary, Nano Banana fallback.
+# Scene still-image generation — KIE primary when enabled, legacy fallbacks.
 # ---------------------------------------------------------------------------
 # Iter 49 (2026-07-01): Charity reported $100+ in fal.ai testing burn with
 # unsatisfactory Flux 1.1 Pro output quality. Swapped Flux for Nano Banana
@@ -2193,25 +2193,72 @@ async def _generate_scene_image(
 ) -> str | None:
     """Generate a photorealistic still image for one Faceless scene.
 
-    Returns a fal.ai storage URL that downstream ffmpeg-compose can consume.
-    Flux 1.1 Pro primary (via fal.ai) → Nano Banana fallback (via Emergent
-    Universal Key) when Flux is unavailable or fails.
+    Returns a public image URL that downstream ffmpeg-compose can consume.
+    When explicitly enabled, KIE Nano Banana 2 is primary. Flux 1.1 Pro and
+    the Emergent Universal Key remain fallbacks so a KIE outage does not
+    strand a paid render.
 
-    Content-hash cache: identical (prompt, aspect) requests return the
-    previously-generated URL instantly. Cache prefix `nb:` retained for
-    backwards-compat with the iter 49 cache — same cache namespace,
-    different primary engine.
+    KIE uses its own cache namespace so enabling it never serves an older
+    FAL-generated still. KIE's temporary result is copied to R2 before it is
+    cached; if that copy fails, the temporary URL is still usable for the
+    current render but is not cached.
     """
     import hashlib  # noqa: PLC0415
     import base64 as _b64  # noqa: PLC0415
 
     aspect_tag = "p" if aspect == "9_16" else "l"
     cache_key = "nb:" + hashlib.sha256(f"{aspect_tag}|{prompt}".encode("utf-8")).hexdigest()[:32]
+
+    # ---------- Attempt 1: Nano Banana 2 through KIE (opt-in primary) ----------
+    try:
+        from providers.kie_image import KieImageProvider  # noqa: PLC0415
+
+        kie = KieImageProvider()
+        if kie.is_available():
+            kie_cache_key = (
+                f"kie-image:{kie.model}:" +
+                hashlib.sha256(f"{aspect_tag}|{prompt}".encode("utf-8")).hexdigest()[:32]
+            )
+            cached = await db.flux_cache.find_one({"_id": kie_cache_key})
+            if cached and cached.get("url"):
+                return cached["url"]
+
+            result = await kie.generate(prompt=prompt, aspect=aspect)
+            if result.ok and result.output_url:
+                permanent_url = await _cache_remote_image_to_r2(
+                    result.output_url,
+                    object_id=kie_cache_key.replace(":", "-"),
+                )
+                if permanent_url:
+                    await db.flux_cache.update_one(
+                        {"_id": kie_cache_key},
+                        {"$set": {
+                            "url": permanent_url,
+                            "prompt": prompt,
+                            "aspect": aspect,
+                            "engine": "kie-image",
+                            "model": result.model,
+                            "external_task_id": result.task_id,
+                            "cached_at": datetime.now(timezone.utc).isoformat(),
+                        }},
+                        upsert=True,
+                    )
+                    logger.info("[kie-image] scene=%s generated and persisted", scene_idx)
+                    return permanent_url
+                logger.warning("[kie-image] scene=%s R2 persistence failed; using temporary result", scene_idx)
+                return result.output_url
+            if result.error_code:
+                logger.warning("[kie-image] scene=%s failed code=%s; using legacy fallback", scene_idx, result.error_code)
+    except Exception as exc:
+        logger.warning("[kie-image] scene=%s exception=%s; using legacy fallback", scene_idx, type(exc).__name__)
+
+    # Legacy cache is checked only after the KIE attempt. This prevents an
+    # old Flux result from defeating the new KIE-first configuration.
     cached = await db.flux_cache.find_one({"_id": cache_key})
     if cached and cached.get("url"):
         return cached["url"]
 
-    # ---------- Attempt 1: Flux 1.1 Pro via fal.ai (primary) ----------
+    # ---------- Legacy fallback 1: Flux 1.1 Pro via fal.ai ----------
     if fal_headers is not None:
         try:
             async with httpx.AsyncClient(timeout=120) as client:
@@ -2252,7 +2299,7 @@ async def _generate_scene_image(
         except Exception as exc:
             logger.warning(f"[flux] scene={scene_idx} exception: {type(exc).__name__}: {exc} — falling back to Nano Banana")
 
-    # ---------- Attempt 2: Nano Banana via Emergent Universal Key (fallback) ----------
+    # ---------- Legacy fallback 2: Nano Banana via Emergent Universal Key ----------
     nb_prompt = (
         f"{prompt}. "
         f"Aspect ratio: {'9:16 vertical portrait' if aspect == '9_16' else '16:9 horizontal landscape'}. "
@@ -3113,6 +3160,50 @@ def _r2_client():
         )
     except Exception as exc:
         logger.warning(f"[r2] client construction failed: {exc}")
+        return None
+
+
+async def _cache_remote_image_to_r2(source_url: str, object_id: str) -> Optional[str]:
+    """Copy a provider result to durable R2 storage before caching it.
+
+    KIE task URLs are delivery URLs, not permanent application storage. A
+    bounded download plus R2 upload prevents future renders from depending on
+    an expired provider URL. Failure is non-fatal: the caller can still use the
+    source URL for the render currently in progress.
+    """
+    if not _R2_ENABLED:
+        return None
+    client = _r2_client()
+    if client is None:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as downloader:
+            response = await downloader.get(source_url)
+            response.raise_for_status()
+            body = response.content
+            if not body or len(body) > 25 * 1024 * 1024:
+                raise ValueError("generated image is empty or exceeds 25 MB")
+            content_type = (response.headers.get("content-type") or "image/png").split(";", 1)[0]
+            if not content_type.startswith("image/"):
+                content_type = "image/png"
+
+        key = f"generated-images/{object_id}.png"
+        loop = asyncio.get_running_loop()
+        await asyncio.wait_for(
+            loop.run_in_executor(
+                None,
+                lambda: client.put_object(
+                    Bucket=_R2_BUCKET_NAME,
+                    Key=key,
+                    Body=body,
+                    ContentType=content_type,
+                ),
+            ),
+            timeout=90,
+        )
+        return f"{_R2_PUBLIC_URL}/{key}"
+    except Exception as exc:
+        logger.warning("[r2-image] persistence failed: %s", type(exc).__name__)
         return None
 
 
@@ -4327,19 +4418,15 @@ async def _run_render_faceless(job: dict):
 
         tts_task = asyncio.create_task(_run_tts())
 
-        # 2) Per-scene visuals. AI scenes use Flux 1.1 Pro; stock scenes use
-        # their pre-picked URL. We surface per-scene progress so the user
+        # 2) Per-scene visuals. AI scenes use the configured image provider;
+        # stock scenes use their pre-picked URL. We surface per-scene progress so the user
         # knows exactly which scene is rendering.
         await _set_progress(30, f"Generating scene visuals (0 of {n_scenes})…", status="visuals")
         image_urls: list = [None] * len(scenes)
 
         async def gen_image(idx: int, prompt: str):
-            # v1.18.4: delegates to _generate_scene_image which uses Nano
-            # Banana (via Emergent Universal Key) with a silent Flux 1.1
-            # Pro fallback. Content-hash cache and fal.ai storage upload
-            # happen inside the helper. Old cache prefix was `flux:`; the
-            # helper uses `nb:` so we don't accidentally serve old Flux
-            # outputs when the user regenerates a Faceless render.
+            # KIE is primary only when its explicit image flag is enabled;
+            # the helper preserves legacy providers as reliability fallbacks.
             return await _generate_scene_image(
                 prompt=prompt,
                 aspect=job["aspect"],
@@ -4348,7 +4435,7 @@ async def _run_render_faceless(job: dict):
             )
 
         # Resolve URLs per scene.
-        #   - AI scenes  → Flux 1.1 Pro (still image; we ken-burns it later)
+        #   - AI scenes  → configured AI still (we ken-burns it later)
         #                   OR Kling/Veo/Pika text-to-video (when job.ai_engine
         #                   != "flux"). T2V scenes skip Flux entirely; the
         #                   prompt is generated into a real video in the
@@ -4615,6 +4702,92 @@ async def _run_render_faceless(job: dict):
                 f"Adding motion to scenes ({normalize_completed} of {n_normalize})…",
             )
 
+    # v1.20.11 (Iter 69) — Provider registry bridge. Gated by
+    # USE_PROVIDER_REGISTRY (default off). When on AND registry has a
+    # KIE model enabled that supports the request, this returns a video
+    # URL that the caller trims/normalizes locally. Returns None to
+    # signal the caller to fall back to the legacy fal.ai path.
+    async def _try_provider_registry_for_ai_scene(
+        *,
+        idx: int,
+        aspect: str,
+        duration_ms: int,
+        prompt: str,
+        still_image_url: Optional[str],
+        scene_meta: dict,
+        job_id: str,
+    ) -> Optional[str]:
+        try:
+            from providers.pipeline import (
+                run_provider_motion,
+                use_registry_enabled,
+                result_to_scene_telemetry,
+            )
+            from providers.types import MotionInputMode, SceneMotionRequest
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[registry] import failed: %s", type(exc).__name__)
+            return None
+
+        if not use_registry_enabled():
+            return None
+
+        # Translate this AI-generated scene into a provider request. Uploaded
+        # customer media is classified as uploaded_image/uploaded_video and
+        # returns through the local branches before this helper is called.
+        aspect_ratio = "9:16" if aspect == "9_16" else "16:9" if aspect == "16_9" else aspect
+        resolution = "720p"  # customer-facing "premium" tier default
+        use_first_frame = scene_meta.get("kind") == "image" and bool(still_image_url)
+        if use_first_frame:
+            mode = MotionInputMode.FIRST_FRAME
+            req = SceneMotionRequest(
+                mode=mode,
+                duration_ms=duration_ms,
+                aspect_ratio=aspect_ratio,
+                resolution=resolution,
+                prompt=(prompt or None),
+                first_frame_url=still_image_url,
+                generate_audio=False,
+                scene_idx=idx,
+                input_kind="ai_generated",
+            )
+        else:
+            if not prompt:
+                return None
+            mode = MotionInputMode.TEXT
+            req = SceneMotionRequest(
+                mode=mode,
+                duration_ms=duration_ms,
+                aspect_ratio=aspect_ratio,
+                resolution=resolution,
+                prompt=prompt,
+                generate_audio=False,
+                scene_idx=idx,
+                input_kind="ai_generated",
+            )
+
+        result = await run_provider_motion(req, provider_hint="auto")
+        if result is None:
+            return None
+
+        # Persist per-scene provider telemetry (admin-only, scrubbed for
+        # customers by _scrub_render_for_response).
+        try:
+            await db.renders.update_one(
+                {"id": job_id},
+                {"$set": {f"scenes.{idx}._provider_telemetry": result_to_scene_telemetry(result)}},
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[registry] telemetry write failed: %s", type(exc).__name__)
+
+        if result.ok and result.output_url:
+            return result.output_url
+        logger.warning(
+            "[registry] scene %s provider result not usable (ok=%s code=%s) — falling back to fal",
+            idx, result.ok, result.error_code,
+        )
+        return None
+
+
     async def normalize_scene(slot: int, idx: int, url: str):
         # v1.20.4: hold the semaphore for the entire scene lifecycle
         # (download → ffmpeg → upload). Only NORMALIZE_CONCURRENCY scenes
@@ -4677,6 +4850,23 @@ async def _run_render_faceless(job: dict):
                     workdir=wd,
                 )
             if kind == "ai":
+                # v1.20.11 (Iter 69): provider-registry hand-off. When
+                # USE_PROVIDER_REGISTRY=1 AND the registry has a KIE model
+                # enabled that supports the request, route AI motion
+                # through it. Fall back to the legacy fal.ai path when
+                # the registry declines or the flag is off. Uploaded customer
+                # media has already returned through its local-only branch.
+                registry_url = await _try_provider_registry_for_ai_scene(
+                    idx=idx,
+                    aspect=job["aspect"],
+                    duration_ms=this_dur,
+                    prompt=scene_prompts[idx],
+                    still_image_url=url,
+                    scene_meta=(scenes[idx] if idx < len(scenes) else {}),
+                    job_id=job["id"],
+                )
+                if registry_url:
+                    return await _trim_t2v_clip(registry_url, this_dur, idx)
                 # `flux_static` is the explicit opt-out: stills + cheap ken-burns
                 # (no Kling i2v cost). Default `flux` upgrades to real AI motion
                 # via Kling 2.1 standard. Falls back to ken-burns if Kling fails.
@@ -5262,9 +5452,17 @@ def _render_response_for_user(doc: dict, user: AuthUser) -> dict:
 
 @api.post("/studio/render/estimate")
 async def studio_render_estimate(payload: RenderRequest, user: AuthUser = Depends(current_user)):
-    """Internal telemetry: conservative cost estimate (cents) for a candidate
-    render. No customer-facing cap enforcement — the silent circuit-breaker
-    lives in /studio/render and uses RENDER_COST_CIRCUIT_BREAKER_CENTS."""
+    """Pre-render capacity check.
+
+    CUSTOMER-FACING PRIVACY RULE (2026-08-15): dollar / cent estimates
+    are ADMIN-ONLY. Non-admin callers receive an opaque within_capacity
+    boolean derived from the internal circuit breaker; admin callers
+    additionally see the cost breakdown for margin monitoring.
+
+    The silent circuit-breaker in /studio/render still uses
+    RENDER_COST_CIRCUIT_BREAKER_CENTS regardless of who called this
+    endpoint.
+    """
     require_studio(user)
     cents = estimate_render_cost_cents(payload)
     if not user.is_admin:
@@ -5455,6 +5653,35 @@ async def studio_render(payload: RenderRequest, user: AuthUser = Depends(current
             status_code=400,
             detail="Render configuration is too large. Please contact support.",
         )
+
+    # v1.20.11 (Iter 69): AI-scene ceiling. Counted PRE-render on scenes
+    # explicitly tagged source="ai" OR (source="uploaded" AND kind="image"
+    # AND motion_quality != "standard"). This is customer-safe policy —
+    # the error surface uses plain language, no dollar amounts or provider
+    # names. Silent circuit-breaker above still catches raw payload
+    # over-runs; this catches the "50 premium scenes" case.
+    if payload.mode in ("faceless", "composite"):
+        try:
+            from providers.cost_estimator import MAX_AI_SCENES_PER_RENDER_DEFAULT
+
+            max_ai = int(os.environ.get("MAX_AI_SCENES_PER_RENDER", str(MAX_AI_SCENES_PER_RENDER_DEFAULT)))
+            ai_scene_count = sum(
+                1 for s in (payload.scenes or [])
+                if (s.get("source") == "ai")
+                or (s.get("source") == "uploaded" and s.get("kind") == "image" and s.get("motion_quality") == "premium")
+            )
+            if ai_scene_count > max_ai:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"This render includes more premium-motion scenes than your current plan "
+                        f"allows ({max_ai} max). Reduce premium scenes or switch some to Standard motion."
+                    ),
+                )
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[ai-scene-limit] failed to enforce: %s", type(exc).__name__)
 
     # Group B quota gate — atomically check + decrement the buyer's monthly
     # render allowance before we kick off the background pipeline. Founders
@@ -6595,9 +6822,13 @@ async def studio_ai_previews(payload: AIPreviewsRequest, user: AuthUser = Depend
         return {"previews": []}
     if payload.aspect not in ("9_16", "16_9"):
         raise HTTPException(status_code=400, detail="Bad aspect")
-    if not FAL_API_KEY:
+    kie_image_ready = (
+        os.environ.get("KIE_IMAGE_GENERATION_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+        and bool(os.environ.get("KIE_API_KEY", "").strip())
+    )
+    if not FAL_API_KEY and not kie_image_ready:
         raise HTTPException(status_code=503, detail="Image generation unavailable")
-    fal_headers = {"Authorization": f"Key {FAL_API_KEY}"}
+    fal_headers = {"Authorization": f"Key {FAL_API_KEY}"} if FAL_API_KEY else None
 
     async def gen_one(idx: int, prompt: str) -> dict:
         # v1.18.4: delegates to _generate_scene_image (Nano Banana primary,
@@ -7185,6 +7416,21 @@ register_roadmap_routes(
     current_user=current_user,
     ADMIN_EMAILS=ADMIN_EMAILS,
 )
+
+# KIE.ai webhook callback — HMAC-verified (KIE_WEBHOOK_HMAC_KEY).
+# Mounted on the /api sub-app so the public URL is
+# ``<host>/api/kie/webhook``. If KIE_WEBHOOK_HMAC_KEY is unset the route
+# still exists but returns 503 so KIE will retry after key rotation.
+from routes.kie_callback import build_router as _build_kie_router  # noqa: E402
+
+api.include_router(_build_kie_router(db))
+
+# Provider abstraction — public config + auth-gated cost estimate.
+# Frontend calls /api/config/render-providers on mount to hide unavailable
+# provider options; the pre-render preview calls /api/render/estimate.
+from routes.render_config import build_router as _build_render_config_router  # noqa: E402
+
+api.include_router(_build_render_config_router(current_user_dep=current_user))
 
 
 # ---------------------------------------------------------------------------
