@@ -619,19 +619,20 @@ export function AIEnginePicker({ open, onClose, value, onPick, isAdmin = false, 
     ? "AI-generated visuals are currently unavailable. Pick stock or your uploaded media for now."
     : null;
 
-  // Engine catalogue. Provider costs belong in admin reporting, never in
-  // the customer-facing Studio — including when an admin is using Studio.
+  // Motion-treatment catalogue. KIE is the primary image generator for the
+  // two still-based choices; the legacy ids remain for API compatibility.
+  // Provider costs remain admin-reporting-only and never appear here.
   const options = [
     {
       id: "flux",
-      name: isAdmin ? "Flux 1.1 Pro + Kling i2v · Image + Real Motion" : "Balanced · Image + Real Motion",
-      hint: isAdmin ? "Flux generates each still, then Kling adds motion." : "Recommended balance of quality, motion, and generation time.",
+      name: isAdmin ? "KIE Image + Real Motion · Recommended" : "Balanced · Image + Real Motion",
+      hint: isAdmin ? "KIE generates each scene image first, then the motion stage animates it." : "Recommended balance of quality, motion, and generation time.",
       Icon: Sparkles,
     },
     {
       id: "flux_static",
-      name: isAdmin ? "Flux 1.1 Pro · Static" : "Economy · AI Still",
-      hint: "Budget option. Still images with simple ken-burns zoom — no AI motion.",
+      name: isAdmin ? "KIE Image · Still Motion" : "Economy · AI Still",
+      hint: "KIE-generated images with a simple camera move — no premium AI motion.",
       Icon: Sparkles,
     },
     {

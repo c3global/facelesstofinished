@@ -238,10 +238,10 @@ export default function Studio() {
     try { localStorage.setItem("f48_auto_freeze_broll", autoFreezeBroll ? "1" : "0"); }
     catch { /* ignored */ }
   }, [autoFreezeBroll]);
-  // AI text-to-video engine for AI-sourced scenes. Default "flux" keeps the
-  // existing Ken-Burns slideshow behaviour; "kling" / "veo3" / "pika" generate
-  // real motion video clips per scene. Only relevant when at least one scene
-  // is AI-sourced (broll_source = "ai" or "mix" with AI overrides).
+  // Motion treatment for AI-sourced scenes. The legacy value "flux" remains
+  // in the API contract, but KIE is the primary still-image generator; this
+  // setting controls what happens after the still is created. Stock and
+  // customer-uploaded B-roll ignore it.
   const [aiEngine, setAiEngine] = useState("flux");
   // Bulk prompts model:
   // - bulkPrompts: raw textarea text
@@ -530,6 +530,10 @@ export default function Studio() {
     try {
       const r = await apiClient.post("/studio/render", body);
       setRender(r.data);
+      // Keep every submitted job visible immediately. A second submission
+      // replaces the focused card, so the first job must already be present
+      // in History for its background polling to continue uninterrupted.
+      setHistory((h) => [r.data, ...h.filter((row) => row.id !== r.data.id)]);
       setToast("Render started…");
       scrollToRenderCard();
       pollStatus(r.data.id);
@@ -645,6 +649,7 @@ export default function Studio() {
     try {
       const r = await apiClient.post("/studio/render", body);
       setRender(r.data);
+      setHistory((h) => [r.data, ...h.filter((row) => row.id !== r.data.id)]);
       const newCount = bumpRegens(sourceDoc);
       const remaining = unlimited ? null : Math.max(0, REGEN_SOFT_CAP - newCount);
       setToast(
@@ -965,8 +970,8 @@ export default function Studio() {
   // The picker explains that the choice only applies to AI scenes; pure stock
   // renders will simply ignore the setting.
   const aiEngineLabel = {
-    flux: "AI Motion · Balanced",
-    flux_static: "AI Visual · Economy",
+    flux: "AI Visual + Motion · Balanced",
+    flux_static: "AI Visual · Still",
     kling: "AI Motion · Cinematic",
     veo3: "AI Motion · Premium",
     pika: "AI Motion · Stylized",
@@ -1384,8 +1389,8 @@ export default function Studio() {
                         <>
                           <Sparkles size={22} />
                           <span className="storyboard-thumb-engine">
-                            {aiEngine === "flux_static" ? "AI still"
-                              : aiEngine === "flux" ? "AI still + i2v motion"
+                            {aiEngine === "flux_static" ? (isAdmin ? "KIE AI still" : "AI still")
+                              : aiEngine === "flux" ? (isAdmin ? "KIE AI still + motion" : "AI still + motion")
                               : `AI video · ${aiEngine}`}
                           </span>
                         </>
