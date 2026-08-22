@@ -153,6 +153,7 @@ export default function MediaLibrary({ open, onClose, sceneIdx, aspect, onPick }
   const pickItem = (item) => {
     const url = absoluteUrl(item.url);
     onPick({
+      asset_id: item.id,
       video_url: url,
       thumb: (item.content_type || "").startsWith("image/") ? url : null,
       source: "uploaded",
