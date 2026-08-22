@@ -87,6 +87,9 @@ class ProjectCreate(BaseModel):
     script: str = Field(min_length=1, max_length=200_000)
     aspect: Literal["9:16", "16:9", "1:1"] = "9:16"
     target_scene_count: Optional[int] = Field(default=None, ge=1, le=MAX_SCENES)
+    # Script Engine handoff: detailed creative directions are preserved
+    # verbatim. They never trigger generation or a stock-provider request.
+    broll_prompts: list[str] = Field(default_factory=list, max_length=MAX_SCENES)
 
 
 class RevisionSave(BaseModel):
@@ -141,6 +144,29 @@ def build_initial_scenes(script: str, target_scene_count: Optional[int] = None) 
             ).model_dump(mode="json")
         )
     return scenes
+
+
+def _stock_query_from_prompt(prompt: str) -> str:
+    """Create a conservative, provider-free keyword seed from a visual prompt.
+
+    The original prompt remains untouched in ``detailed_prompt``. This seed is
+    only editable project data; it does not initiate a stock search.
+    """
+    words = re.findall(r"[A-Za-z0-9][A-Za-z0-9'-]*", prompt or "")
+    stopwords = {
+        "a", "an", "and", "as", "at", "camera", "cinematic", "close", "close-up",
+        "cut", "frame", "framing", "in", "into", "of", "on", "screen", "shot",
+        "showing", "the", "to", "versus", "view", "with",
+    }
+    kept: list[str] = []
+    for word in words:
+        lowered = word.lower().strip("'-")
+        if len(lowered) < 2 or lowered in stopwords or lowered in kept:
+            continue
+        kept.append(lowered)
+        if len(kept) == 8:
+            break
+    return " ".join(kept)
 
 
 def validate_revision(script: str, scenes: list[SceneDraft]) -> str:
@@ -220,7 +246,12 @@ def register_scene_builder_routes(api, db, current_user_dep, require_studio: Cal
         created_at = _now()
         project_id = _id("prj")
         revision_id = _id("rev")
-        scenes = build_initial_scenes(script, payload.target_scene_count)
+        prompts = [prompt.strip() for prompt in payload.broll_prompts if prompt.strip()]
+        requested_count = payload.target_scene_count or (len(prompts) if prompts else None)
+        scenes = build_initial_scenes(script, requested_count)
+        for index, prompt in enumerate(prompts[:len(scenes)]):
+            scenes[index]["visual"]["detailed_prompt"] = prompt
+            scenes[index]["visual"]["stock_query"] = _stock_query_from_prompt(prompt)
         title = (payload.title or " ".join(script.split(" ")[:8])).strip() or "Untitled video"
         project = {
             "id": project_id,

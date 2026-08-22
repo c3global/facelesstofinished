@@ -2985,7 +2985,17 @@
   color: var(--text);
 }
 .scripts-output-actions {
-  display: inline-flex; gap: 8px;
+  display: inline-flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end;
+}
+.scene-builder-send-btn {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border-soft));
+  background: var(--accent-soft);
+}
+.scene-builder-send-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 20%, var(--surface));
 }
 
 .section-card {
@@ -3832,6 +3842,23 @@
   background: color-mix(in srgb, var(--platform-accent, var(--accent)) 28%, transparent);
   border-color: color-mix(in srgb, var(--platform-accent, var(--accent)) 75%, transparent);
   transform: translateY(-1px);
+}
+.compare-cell-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+.compare-cell-actions .compare-cell-cta { margin-top: 0; }
+.compare-cell-cta.is-scene-builder {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.compare-cell-cta.is-scene-builder:hover {
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  border-color: var(--accent);
 }
 
 /* =====================================================================

@@ -98,6 +98,12 @@ Stock results and AI generation are deliberately disabled in the shell. The
 customer can prepare and save those directions, but this preview cannot spend
 provider credits.
 
+Studio-entitled customers also receive a **Send to Scene Builder** action in
+the Script Engine. It creates the saved project directly, preserves the
+finished narration and original B-roll prompts, and opens the new project.
+The action is hidden for accounts without Studio and the backend repeats the
+entitlement check before writing anything.
+
 ## Next milestone
 
 The next safe vertical slice is an explicit voiceover-alignment action that
