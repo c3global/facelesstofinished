@@ -179,6 +179,28 @@ def test_create_edit_and_conflict_safe_revision_flow():
     assert len(database.studio_project_revisions.documents) == 2
 
 
+def test_script_engine_handoff_preserves_broll_prompts_without_provider_calls():
+    client, _database = _client()
+    prompts = [
+        "Split screen, influencer setup versus simple screen recording software open.",
+        "Cursor clicking start recording inside screen capture software.",
+    ]
+    response = client.post("/studio/projects", json={
+        "title": "Tutorial authority video",
+        "script": "You do not need a complicated setup. Start by recording the useful process on your screen.",
+        "aspect": "16:9",
+        "broll_prompts": prompts,
+    })
+    assert response.status_code == 201, response.text
+    body = response.json()
+    scenes = body["revision"]["scenes"]
+    assert len(scenes) == 2
+    assert [scene["visual"]["detailed_prompt"] for scene in scenes] == prompts
+    assert scenes[0]["visual"]["stock_query"] == "split influencer setup simple recording software open"
+    assert scenes[1]["visual"]["stock_query"] == "cursor clicking start recording inside capture software"
+    assert all(scene["visual"]["source"] == "unassigned" for scene in scenes)
+
+
 def test_projects_are_owner_scoped():
     client, database = _client("owner@example.com")
     created = client.post("/studio/projects", json={"script": "A private customer script."}).json()

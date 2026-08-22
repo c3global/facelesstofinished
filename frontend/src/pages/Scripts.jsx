@@ -9,6 +9,8 @@ import {
   ClipboardCopy,
   Layers,
   Image as ImageIcon,
+  Clapperboard,
+  Loader2,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Lock } from "lucide-react";
@@ -53,6 +55,7 @@ export default function Scripts() {
   // card inline instead of an angry error toast when a non-shorts buyer
   // clicks the Shorts mode pill.
   const hasShortsEntitlement = Boolean(user?.entitlements?.includes("shorts"));
+  const hasStudioEntitlement = Boolean(user?.entitlements?.includes("studio"));
   const nav = useNavigate();
 
   const [tagline] = useState(
@@ -100,6 +103,7 @@ export default function Scripts() {
   const [savedAngles, setSavedAngles] = useState([]);
   const [showSaved, setShowSaved] = useState(false);
   const [toast, setToast] = useState("");
+  const [sceneBuilderSending, setSceneBuilderSending] = useState(null);
 
   // One-shot welcome banner — read & clear the session-stashed payload set
   // by Login.jsx after a successful sign-in. Fires only when the auth
@@ -678,6 +682,45 @@ export default function Scripts() {
   const useInStudio = () => {
     if (!output?.text) return;
     sendToStudio(output);
+  };
+
+  // Scene Builder handoff creates the real saved project immediately instead
+  // of relying on a one-shot localStorage payload. The backend repeats the
+  // Studio entitlement check and only stores project data — no render, stock
+  // search, AI generation, or provider request can fire from this endpoint.
+  const sendToSceneBuilder = async (jobOutput) => {
+    if (!hasStudioEntitlement || !jobOutput?.text || sceneBuilderSending) return;
+    const sendKey = jobOutput.id || jobOutput.platform || "current";
+    const narration = extractNarration(jobOutput.text) || jobOutput.text;
+    const brollPrompts = extractBrollPrompts(jobOutput.text);
+    setSceneBuilderSending(sendKey);
+    try {
+      const response = await apiClient.post("/studio/projects", {
+        title: jobOutput.topic || "Script Engine project",
+        script: narration,
+        aspect: jobOutput.mode === "long" ? "16:9" : "9:16",
+        broll_prompts: brollPrompts,
+      });
+      apiClient.post("/activity/log", {
+        type: "script_sent_to_scene_builder",
+        detail: {
+          script_id: jobOutput.id,
+          mode: jobOutput.mode,
+          platform: jobOutput.platform,
+          broll_prompts: brollPrompts.length,
+          project_id: response.data?.project?.id,
+        },
+      }).catch(() => {});
+      nav(`/studio/scene-builder/${response.data.project.id}`);
+    } catch (requestError) {
+      const detail = requestError?.response?.data?.detail;
+      setToast(
+        (typeof detail === "string" ? detail : detail?.message) ||
+        "Could not create the Scene Builder project. Try again."
+      );
+    } finally {
+      setSceneBuilderSending(null);
+    }
   };
 
   // ---- Send-to-Thumbnails handoff (v1.10.1) ----
@@ -1304,6 +1347,18 @@ export default function Scripts() {
                   <Sparkles size={13} /> Send to Studio
                 </button>
               )}
+              {hasStudioEntitlement && output.mode !== "sprint" && (
+                <button
+                  className="header-btn scene-builder-send-btn"
+                  data-testid="scripts-send-to-scene-builder"
+                  disabled={Boolean(sceneBuilderSending)}
+                  onClick={() => sendToSceneBuilder(output)}
+                  title="Create an editable, narration-linked scene plan"
+                >
+                  {sceneBuilderSending ? <Loader2 size={13} className="spin" /> : <Clapperboard size={13} />}
+                  {sceneBuilderSending ? "Creating…" : "Send to Scene Builder"}
+                </button>
+              )}
               {output.mode !== "sprint" && (
                 <button
                   className="header-btn"
@@ -1400,15 +1455,30 @@ export default function Scripts() {
                           shortBody={jobSections.shortScript?.body || ""}
                         />
                       </PhoneFrame>
-                      <button
-                        type="button"
-                        className="compare-cell-cta"
-                        data-testid={`compare-send-to-studio-${j.platform}`}
-                        onClick={() => sendToStudio(j.output)}
-                        title={`Send the ${p?.label || j.platform} script to Studio`}
-                      >
-                        <Sparkles size={12} /> Send to Studio
-                      </button>
+                      <div className="compare-cell-actions">
+                        <button
+                          type="button"
+                          className="compare-cell-cta"
+                          data-testid={`compare-send-to-studio-${j.platform}`}
+                          onClick={() => sendToStudio(j.output)}
+                          title={`Send the ${p?.label || j.platform} script to Studio`}
+                        >
+                          <Sparkles size={12} /> Send to Studio
+                        </button>
+                        {hasStudioEntitlement && (
+                          <button
+                            type="button"
+                            className="compare-cell-cta is-scene-builder"
+                            data-testid={`compare-send-to-scene-builder-${j.platform}`}
+                            disabled={Boolean(sceneBuilderSending)}
+                            onClick={() => sendToSceneBuilder(j.output)}
+                            title={`Create a Scene Builder project from the ${p?.label || j.platform} script`}
+                          >
+                            {sceneBuilderSending ? <Loader2 size={12} className="spin" /> : <Clapperboard size={12} />}
+                            Scene Builder
+                          </button>
+                        )}
+                      </div>
                     </div>
                   );
                 })}
