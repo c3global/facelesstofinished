@@ -7477,6 +7477,31 @@ from routes.render_config import build_router as _build_render_config_router  # 
 
 api.include_router(_build_render_config_router(current_user_dep=current_user))
 
+# Scene Builder v1 — provider-free editable project/revision foundation.
+# This is intentionally separate from the current Quick Render pipeline, so
+# adding the editor data model cannot change existing customer renders.
+from scene_builder import (  # noqa: E402
+    ensure_scene_builder_indexes,
+    register_scene_builder_routes,
+)
+
+register_scene_builder_routes(
+    api=api,
+    db=db,
+    current_user_dep=current_user,
+    require_studio=require_studio,
+)
+
+
+@app.on_event("startup")
+async def _ensure_scene_builder_storage():
+    try:
+        await ensure_scene_builder_indexes(db)
+    except Exception:
+        # Index setup must not make the existing product unavailable. Duplicate
+        # or legacy data can be repaired independently before retrying.
+        logger.exception("Scene Builder index setup failed")
+
 
 # ---------------------------------------------------------------------------
 # Mount

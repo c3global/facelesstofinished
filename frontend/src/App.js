@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, createContext, useContext } fr
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import axios from "axios";
 import Studio from "./pages/Studio";
+import SceneBuilder from "./pages/SceneBuilder";
 import Scripts from "./pages/Scripts";
 import Resources from "./pages/Resources";
 import Thumbnails from "./pages/Thumbnails";
@@ -192,6 +193,8 @@ export default function App() {
             <Route path="/login" element={<Login />} />
             <Route path="/auth/callback" element={<AuthCallback />} />
             <Route path="/studio" element={<RequireStudio><Studio /></RequireStudio>} />
+            <Route path="/studio/scene-builder" element={<RequireStudio><SceneBuilder /></RequireStudio>} />
+            <Route path="/studio/scene-builder/:projectId" element={<RequireStudio><SceneBuilder /></RequireStudio>} />
             <Route path="/scripts" element={<RequireAuth><Scripts /></RequireAuth>} />
             <Route path="/thumbnails" element={<RequireAuth><Thumbnails /></RequireAuth>} />
             <Route path="/resources" element={<RequireAuth><Resources /></RequireAuth>} />

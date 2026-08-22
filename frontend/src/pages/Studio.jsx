@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { UserCircle2, Mic, Ratio, Film, ChevronDown, Play, Trash2, Sparkles, Wand2, Loader2, RotateCw, Cpu, FolderOpen, Image as ImageIcon, Check, Captions, CaptionsOff, Clock, XCircle } from "lucide-react";
+import { Link } from "react-router-dom";
+import { UserCircle2, Mic, Ratio, Film, ChevronDown, Play, Trash2, Sparkles, Wand2, Loader2, RotateCw, Cpu, FolderOpen, Image as ImageIcon, Check, Captions, CaptionsOff, Clock, XCircle, Clapperboard } from "lucide-react";
 import { apiClient, useAuth } from "../App";
 import {
   AvatarPicker,
@@ -1014,6 +1015,11 @@ export default function Studio() {
         <p className="studio-sub">
           Paste your script, pick your look in two clicks, and we&rsquo;ll render the final cut — captions, voice, footage and all.
         </p>
+        <Link className="scene-builder-launch" to="/studio/scene-builder" data-testid="scene-builder-launch">
+          <Clapperboard size={15} />
+          <span><strong>Try Scene Builder</strong><small>Plan every visual before rendering · preview foundation</small></span>
+          <ChevronDown size={14} className="scene-builder-launch-arrow" />
+        </Link>
       </div>
 
       {/* Handoff banner — shown briefly after Send-to-Studio */}
